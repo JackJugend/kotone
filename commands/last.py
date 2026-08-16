@@ -122,7 +122,7 @@ def setup_last_command(
             pass
 
         embed = discord.Embed(
-                title=f"{album} ({album})",
+                title=f"{album} ({year})",
                 url=url,
                 description=f"**{artist}**",
                 color=score_color(score),
