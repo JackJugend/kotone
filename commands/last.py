@@ -90,7 +90,7 @@ def setup_last_command(
         cover = latest["cover"]
 
         # Dodatkowe dane albumu do użycia w embedzie.
-        year = "Brak danych"
+        year = " "
         genres = []
         genres_text = "Brak danych"
         main_genre = "Brak danych"
@@ -116,7 +116,7 @@ def setup_last_command(
                     other_genres_text = other_genres
                     all_genres_text = f"**{main_genre}**, {other_genres_text}"
                 else:
-                    all_genres_text = main_genre
+                    all_genres_text = f"{**main_genre}"
 
         except Exception:
             pass
