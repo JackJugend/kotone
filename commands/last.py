@@ -94,7 +94,7 @@ def setup_last_command(
         genres = []
         genres_text = "Brak danych"
         main_genre = "Brak danych"
-        other_genres = []
+        other_genres = "Brak danych"
         other_genres_text = "Brak danych"
 
         try:
@@ -105,14 +105,14 @@ def setup_last_command(
 
             year = details.get("year") or "Brak danych"
             genres = details.get("genres") or []
+            genres_text = details.get("genres_text") or "Brak danych"
 
             if genres:
-                genres_text = ", ".join(genres)
                 main_genre = genres[0]
-                other_genres = genres[1:]
 
-                if other_genres:
-                    other_genres_text = ", ".join(other_genres)
+                if len(genres) > 1:
+                    other_genres = ", ".join(genres[1:])
+                    other_genres_text = other_genres
 
         except Exception:
             pass
@@ -124,17 +124,16 @@ def setup_last_command(
                 color=score_color(score),
         )
 
-        
         embed.add_field(
                 name=f"**{main_genre}**",
-                value=f"{other_genres}",
-                inline=True
+                value=f"{other_genres_text}",
+                inline=False
         )
 
         embed.add_field(
                 name=f"**{score}**  {score_icon(score)}",
                 value=" ",
-                inline=True
+                inline=False
         )
         
         if avatar:

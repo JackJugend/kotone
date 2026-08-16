@@ -308,6 +308,113 @@ def get_user_avatar(username):
     return None
 
 
+def _find_details_row(soup, label_name):
+
+    # Na AOTY etykiety w sekcji Details mają formę np. "/ Genre".
+    # Szukamy dokładnie tej etykiety, a potem zostajemy w NAJBLIŻSZYM
+    # wierszu. Dzięki temu przy braku gatunków nie wchodzimy wyżej w DOM
+    # i nie łapiemy przypadkowych linków /genre/ z reszty strony.
+    wanted = label_name.strip().casefold()
+    exact_labels = {
+        f"/ {wanted}",
+        wanted,
+    }
+
+    candidates = []
+
+    for string in soup.find_all(string=True):
+        normalized = " ".join(str(string).split()).casefold()
+
+        if normalized == f"/ {wanted}":
+            candidates.insert(0, string)
+        elif normalized == wanted:
+            candidates.append(string)
+
+    for label in candidates:
+        container = label.parent
+        best = container
+
+        for _ in range(6):
+            if not container:
+                break
+
+            labels_here = set()
+
+            for part in container.stripped_strings:
+                normalized = " ".join(str(part).split()).casefold()
+
+                if normalized in {
+                    "/ release date", "release date",
+                    "/ format", "format",
+                    "/ label", "label",
+                    "/ genre", "genre",
+                }:
+                    labels_here.add(normalized.lstrip("/ "))
+
+            # Gdy weszliśmy do kontenera zawierającego kilka pól Details,
+            # jesteśmy już za wysoko — wracamy do poprzedniego poziomu.
+            if len(labels_here) > 1:
+                break
+
+            if wanted in labels_here:
+                best = container
+
+            container = container.parent
+
+        if best:
+            return best
+
+    return None
+
+
+def _is_secondary_genre_link(link, row):
+
+    node = link
+
+    while node is not None:
+        if node.name == "small":
+            return True
+
+        classes = " ".join(node.get("class", [])).casefold()
+        node_id = str(node.get("id", "")).casefold()
+        style = str(node.get("style", "")).replace(" ", "").casefold()
+
+        marker = f"{classes} {node_id}"
+
+        # AOTY może oznaczać secondary genres klasą / id.
+        if any(word in marker for word in (
+            "secondary",
+            "secondarygenre",
+            "subgenre",
+            "sub-genre",
+        )):
+            return True
+
+        # Dodatkowy fallback na wypadek, gdy mniejsza czcionka jest inline.
+        size_match = re.search(
+            r"font-size:([0-9.]+)(px|em|rem|%)",
+            style
+        )
+
+        if size_match:
+            value = float(size_match.group(1))
+            unit = size_match.group(2)
+
+            if (
+                (unit == "px" and value <= 12)
+                or (unit in {"em", "rem"} and value < 0.95)
+                or (unit == "%" and value < 95)
+            ):
+                return True
+
+        if node is row:
+            break
+
+        node = node.parent
+
+    return False
+
+
 def get_album_details(album_url):
 
     html = fetch_page(album_url)
@@ -320,83 +427,83 @@ def get_album_details(album_url):
     year = None
     genres = []
 
-    # Rok wydania — szukamy w wierszu "Release Date".
-    release_label = soup.find(
-        string=lambda text: (
-            text
-            and "release date" in text.casefold()
-        )
+    # ==========================
+    # ROK WYDANIA
+    # ==========================
+
+    release_row = _find_details_row(
+        soup,
+        "release date"
     )
 
-    if release_label:
+    if release_row:
+        match = re.search(
+            r"\b(?:19|20)\d{2}\b",
+            release_row.get_text(" ", strip=True)
+        )
 
-        container = release_label.parent
+        if match:
+            year = match.group(0)
 
-        for _ in range(6):
+    # ==========================
+    # TYLKO PRIMARY GENRES
+    # ==========================
 
-            if not container:
-                break
+    genre_row = _find_details_row(
+        soup,
+        "genre"
+    )
 
-            text = container.get_text(
+    if genre_row:
+        passed_visual_break = False
+        found_primary = False
+
+        # Iterujemy po DOM w kolejności wyświetlania. Secondary genres na
+        # AOTY są prezentowane osobno / mniejszą czcionką. Ignorujemy linki
+        # oznaczone jako secondary oraz linki po pierwszym <br> po primary.
+        for element in genre_row.descendants:
+
+            if getattr(element, "name", None) == "br":
+                if found_primary:
+                    passed_visual_break = True
+                continue
+
+            if getattr(element, "name", None) != "a":
+                continue
+
+            href = element.get("href", "")
+
+            if "/genre/" not in href:
+                continue
+
+            if passed_visual_break:
+                continue
+
+            if _is_secondary_genre_link(
+                element,
+                genre_row
+            ):
+                continue
+
+            genre = element.get_text(
                 " ",
                 strip=True
             )
 
-            match = re.search(
-                r"\b(?:19|20)\d{2}\b",
-                text
-            )
+            if genre and genre not in genres:
+                genres.append(genre)
+                found_primary = True
 
-            if match:
-                year = match.group(0)
-                break
-
-            container = container.parent
-
-    # Gatunki — bierzemy linki /genre/ z najbliższego
-    # kontenera odpowiadającego wierszowi "Genre".
-    genre_label = soup.find(
-        string=lambda text: (
-            text
-            and text.strip().casefold().endswith("genre")
-        )
+    genres_text = (
+        ", ".join(genres)
+        if genres
+        else "Brak danych"
     )
-
-    if genre_label:
-
-        container = genre_label.parent
-
-        for _ in range(6):
-
-            if not container:
-                break
-
-            genre_links = container.select(
-                'a[href*="/genre/"]'
-            )
-
-            if genre_links:
-
-                for link in genre_links:
-
-                    genre = link.get_text(
-                        " ",
-                        strip=True
-                    )
-
-                    if (
-                        genre
-                        and genre not in genres
-                    ):
-                        genres.append(genre)
-
-                break
-
-            container = container.parent
 
     return {
         "year": year,
-        "genres": genres
+        "genres": genres,
+        "genres_text": genres_text
     }
 
 
@@ -1486,7 +1593,7 @@ async def send_new_rating(username, item, avatar=None):
     genres = []
     genres_text = "Brak danych"
     main_genre = "Brak danych"
-    other_genres = []
+    other_genres = "Brak danych"
     other_genres_text = "Brak danych"
 
     try:
@@ -1497,14 +1604,14 @@ async def send_new_rating(username, item, avatar=None):
 
         year = details.get("year") or "Brak danych"
         genres = details.get("genres") or []
+        genres_text = details.get("genres_text") or "Brak danych"
 
         if genres:
-            genres_text = ", ".join(genres)
             main_genre = genres[0]
-            other_genres = genres[1:]
 
-            if other_genres:
-                other_genres_text = ", ".join(other_genres)
+            if len(genres) > 1:
+                other_genres = ", ".join(genres[1:])
+                other_genres_text = other_genres
 
     except Exception as e:
         print(
@@ -1590,7 +1697,7 @@ async def send_changed_rating(
     genres = []
     genres_text = "Brak danych"
     main_genre = "Brak danych"
-    other_genres = []
+    other_genres = "Brak danych"
     other_genres_text = "Brak danych"
 
     try:
@@ -1601,14 +1708,14 @@ async def send_changed_rating(
 
         year = details.get("year") or "Brak danych"
         genres = details.get("genres") or []
+        genres_text = details.get("genres_text") or "Brak danych"
 
         if genres:
-            genres_text = ", ".join(genres)
             main_genre = genres[0]
-            other_genres = genres[1:]
 
-            if other_genres:
-                other_genres_text = ", ".join(other_genres)
+            if len(genres) > 1:
+                other_genres = ", ".join(genres[1:])
+                other_genres_text = other_genres
 
     except Exception as e:
         print(
