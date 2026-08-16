@@ -46,7 +46,7 @@ def setup_profile_command(
 ):
     @tree.command(
         name="profile",
-        description="Pokazuje profil użytkownika AOTY",
+        description="Pokazuje kompaktowy profil użytkownika AOTY",
     )
     @discord.app_commands.describe(
         username="Nazwa użytkownika na AOTY",
@@ -155,22 +155,22 @@ def setup_profile_command(
             )
 
         embed.add_field(
+            name="Favorites",
+            value=(
+                "\n".join(favorite_lines)
+                if favorite_lines
+                else "—"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
             name="Statystyki",
             value=(
                 f"Reviews **{reviews_count}**  •  "
                 f"Lists **{lists_count}**\n"
                 f"Following **{following_count}**  •  "
                 f"Followers **{followers_count}**"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="Top 5",
-            value=(
-                "\n".join(favorite_lines)
-                if favorite_lines
-                else "—"
             ),
             inline=False,
         )
