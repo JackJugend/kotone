@@ -19,6 +19,7 @@ from commands.recent import setup_recent_command
 from commands.artist import setup_artist_command
 from commands.album import setup_album_command
 from commands.profile import setup_profile_command
+from display_utils import display_romanized_name
 
 # ============================================================
 # KONFIGURACJA
@@ -3055,6 +3056,71 @@ def _find_exact_text_marker(soup, wanted):
     return None
 
 
+def _artist_link_is_part_of_album_favorite(link):
+
+    node = link
+
+    # Link artysty wewnątrz kafelka ulubionego albumu nie może zostać
+    # potraktowany jako osobny Favorite Artist.
+    for _ in range(6):
+
+        node = getattr(node, "parent", None)
+
+        if node is None:
+            break
+
+        album_ids = set()
+        artist_urls = set()
+
+        try:
+            album_links = node.select(
+                'a[href*="/album/"]'
+            )
+            artist_links = node.select(
+                'a[href*="/artist/"]'
+            )
+        except Exception:
+            album_links = []
+            artist_links = []
+
+        for album_link in album_links:
+
+            album_id = extract_album_id(
+                album_link.get("href", "")
+            )
+
+            if album_id:
+                album_ids.add(album_id)
+
+        for artist_link in artist_links:
+
+            artist_href = artist_link.get(
+                "href",
+                ""
+            )
+
+            if artist_href:
+                artist_urls.add(
+                    urljoin(
+                        BASE_URL,
+                        artist_href
+                    )
+                )
+
+        # Kontener z kilkoma albumami lub kilkoma różnymi artystami
+        # jest już sekcją zbiorczą, a nie pojedynczym kafelkiem albumu.
+        if (
+            len(album_ids) > 1
+            or len(artist_urls) > 1
+        ):
+            break
+
+        if len(album_ids) == 1:
+            return True
+
+    return False
+
+
 def _extract_profile_favorites(soup, limit=5):
 
     marker = _find_exact_text_marker(
@@ -3062,35 +3128,23 @@ def _extract_profile_favorites(soup, limit=5):
         "favorites"
     )
 
+    empty_result = {
+        "albums": [],
+        "artists": [],
+    }
+
     if marker is None:
-        return []
+        return empty_result
 
-    favorite_kind = None
+    favorite_albums = []
+    favorite_artists = []
 
-    for string in marker.parent.find_all_next(
-        string=True,
-        limit=25
-    ):
-        text = " ".join(
-            str(string).split()
-        ).casefold()
-
-        if text == "albums":
-            favorite_kind = "albums"
-            break
-
-        if text == "artists":
-            favorite_kind = "artists"
-            break
-
-        if text.startswith("best of "):
-            break
-
-    favorites = []
-    seen = set()
+    seen_albums = set()
+    seen_artists = set()
 
     for element in marker.parent.next_elements:
 
+        # Koniec sekcji Favorites.
         if getattr(element, "name", None) in {
             "h2",
             "h3"
@@ -3104,7 +3158,10 @@ def _extract_profile_favorites(soup, limit=5):
 
             if (
                 heading.startswith("best of ")
-                or heading == "recently rated"
+                or heading in {
+                    "recently rated",
+                    "recently listened",
+                }
             ):
                 break
 
@@ -3113,47 +3170,20 @@ def _extract_profile_favorites(soup, limit=5):
 
         href = element.get("href", "")
 
-        if favorite_kind == "artists":
+        # ========================================================
+        # FAVORITE ALBUMS
+        # ========================================================
 
-            if "/artist/" not in href:
-                continue
+        album_id = extract_album_id(
+            href
+        )
 
-            name = element.get_text(
-                " ",
-                strip=True
-            )
+        if album_id:
 
-            if not name:
-                continue
-
-            url = urljoin(
-                BASE_URL,
-                href
-            )
-
-            key = ("artist", url)
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-
-            favorites.append({
-                "type": "artist",
-                "name": name,
-                "artist": name,
-                "album": None,
-                "url": url,
-            })
-
-        else:
-
-            album_id = extract_album_id(href)
-
-            if not album_id:
-                continue
-
-            if ("album", album_id) in seen:
+            if (
+                album_id in seen_albums
+                or len(favorite_albums) >= limit
+            ):
                 continue
 
             title = element.get_text(
@@ -3185,11 +3215,11 @@ def _extract_profile_favorites(soup, limit=5):
                 else None
             )
 
-            seen.add(
-                ("album", album_id)
+            seen_albums.add(
+                album_id
             )
 
-            favorites.append({
+            favorite_albums.append({
                 "type": "album",
                 "name": title,
                 "artist": artist,
@@ -3200,11 +3230,63 @@ def _extract_profile_favorites(soup, limit=5):
                 ),
             })
 
-        if len(favorites) >= limit:
+            continue
+
+        # ========================================================
+        # FAVORITE ARTISTS
+        # ========================================================
+
+        if "/artist/" not in href:
+            continue
+
+        # Albumowe kafelki zawierają też link do artysty. Taki link
+        # nie jest Favorite Artist i musi zostać pominięty.
+        if _artist_link_is_part_of_album_favorite(
+            element
+        ):
+            continue
+
+        if len(favorite_artists) >= limit:
+            continue
+
+        name = element.get_text(
+            " ",
+            strip=True
+        )
+
+        if not name:
+            continue
+
+        artist_url = urljoin(
+            BASE_URL,
+            href
+        )
+
+        if artist_url in seen_artists:
+            continue
+
+        seen_artists.add(
+            artist_url
+        )
+
+        favorite_artists.append({
+            "type": "artist",
+            "name": name,
+            "artist": name,
+            "album": None,
+            "url": artist_url,
+        })
+
+        if (
+            len(favorite_albums) >= limit
+            and len(favorite_artists) >= limit
+        ):
             break
 
-    return favorites
-
+    return {
+        "albums": favorite_albums,
+        "artists": favorite_artists,
+    }
 
 def _extract_profile_recent_ratings(
     soup,
@@ -3458,6 +3540,21 @@ def get_profile_data(username):
         soup
     )
 
+    favorite_groups = _extract_profile_favorites(
+        soup,
+        limit=5
+    )
+
+    favorite_albums = (
+        favorite_groups.get("albums")
+        or []
+    )
+
+    favorite_artists = (
+        favorite_groups.get("artists")
+        or []
+    )
+
     return {
         "username": display_username,
         "url": url,
@@ -3490,10 +3587,18 @@ def get_profile_data(username):
             if average_rating is not None
             else None
         ),
-        "favorites": _extract_profile_favorites(
-            soup,
-            limit=5
+        # Favorites są zwracane osobno, dzięki czemu /profile może
+        # pokazać albumy i artystów jednocześnie.
+        "favorite_albums": favorite_albums,
+        "favorite_artists": favorite_artists,
+
+        # Zachowujemy też stare pole dla kompatybilności z innymi
+        # fragmentami kodu, które mogły korzystać z "favorites".
+        "favorites": (
+            favorite_albums
+            + favorite_artists
         ),
+
         "recent_ratings": _extract_profile_recent_ratings(
             soup,
             limit=5
@@ -3752,6 +3857,11 @@ async def send_new_rating(username, item, avatar=None):
     score = item["score"]
     artist = item["artist"]
     album = item["album"]
+
+    # Romanizacja tylko do wyświetlania.
+    display_artist = display_romanized_name(artist)
+    display_album = display_romanized_name(album)
+
     date = item["date"]
     url = item["url"]
     cover = item["cover"]
@@ -3848,9 +3958,9 @@ async def send_new_rating(username, item, avatar=None):
         )
 
     embed = discord.Embed(
-        title=f"{album}",
+        title=f"{display_album}",
         url=url,
-        description=f"**{artist}**",
+        description=f"**{display_artist}**",
         color=score_color(score)
     )
 
@@ -3915,6 +4025,11 @@ async def send_changed_rating(
     new_score = item["score"]
     artist = item["artist"]
     album = item["album"]
+
+    # Romanizacja tylko do wyświetlania.
+    display_artist = display_romanized_name(artist)
+    display_album = display_romanized_name(album)
+
     date = item["date"]
     url = item["url"]
     cover = item["cover"]
@@ -4011,9 +4126,9 @@ async def send_changed_rating(
         )
 
     embed = discord.Embed(
-        title=f"{album}",
+        title=f"{display_album}",
         url=url,
-        description=f"{artist}",
+        description=f"{display_artist}",
         color=score_color(new_score)
     )
 

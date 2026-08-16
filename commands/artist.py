@@ -3,6 +3,8 @@ import asyncio
 import discord
 import requests
 
+from display_utils import display_romanized_name
+
 
 MAX_ARTIST_RELEASES = 18
 
@@ -49,7 +51,7 @@ def setup_artist_command(
 
         return [
             discord.app_commands.Choice(
-                name=item["name"][:100],
+                name=display_romanized_name(item["name"])[:100],
                 value=item["value"][:100],
             )
             for item in results[:10]
@@ -183,15 +185,19 @@ def setup_artist_command(
                 or "?"
             )
 
+            display_title = display_romanized_name(
+                release["title"]
+            )
+
             lines.append(
-                f"• **[{release['title']}]({release['url']})**"
+                f"• **[{display_title}]({release['url']})**"
                 f" — {release_date} · {release_format} — ⭐ **{user_score}**"
             )
 
             await asyncio.sleep(0.12)
 
         embed = discord.Embed(
-            title=discography["artist"],
+            title=display_romanized_name(discography["artist"]),
             url=discography["url"],
             description="\n".join(lines),
         )

@@ -3,6 +3,8 @@ import asyncio
 import discord
 import requests
 
+from display_utils import display_romanized_name
+
 import os
 
 BASE_DIR = os.path.dirname(
@@ -23,28 +25,40 @@ def _favorite_line(item):
 
     if item_type == "artist":
         name = item.get("name") or "Nieznany artysta"
-        return f"\⭐ **[{name}]({url})**"
+        display_name = display_romanized_name(name)
+        return f"\⭐ **[{display_name}]({url})**"
 
     album = item.get("album") or item.get("name") or "Nieznane wydanie"
     artist = item.get("artist")
 
-    if artist:
-        return f"\💿 **[{artist} — {album}]({url})**"
+    display_album = display_romanized_name(album)
+    display_artist = (
+        display_romanized_name(artist)
+        if artist
+        else None
+    )
 
-    return f"\💿 **[{album}]({url})**"
+    if display_artist:
+        return f"\💿 **[{display_artist} — {display_album}]({url})**"
+
+    return f"\💿 **[{display_album}]({url})**"
 
 
 def _recent_line(item, score_icon):
 
     artist = item.get("artist") or "Nieznany artysta"
     album = item.get("album") or "Nieznane wydanie"
+
+    display_artist = display_romanized_name(artist)
+    display_album = display_romanized_name(album)
+
     score = item.get("score") or "NR"
     url = item.get("url")
     release_format = item.get("release_format") or "?"
 
     return (
         f"\{score_icon(score)} **{score}** · "
-        f"[{artist} — {album}]({url}) · {release_format}"
+        f"[{display_artist} — {display_album}]({url}) · {release_format}"
     )
 
 
@@ -119,12 +133,45 @@ def setup_profile_command(
             or "Brak danych"
         )
 
-        favorites = profile.get("favorites") or []
+        favorite_albums = (
+            profile.get("favorite_albums")
+            or []
+        )
+
+        favorite_artists = (
+            profile.get("favorite_artists")
+            or []
+        )
+
+        # Fallback dla starszej wersji get_profile_data.
+        if not favorite_albums and not favorite_artists:
+            legacy_favorites = (
+                profile.get("favorites")
+                or []
+            )
+
+            favorite_albums = [
+                item
+                for item in legacy_favorites
+                if item.get("type") == "album"
+            ][:5]
+
+            favorite_artists = [
+                item
+                for item in legacy_favorites
+                if item.get("type") == "artist"
+            ][:5]
+
         recent_ratings = profile.get("recent_ratings") or []
 
-        favorite_lines = [
+        favorite_album_lines = [
             _favorite_line(item)
-            for item in favorites[:5]
+            for item in favorite_albums[:5]
+        ]
+
+        favorite_artist_lines = [
+            _favorite_line(item)
+            for item in favorite_artists[:5]
         ]
 
         recent_lines = [
@@ -180,10 +227,20 @@ def setup_profile_command(
             )
 
         embed.add_field(
-            name="Favorites",
+            name="Favorite Albums",
             value=(
-                "\n".join(favorite_lines)
-                if favorite_lines
+                "\n".join(favorite_album_lines)
+                if favorite_album_lines
+                else "—"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Favorite Artists",
+            value=(
+                "\n".join(favorite_artist_lines)
+                if favorite_artist_lines
                 else "—"
             ),
             inline=False,

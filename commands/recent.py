@@ -3,6 +3,8 @@ import asyncio
 import discord
 import requests
 
+from display_utils import display_romanized_name
+
 
 def _rating_embed(
     username,
@@ -15,6 +17,10 @@ def _rating_embed(
     score = item["score"]
     artist = item["artist"]
     album = item["album"]
+
+    display_artist = display_romanized_name(artist)
+    display_album = display_romanized_name(album)
+
     date = item["date"]
     url = item["url"]
     cover = item["cover"]
@@ -60,7 +66,7 @@ def _rating_embed(
     tracklist_text = details.get("tracklist_text") or "Brak danych"
 
     embed = discord.Embed(
-        title=f"{score_icon(score)} {artist} • **{album}** ({year})",
+        title=f"{score_icon(score)} {display_artist} • **{display_album}** ({year})",
         url=url,
         description=all_genres_text,
         color=score_color(score),
@@ -118,7 +124,7 @@ def setup_recent_command(
 ):
     @tree.command(
         name="recent",
-        description="Pokazuje ostatnie oceny użytkownika AOTY",
+        description="Pokazuje od 1 do 20 ostatnich ocen użytkownika AOTY",
     )
     @discord.app_commands.describe(
         username="Nazwa użytkownika na AOTY",

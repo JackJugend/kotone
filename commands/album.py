@@ -4,6 +4,8 @@ import time
 import discord
 import requests
 
+from display_utils import display_romanized_name
+
 
 DISCOGRAPHY_CACHE_TTL = 900
 
@@ -87,7 +89,7 @@ def setup_album_command(
 
         return [
             discord.app_commands.Choice(
-                name=item["name"][:100],
+                name=display_romanized_name(item["name"])[:100],
                 value=item["value"][:100],
             )
             for item in results[:10]
@@ -130,6 +132,7 @@ def setup_album_command(
 
             for release in releases[:25]:
                 title = release.get("title", "")
+                display_title = display_romanized_name(title)
                 year = release.get("year")
                 release_format = release.get("album_format")
 
@@ -141,10 +144,10 @@ def setup_album_command(
 
                 if suffix_parts:
                     choice_name = (
-                        f"{title} ({' · '.join(suffix_parts)})"
+                        f"{display_title} ({' · '.join(suffix_parts)})"
                     )
                 else:
-                    choice_name = title
+                    choice_name = display_title
 
                 choices.append(
                     discord.app_commands.Choice(
@@ -163,7 +166,7 @@ def setup_album_command(
 
     @tree.command(
         name="album",
-        description="Pokazuje album i jego oceny na serwerze",
+        description="Pokazuje wydanie i live oceny użytkowników z config.json",
     )
     @discord.app_commands.describe(
         artist="Artysta na AOTY",
@@ -236,6 +239,14 @@ def setup_album_command(
 
         artist_name = discography.get("artist") or artist_info["name"]
         album_title = release["title"]
+
+        display_artist_name = display_romanized_name(
+            artist_name
+        )
+        display_album_title = display_romanized_name(
+            album_title
+        )
+
         album_url = release["url"]
         cover = release.get("cover")
 
@@ -286,7 +297,7 @@ def setup_album_command(
         embed = discord.Embed(
             title=(
                 f"{score_icon(aoty_user_score)} "
-                f"{artist_name} • **{album_title}** ({year})"
+                f"{display_artist_name} • **{display_album_title}** ({year})"
             ),
             url=album_url,
             description=all_genres_text,

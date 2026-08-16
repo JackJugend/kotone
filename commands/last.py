@@ -2,6 +2,8 @@ import asyncio
 import discord
 import requests
 
+from display_utils import display_romanized_name
+
 def setup_last_command(
     tree,
     get_ratings,
@@ -85,6 +87,10 @@ def setup_last_command(
         score = latest["score"]
         artist = latest["artist"]
         album = latest["album"]
+
+        display_artist = display_romanized_name(artist)
+        display_album = display_romanized_name(album)
+
         date = latest["date"]
         url = latest["url"]
         cover = latest["cover"]
@@ -176,7 +182,7 @@ def setup_last_command(
             pass
 
         embed = discord.Embed(
-                title=f"{score_icon(score)} {artist} • **{album}** ({year})",
+                title=f"{score_icon(score)} {display_artist} • **{display_album}** ({year})",
                 url=url,
                 description=f"{all_genres_text}",
                 color=score_color(score),
