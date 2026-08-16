@@ -11,5 +11,29 @@
         "enso",
         "kulkien"
     ],
-    "check_interval": 1800
+    "check_interval": 1800,
+
+    "rating_fetch_limits": {
+        "lp": 2000,
+        "ep": 1000,
+        "mixtape": 100,
+        "single": 1000,
+        "compilation": 100,
+        "live": 20,
+        "reissue": 100,
+        "soundtrack": 20,
+        "holiday": 0,
+        "dj_mix": 0,
+        "box_set": 0,
+        "instrumental": 0,
+        "unofficial": 0,
+        "video": 0,
+        "demo": 0,
+        "miscellaneous": 0,
+        "music_video": 20,
+        "remix": 0,
+        "audiobook": 0
+    },
+
+    "album_lookup_fallback_limit": 300
 }

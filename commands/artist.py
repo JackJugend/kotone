@@ -1,4 +1,5 @@
 import asyncio
+
 import discord
 import requests
 
@@ -8,12 +9,28 @@ MAX_ARTIST_RELEASES = 18
 
 def setup_artist_command(
     tree,
+    rating_formats,
     search_aoty_artists,
     resolve_artist,
     get_artist_releases,
     get_album_details,
     AOTYRateLimit,
 ):
+    format_choices = [
+        discord.app_commands.Choice(
+            name="Wszystkie formaty",
+            value="all",
+        )
+    ]
+
+    for key, info in rating_formats.items():
+        format_choices.append(
+            discord.app_commands.Choice(
+                name=info["label"],
+                value=key,
+            )
+        )
+
     async def artist_autocomplete(
         interaction: discord.Interaction,
         current: str,
@@ -44,13 +61,18 @@ def setup_artist_command(
     )
     @discord.app_commands.describe(
         artist="Nazwa artysty na AOTY",
+        format="Format wydań, które chcesz zobaczyć",
     )
     @discord.app_commands.autocomplete(
         artist=artist_autocomplete,
     )
+    @discord.app_commands.choices(
+        format=format_choices,
+    )
     async def artist_command(
         interaction: discord.Interaction,
         artist: str,
+        format: str = "all",
     ):
         await interaction.response.defer()
 
@@ -89,17 +111,40 @@ def setup_artist_command(
             )
             return
 
-        # /artist ma być listą albumów, więc ukrywamy single i video.
-        releases = [
-            item
-            for item in discography.get("releases", [])
-            if (item.get("album_format") or "").casefold()
-            not in {"single", "music video", "video"}
-        ]
+        releases = list(
+            discography.get(
+                "releases",
+                []
+            )
+        )
+
+        selected_label = "Wszystkie formaty"
+
+        if format != "all":
+            format_info = rating_formats.get(format)
+
+            if not format_info:
+                await interaction.followup.send(
+                    "❌ Nieznany format."
+                )
+                return
+
+            selected_label = format_info["label"]
+            wanted = selected_label.casefold()
+
+            releases = [
+                item
+                for item in releases
+                if (
+                    item.get("album_format")
+                    or ""
+                ).casefold() == wanted
+            ]
 
         if not releases:
             await interaction.followup.send(
-                f"❌ Nie znaleziono wydań artysty **{discography['artist']}**."
+                f"❌ Nie znaleziono wydań artysty **{discography['artist']}** "
+                f"dla formatu **{selected_label}**."
             )
             return
 
@@ -110,8 +155,7 @@ def setup_artist_command(
             release_date = release.get("year") or "Brak daty"
             user_score = release.get("user_score") or "NR"
 
-            # Dokładną datę bierzemy ze strony albumu. Jeśli AOTY jej nie ma,
-            # zostaje rok ze strony artysty.
+            # Dokładną datę i aktualny User Score bierzemy ze strony wydania.
             try:
                 details = await asyncio.to_thread(
                     get_album_details,
@@ -122,29 +166,29 @@ def setup_artist_command(
                     details.get("release_date")
                     or release_date
                 )
+
                 user_score = (
                     details.get("user_score")
                     or user_score
                 )
 
             except AOTYRateLimit:
-                # Nie kasujemy całej komendy, jeśli AOTY ograniczy kolejne
-                # requesty podczas wzbogacania listy.
+                # Zostają dane z dyskografii; nie kasujemy całej komendy.
                 pass
             except Exception:
                 pass
 
-            release_format = release.get("album_format")
-            format_text = (
-                f" · {release_format}"
-                if release_format
-                else ""
+            release_format = (
+                release.get("album_format")
+                or "?"
             )
 
             lines.append(
                 f"• **[{release['title']}]({release['url']})**"
-                f" — {release_date}{format_text} — ⭐ **{user_score}**"
+                f" — {release_date} · {release_format} — ⭐ **{user_score}**"
             )
+
+            await asyncio.sleep(0.12)
 
         embed = discord.Embed(
             title=discography["artist"],
@@ -158,16 +202,18 @@ def setup_artist_command(
             )
 
         if len(releases) > len(shown):
-            embed.set_footer(
-                text=(
-                    f"Pokazano {len(shown)} z {len(releases)} wydań "
-                    "(single są pomijane)."
-                )
+            footer = (
+                f"{selected_label} • pokazano {len(shown)} "
+                f"z {len(releases)} wydań."
             )
         else:
-            embed.set_footer(
-                text="Single są pomijane."
+            footer = (
+                f"{selected_label} • {len(shown)} wydań."
             )
+
+        embed.set_footer(
+            text=footer
+        )
 
         await interaction.followup.send(
             embed=embed,

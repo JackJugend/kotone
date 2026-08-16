@@ -1,5 +1,6 @@
 import asyncio
 import time
+
 import discord
 import requests
 
@@ -50,8 +51,6 @@ def setup_album_command(
             discography,
         )
 
-        # Choice z autocomplete ma inną wartość niż widoczna nazwa.
-        # Cache'ujemy oba warianty.
         choice_value = artist_info.get("value")
         if choice_value:
             discography_cache[choice_value.casefold()] = (
@@ -164,11 +163,11 @@ def setup_album_command(
 
     @tree.command(
         name="album",
-        description="Pokazuje album i oceny monitorowanych użytkowników AOTY",
+        description="Pokazuje wydanie i live oceny użytkowników z config.json",
     )
     @discord.app_commands.describe(
         artist="Artysta na AOTY",
-        album="Album — możesz wpisać nazwę niedokładnie",
+        album="Wydanie — nazwa może być niedokładna",
     )
     @discord.app_commands.autocomplete(
         artist=artist_autocomplete,
@@ -199,7 +198,7 @@ def setup_album_command(
 
             if not ranked:
                 await interaction.followup.send(
-                    f"❌ Nie znaleziono albumu **{album}** u tego artysty."
+                    f"❌ Nie znaleziono wydania **{album}** u tego artysty."
                 )
                 return
 
@@ -208,7 +207,7 @@ def setup_album_command(
 
             if not direct_choice and match_score < 0.28:
                 await interaction.followup.send(
-                    f"❌ Nie znaleziono wystarczająco podobnego albumu do **{album}**."
+                    f"❌ Nie znaleziono wystarczająco podobnego wydania do **{album}**."
                 )
                 return
 
@@ -247,7 +246,11 @@ def setup_album_command(
 
         release_date = details.get("release_date") or "Brak danych"
         year = details.get("year") or release.get("year") or "Brak danych"
-        album_format = details.get("album_format") or release.get("album_format") or "Brak danych"
+        album_format = (
+            details.get("album_format")
+            or release.get("album_format")
+            or "Brak danych"
+        )
 
         label = details.get("label") or "Brak danych"
         labels = details.get("labels") or []
@@ -290,11 +293,12 @@ def setup_album_command(
             color=score_color(aoty_user_score),
         )
 
-        # Oceny wszystkich użytkowników wpisanych w config.json.
+        # ZAWSZE live: get_user_rating_for_album() nie używa data.json.
         for username in users:
             rating_info = {
                 "score": None,
                 "date": None,
+                "source": "AOTY live",
             }
 
             try:
@@ -302,9 +306,16 @@ def setup_album_command(
                     get_user_rating_for_album,
                     username,
                     release["album_id"],
+                    album_url,
+                    album_format,
                 )
             except AOTYRateLimit:
-                pass
+                # Nie wywalamy całej komendy przez jednego usera.
+                rating_info = {
+                    "score": None,
+                    "date": None,
+                    "source": "rate limit",
+                }
             except Exception:
                 pass
 
@@ -323,13 +334,16 @@ def setup_album_command(
                 inline=True,
             )
 
+            # Mniej agresywne odpytywanie AOTY przy wielu userach.
+            await asyncio.sleep(0.15)
+
         if cover:
             embed.set_thumbnail(
                 url=cover,
             )
 
         embed.set_footer(
-            text=f"•  {release_date}",
+            text=f"•  {release_date}  •  {album_format}",
         )
 
         await interaction.followup.send(

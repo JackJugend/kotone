@@ -176,26 +176,26 @@ def setup_last_command(
             pass
 
         embed = discord.Embed(
-                title=f"\{score_icon(score)} {artist} • **{album}** ({year})",
+                title=f"{score_icon(score)} {artist} • **{album}** ({year})",
                 url=url,
                 description=f"{all_genres_text}",
                 color=score_color(score),
         )
 
         embed.add_field(
-                name=f"\⭐ **{score}**",
+                name=f"⭐\uFE0E **{score}**",
                 value=" ",
                 inline=True
         
         )
         embed.add_field(
-                name=f"\👥 **{aoty_user_score}**/{ratings_count}",
+                name=f"👥\uFE0E **{aoty_user_score}**/{ratings_count}",
                 value=" ",
                 inline=True
 
         )
         embed.add_field(
-                name=f"\📅 **{year_ranking_text}**",
+                name=f"📅\uFE0E **{year_ranking_text}**",
                 value=" ",
                 inline=True
         )

@@ -18,6 +18,7 @@ from commands.last import setup_last_command
 from commands.recent import setup_recent_command
 from commands.artist import setup_artist_command
 from commands.album import setup_album_command
+from commands.profile import setup_profile_command
 
 # ============================================================
 # KONFIGURACJA
@@ -75,6 +76,94 @@ if CHECK_INTERVAL < 60:
         "Ustawiam 60 sekund."
     )
     CHECK_INTERVAL = 60
+
+
+# ============================================================
+# FORMATY AOTY / LIMITY MONITORA
+# ============================================================
+#
+# Każda wartość w rating_fetch_limits oznacza LICZBĘ ostatnich pozycji
+# danego formatu, które bot ma sprawdzać przy każdym cyklu monitora.
+# 0 = wyłącz sprawdzanie danego formatu.
+#
+# Klucze odpowiadają filtrom AOTY. Bot obsługuje także rzadkie formaty,
+# np. Audiobook, Box Set, Holiday, Instrumental, Reissue czy Video.
+RATING_FORMATS = {
+    "lp": {"slug": "lp", "label": "LP"},
+    "ep": {"slug": "ep", "label": "EP"},
+    "mixtape": {"slug": "mixtape", "label": "Mixtape"},
+    "single": {"slug": "single", "label": "Single"},
+    "compilation": {"slug": "compilation", "label": "Compilation"},
+    "live": {"slug": "live", "label": "Live"},
+    "reissue": {"slug": "reissue", "label": "Reissue"},
+    "soundtrack": {"slug": "soundtrack", "label": "Soundtrack"},
+    "holiday": {"slug": "holiday", "label": "Holiday"},
+    "dj_mix": {"slug": "dj-mix", "label": "DJ Mix"},
+    "box_set": {"slug": "box-set", "label": "Box Set"},
+    "instrumental": {"slug": "instrumental", "label": "Instrumental"},
+    "unofficial": {"slug": "unofficial", "label": "Unofficial"},
+    "video": {"slug": "video", "label": "Video"},
+    "demo": {"slug": "demo", "label": "Demo"},
+    "miscellaneous": {"slug": "miscellaneous", "label": "Miscellaneous"},
+    "music_video": {"slug": "music-video", "label": "Music Video"},
+    "remix": {"slug": "remix", "label": "Remix"},
+    "audiobook": {"slug": "audiobook", "label": "Audiobook"},
+}
+
+# Domyślne limity są celowo umiarkowane, żeby nie walić w AOTY
+# kilkudziesięcioma requestami na usera co minutę. Każdy format możesz
+# nadpisać w config.json przez "rating_fetch_limits".
+DEFAULT_RATING_FETCH_LIMITS = {
+    "lp": 120,
+    "ep": 60,
+    "mixtape": 60,
+    "single": 60,
+    "compilation": 30,
+    "live": 20,
+    "reissue": 20,
+    "soundtrack": 20,
+    "holiday": 0,
+    "dj_mix": 0,
+    "box_set": 0,
+    "instrumental": 0,
+    "unofficial": 0,
+    "video": 0,
+    "demo": 0,
+    "miscellaneous": 0,
+    "music_video": 20,
+    "remix": 0,
+    "audiobook": 0,
+}
+
+_raw_fetch_limits = config.get("rating_fetch_limits", {})
+
+RATING_FETCH_LIMITS = {}
+
+for _format_key, _format_info in RATING_FORMATS.items():
+    _default_limit = DEFAULT_RATING_FETCH_LIMITS.get(_format_key, 0)
+
+    # Akceptujemy zarówno klucz z podkreśleniem (dj_mix),
+    # jak i slug AOTY (dj-mix).
+    _raw_value = _raw_fetch_limits.get(
+        _format_key,
+        _raw_fetch_limits.get(
+            _format_info["slug"],
+            _default_limit
+        )
+    )
+
+    try:
+        _limit = max(0, int(_raw_value))
+    except (TypeError, ValueError):
+        _limit = _default_limit
+
+    RATING_FETCH_LIMITS[_format_key] = _limit
+
+
+ALBUM_LOOKUP_FALLBACK_LIMIT = max(
+    20,
+    int(config.get("album_lookup_fallback_limit", 300))
+)
 
 intents = discord.Intents.default()
 
@@ -586,19 +675,30 @@ def _extract_release_format(text):
     if not text:
         return None
 
+    # Kolejność ma znaczenie: dłuższe nazwy przed krótszymi
+    # (np. Music Video przed Video).
     known_formats = [
-        "Mixtape",
+        "Music Video",
+        "Miscellaneous",
+        "Instrumental",
         "Compilation",
         "Soundtrack",
+        "Audiobook",
+        "Unofficial",
+        "Mixtape",
         "Reissue",
-        "Remix",
-        "Live",
-        "Bootleg",
+        "Holiday",
+        "Box Set",
         "DJ Mix",
-        "Demo",
         "Single",
+        "Remix",
+        "Video",
+        "Demo",
+        "Live",
         "EP",
         "LP",
+        # Starsze wpisy AOTY mogą nadal mieć taki opis.
+        "Bootleg",
     ]
 
     for release_format in known_formats:
@@ -608,6 +708,30 @@ def _extract_release_format(text):
             flags=re.IGNORECASE
         ):
             return release_format
+
+    return None
+
+
+def _format_key_from_label(label):
+
+    if not label:
+        return None
+
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        str(label).casefold()
+    )
+
+    for key, info in RATING_FORMATS.items():
+        candidate = re.sub(
+            r"[^a-z0-9]+",
+            "",
+            info["label"].casefold()
+        )
+
+        if normalized == candidate:
+            return key
 
     return None
 
@@ -1891,6 +2015,121 @@ def extract_date(block):
 # OKŁADKA
 # ============================================================
 
+
+def _parse_rating_datetime_for_sort(text):
+
+    if not text:
+        return None
+
+    text = " ".join(str(text).split())
+    lower = text.casefold()
+    now = datetime.now()
+
+    if lower == "just now":
+        return now
+
+    relative_patterns = [
+        (r"\b(\d+)\s*m(?:in)?\s*ago\b", "minutes"),
+        (r"\b(\d+)\s*h(?:r)?\s*ago\b", "hours"),
+        (r"\b(\d+)\s*d(?:ay)?\s*ago\b", "days"),
+        (r"\b(\d+)\s*w(?:eek)?\s*ago\b", "weeks"),
+    ]
+
+    for pattern_text, unit in relative_patterns:
+        match = re.search(
+            pattern_text,
+            text,
+            flags=re.IGNORECASE
+        )
+
+        if not match:
+            continue
+
+        value = int(match.group(1))
+
+        if unit == "minutes":
+            return now - timedelta(minutes=value)
+        if unit == "hours":
+            return now - timedelta(hours=value)
+        if unit == "days":
+            return now - timedelta(days=value)
+        if unit == "weeks":
+            return now - timedelta(weeks=value)
+
+    match = re.search(
+        r"\b("
+        r"Jan(?:uary)?|"
+        r"Feb(?:ruary)?|"
+        r"Mar(?:ch)?|"
+        r"Apr(?:il)?|"
+        r"May|"
+        r"Jun(?:e)?|"
+        r"Jul(?:y)?|"
+        r"Aug(?:ust)?|"
+        r"Sep(?:t(?:ember)?|tember)?|"
+        r"Oct(?:ober)?|"
+        r"Nov(?:ember)?|"
+        r"Dec(?:ember)?"
+        r")\s+(\d{1,2})(?:,\s*(\d{4}))?",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    if not match:
+        return None
+
+    month_name = match.group(1).lower()
+    day = int(match.group(2))
+    month = MONTHS.get(month_name)
+
+    if not month:
+        return None
+
+    if match.group(3):
+        year = int(match.group(3))
+    else:
+        year = now.year
+
+        try:
+            candidate = datetime(year, month, day)
+            if candidate > now + timedelta(days=2):
+                year -= 1
+        except ValueError:
+            return None
+
+    try:
+        return datetime(year, month, day)
+    except ValueError:
+        return None
+
+
+def extract_rating_timestamp(block):
+
+    selectors = [
+        ".ratingText",
+        ".date",
+        "[class*='date']",
+        "[class*='Date']",
+    ]
+
+    for selector in selectors:
+        for element in block.select(selector):
+            dt = _parse_rating_datetime_for_sort(
+                clean_text(element)
+            )
+
+            if dt:
+                return dt.timestamp()
+
+    for text in block.stripped_strings:
+        dt = _parse_rating_datetime_for_sort(text)
+
+        if dt:
+            return dt.timestamp()
+
+    return 0.0
+
+
 def extract_cover(block):
 
     image = block.select_one(
@@ -2095,6 +2334,21 @@ def parse_album_block(block):
         block
     )
 
+    # ========================================================
+    # FORMAT / KOLEJNOŚĆ CZASOWA
+    # ========================================================
+
+    release_format = _extract_release_format(
+        block.get_text(
+            " ",
+            strip=True
+        )
+    )
+
+    sort_timestamp = extract_rating_timestamp(
+        block
+    )
+
 
     # ========================================================
     # URL
@@ -2122,7 +2376,9 @@ def parse_album_block(block):
         "score": score,
         "date": date,
         "url": album_url,
-        "cover": cover
+        "cover": cover,
+        "release_format": release_format,
+        "sort_timestamp": sort_timestamp
     }
 
 
@@ -2237,17 +2493,100 @@ def parse_generic(soup):
 # POBIERANIE OCEN
 # ============================================================
 
-def get_ratings(username, max_pages=3):
+def _parse_ratings_soup(soup, forced_format=None):
+
+    results = {}
+
+    for block in soup.select(".albumBlock"):
+
+        item = parse_album_block(block)
+
+        if not item:
+            continue
+
+        if forced_format:
+            item["release_format"] = forced_format
+
+        results[item["album_id"]] = item
+
+    for item in parse_generic(soup):
+
+        if forced_format:
+            item["release_format"] = forced_format
+
+        album_id = item["album_id"]
+
+        if album_id not in results:
+            results[album_id] = item
+
+    page_ratings = []
+    added = set()
+
+    for link in soup.select('a[href*="/album/"]'):
+
+        album_id = extract_album_id(
+            link.get("href", "")
+        )
+
+        if not album_id:
+            continue
+
+        if album_id not in results:
+            continue
+
+        if album_id in added:
+            continue
+
+        page_ratings.append(
+            results[album_id]
+        )
+
+        added.add(album_id)
+
+    return page_ratings
+
+
+def _ratings_route_url(username, slug=None, page=1):
+
+    base = f"{BASE_URL}/user/{username}/ratings/"
+
+    if slug:
+        base += f"{slug}/"
+
+    if page > 1:
+        base += f"{page}/"
+
+    return base
+
+
+def _get_ratings_from_route(
+    username,
+    slug=None,
+    limit=60,
+    forced_format=None
+):
+
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 60
+
+    if limit <= 0:
+        return []
 
     all_ratings = []
     seen = set()
+    page = 1
 
-    for page in range(1, max_pages + 1):
+    # Zabezpieczenie przed przypadkowym configiem typu 999999.
+    # Pętla i tak zwykle kończy się dużo wcześniej po osiągnięciu limitu.
+    while len(all_ratings) < limit and page <= 100:
 
-        if page == 1:
-            url = f"{BASE_URL}/user/{username}/ratings/"
-        else:
-            url = f"{BASE_URL}/user/{username}/ratings/{page}/"
+        url = _ratings_route_url(
+            username,
+            slug=slug,
+            page=page
+        )
 
         html = fetch_page(url)
 
@@ -2256,51 +2595,15 @@ def get_ratings(username, max_pages=3):
             "html.parser"
         )
 
-        results = {}
-
-        for block in soup.select(".albumBlock"):
-
-            item = parse_album_block(block)
-
-            if not item:
-                continue
-
-            results[item["album_id"]] = item
-
-        for item in parse_generic(soup):
-
-            album_id = item["album_id"]
-
-            if album_id not in results:
-                results[album_id] = item
-
-        page_ratings = []
-
-        added = set()
-
-        for link in soup.select('a[href*="/album/"]'):
-
-            album_id = extract_album_id(
-                link.get("href", "")
-            )
-
-            if not album_id:
-                continue
-
-            if album_id not in results:
-                continue
-
-            if album_id in added:
-                continue
-
-            page_ratings.append(
-                results[album_id]
-            )
-
-            added.add(album_id)
+        page_ratings = _parse_ratings_soup(
+            soup,
+            forced_format=forced_format
+        )
 
         if not page_ratings:
             break
+
+        new_on_page = 0
 
         for item in page_ratings:
 
@@ -2310,68 +2613,890 @@ def get_ratings(username, max_pages=3):
                 continue
 
             seen.add(album_id)
-
             all_ratings.append(item)
+            new_on_page += 1
 
-    return all_ratings
-
-
-# ============================================================
-# OCENA KONKRETNEGO ALBUMU PRZEZ MONITOROWANEGO USERA
-# ============================================================
-
-def get_user_rating_for_album(username, album_id):
-
-    username = str(username)
-    album_id = str(album_id)
-
-    users_data = data.get(
-        "users",
-        {}
-    )
-
-    user_state = users_data.get(
-        username
-    )
-
-    if user_state is None:
-        # Fallback na różnice wielkości liter w nazwie usera.
-        for saved_username, saved_state in users_data.items():
-            if saved_username.casefold() == username.casefold():
-                user_state = saved_state
+            if len(all_ratings) >= limit:
                 break
 
-    if user_state:
-        known = user_state.get(
-            "ratings",
-            {}
-        ).get(album_id)
+        if new_on_page == 0:
+            break
 
-        if known is not None:
-            return {
-                "score": str(known.get("score", "")) or None,
-                "date": known.get("date"),
-                "source": "data.json",
-            }
+        page += 1
 
-    # Jeśli albumu nie ma w pamięci, sprawdzamy bieżące strony ratings.
-    # get_ratings() ma własny limit stron, więc nie pobieramy całej historii.
-    ratings = get_ratings(
-        username
+    return all_ratings[:limit]
+
+
+def get_ratings_for_format(
+    username,
+    format_key,
+    limit=None
+):
+
+    info = RATING_FORMATS.get(
+        str(format_key)
     )
+
+    if not info:
+        return []
+
+    if limit is None:
+        limit = RATING_FETCH_LIMITS.get(
+            format_key,
+            0
+        )
+
+    return _get_ratings_from_route(
+        username=username,
+        slug=info["slug"],
+        limit=limit,
+        forced_format=info["label"]
+    )
+
+
+def _merge_rating_lists(*rating_lists):
+
+    merged = {}
+    sequence = 0
+
+    for ratings in rating_lists:
+        for item in ratings:
+            album_id = str(item.get("album_id", ""))
+
+            if not album_id:
+                continue
+
+            sequence += 1
+
+            current = merged.get(album_id)
+
+            candidate = dict(item)
+            candidate["_merge_sequence"] = sequence
+
+            if current is None:
+                merged[album_id] = candidate
+                continue
+
+            # Preferujemy rekord z lepszą informacją o formacie / czasie.
+            if (
+                not current.get("release_format")
+                and candidate.get("release_format")
+            ):
+                current["release_format"] = candidate["release_format"]
+
+            if (
+                float(candidate.get("sort_timestamp") or 0)
+                > float(current.get("sort_timestamp") or 0)
+            ):
+                candidate["_merge_sequence"] = current.get(
+                    "_merge_sequence",
+                    sequence
+                )
+                merged[album_id] = candidate
+
+    items = list(merged.values())
+
+    items.sort(
+        key=lambda item: (
+            float(item.get("sort_timestamp") or 0),
+            -int(item.get("_merge_sequence") or 0)
+        ),
+        reverse=True
+    )
+
+    for item in items:
+        item.pop("_merge_sequence", None)
+
+    return items
+
+
+def get_ratings(
+    username,
+    max_pages=None,
+    fetch_limits=None
+):
+
+    # max_pages zostaje w sygnaturze dla kompatybilności ze starszym kodem.
+    # Nowy system używa dokładnych limitów pozycji na format.
+    limits = dict(
+        RATING_FETCH_LIMITS
+        if fetch_limits is None
+        else fetch_limits
+    )
+
+    rating_lists = []
+
+    for format_key, info in RATING_FORMATS.items():
+
+        raw_limit = limits.get(
+            format_key,
+            limits.get(
+                info["slug"],
+                0
+            )
+        )
+
+        try:
+            limit = max(0, int(raw_limit))
+        except (TypeError, ValueError):
+            limit = 0
+
+        if limit <= 0:
+            continue
+
+        rating_lists.append(
+            get_ratings_for_format(
+                username,
+                format_key,
+                limit
+            )
+        )
+
+    return _merge_rating_lists(
+        *rating_lists
+    )
+
+
+def get_recent_ratings(username, count=20):
+
+    # "Albums" na AOTY jest zbiorem albumowych formatów (LP/EP/Mixtape
+    # i inne). Single oraz Music Video mają osobne filtry, więc dokładamy
+    # je osobno. Dzięki temu /last i /recent nie muszą wykonywać requestu
+    # dla każdego z kilkunastu formatów.
+    try:
+        count = max(1, min(20, int(count)))
+    except (TypeError, ValueError):
+        count = 20
+
+    album_like = _get_ratings_from_route(
+        username,
+        slug=None,
+        limit=count
+    )
+
+    singles = _get_ratings_from_route(
+        username,
+        slug="single",
+        limit=count,
+        forced_format="Single"
+    )
+
+    music_videos = _get_ratings_from_route(
+        username,
+        slug="music-video",
+        limit=count,
+        forced_format="Music Video"
+    )
+
+    merged = _merge_rating_lists(
+        album_like,
+        singles,
+        music_videos
+    )
+
+    return merged[:count]
+
+
+# ============================================================
+# OCENA KONKRETNEGO WYDANIA PRZEZ USERA — ZAWSZE LIVE
+# ============================================================
+
+def _extract_user_score_from_user_release_page(
+    soup,
+    username
+):
+
+    username_normalized = str(username).strip().casefold()
+
+    # Na stronie /user/<user>/album/<id>-<slug>/ kolejność to zwykle:
+    # artysta -> tytuł -> username -> data -> ocena.
+    for string in soup.find_all(string=True):
+
+        text = " ".join(
+            str(string).split()
+        )
+
+        if text.casefold() != username_normalized:
+            continue
+
+        checked = 0
+
+        for next_string in string.parent.find_all_next(
+            string=True
+        ):
+
+            candidate = " ".join(
+                str(next_string).split()
+            )
+
+            if not candidate:
+                continue
+
+            match = re.fullmatch(
+                r"(100|\d{1,2})",
+                candidate
+            )
+
+            if match:
+                return match.group(1)
+
+            checked += 1
+
+            if checked >= 35:
+                break
+
+    # Fallback na klasy używane przez AOTY.
+    return extract_score(soup)
+
+
+def _fetch_user_release_page(
+    username,
+    album_id,
+    album_url
+):
+
+    if not album_url or "/album/" not in str(album_url):
+        return None
+
+    release_path = str(album_url).split(
+        "/album/",
+        1
+    )[1].strip("/")
+
+    if not release_path:
+        return None
+
+    user_url = (
+        f"{BASE_URL}/user/{username}/album/"
+        f"{release_path}/"
+    )
+
+    response = session.get(
+        user_url,
+        timeout=30
+    )
+
+    if response.status_code == 429:
+        retry_after = response.headers.get(
+            "Retry-After"
+        )
+
+        message = "HTTP 429 - za dużo zapytań"
+
+        if retry_after:
+            message += (
+                f" (Retry-After: {retry_after}s)"
+            )
+
+        raise AOTYRateLimit(message)
+
+    # Brak ratingu/review może skończyć się 404 albo redirectem.
+    if response.status_code == 404:
+        return None
+
+    response.raise_for_status()
+
+    final_url = response.url.casefold()
+    required_path = (
+        f"/user/{str(username).casefold()}/album/"
+    )
+
+    if (
+        required_path not in final_url
+        or str(album_id) not in final_url
+    ):
+        return None
+
+    return BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
+
+
+def get_user_rating_for_album(
+    username,
+    album_id,
+    album_url=None,
+    release_format=None,
+    fallback_limit=None
+):
+
+    # Ta funkcja CELOWO nie czyta data.json.
+    # /album ma za każdym użyciem sprawdzić aktualny stan AOTY.
+    username = str(username).strip()
+    album_id = str(album_id).strip()
+
+    if fallback_limit is None:
+        fallback_limit = ALBUM_LOOKUP_FALLBACK_LIMIT
+
+    # 1. Najpierw próbujemy bezpośredniej strony user + konkretne wydanie.
+    # To jest jeden request i działa również dla singli / reissue itd.
+    try:
+        soup = _fetch_user_release_page(
+            username,
+            album_id,
+            album_url
+        )
+
+        if soup is not None:
+            score = _extract_user_score_from_user_release_page(
+                soup,
+                username
+            )
+
+            if score is not None:
+                return {
+                    "score": str(score),
+                    "date": extract_date(soup),
+                    "source": "AOTY live",
+                }
+
+    except AOTYRateLimit:
+        raise
+    except requests.RequestException:
+        # Przechodzimy do fallbacku po filtrze formatu.
+        pass
+    except Exception:
+        pass
+
+    # 2. Fallback: szukamy na właściwej liście formatu.
+    format_key = _format_key_from_label(
+        release_format
+    )
+
+    if format_key:
+        ratings = get_ratings_for_format(
+            username,
+            format_key,
+            fallback_limit
+        )
+    else:
+        # Nieznany/stary format: używamy albumowego agregatu.
+        ratings = _get_ratings_from_route(
+            username,
+            slug=None,
+            limit=fallback_limit
+        )
 
     for item in ratings:
         if str(item.get("album_id")) == album_id:
             return {
                 "score": str(item.get("score", "")) or None,
                 "date": item.get("date"),
-                "source": "AOTY",
+                "source": "AOTY live",
             }
 
     return {
         "score": None,
         "date": None,
-        "source": None,
+        "source": "AOTY live",
+    }
+
+
+# ============================================================
+# PROFIL UŻYTKOWNIKA
+# ============================================================
+
+def _profile_count(page_text, label):
+
+    match = re.search(
+        rf"\b([\d,]+)\s+{re.escape(label)}\b",
+        page_text,
+        flags=re.IGNORECASE
+    )
+
+    if not match:
+        return None
+
+    return match.group(1)
+
+
+def _extract_profile_avatar(soup):
+
+    for image in soup.find_all("img"):
+        src = (
+            image.get("data-src")
+            or image.get("src")
+            or ""
+        )
+
+        if "/user/thumbs/" not in src:
+            continue
+
+        if src.endswith("/default.jpg"):
+            continue
+
+        if src.startswith("//"):
+            src = "https:" + src
+        elif src.startswith("/"):
+            src = urljoin(
+                BASE_URL,
+                src
+            )
+
+        return src
+
+    return None
+
+
+def _find_exact_text_marker(soup, wanted):
+
+    wanted = wanted.casefold()
+
+    for string in soup.find_all(string=True):
+        normalized = " ".join(
+            str(string).split()
+        ).casefold()
+
+        if normalized == wanted:
+            return string
+
+    return None
+
+
+def _extract_profile_favorites(soup, limit=5):
+
+    marker = _find_exact_text_marker(
+        soup,
+        "favorites"
+    )
+
+    if marker is None:
+        return []
+
+    favorite_kind = None
+
+    for string in marker.parent.find_all_next(
+        string=True,
+        limit=25
+    ):
+        text = " ".join(
+            str(string).split()
+        ).casefold()
+
+        if text == "albums":
+            favorite_kind = "albums"
+            break
+
+        if text == "artists":
+            favorite_kind = "artists"
+            break
+
+        if text.startswith("best of "):
+            break
+
+    favorites = []
+    seen = set()
+
+    for element in marker.parent.next_elements:
+
+        if getattr(element, "name", None) in {
+            "h2",
+            "h3"
+        }:
+            heading = " ".join(
+                element.get_text(
+                    " ",
+                    strip=True
+                ).split()
+            ).casefold()
+
+            if (
+                heading.startswith("best of ")
+                or heading == "recently rated"
+            ):
+                break
+
+        if getattr(element, "name", None) != "a":
+            continue
+
+        href = element.get("href", "")
+
+        if favorite_kind == "artists":
+
+            if "/artist/" not in href:
+                continue
+
+            name = element.get_text(
+                " ",
+                strip=True
+            )
+
+            if not name:
+                continue
+
+            url = urljoin(
+                BASE_URL,
+                href
+            )
+
+            key = ("artist", url)
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            favorites.append({
+                "type": "artist",
+                "name": name,
+                "artist": name,
+                "album": None,
+                "url": url,
+            })
+
+        else:
+
+            album_id = extract_album_id(href)
+
+            if not album_id:
+                continue
+
+            if ("album", album_id) in seen:
+                continue
+
+            title = element.get_text(
+                " ",
+                strip=True
+            )
+
+            if not title:
+                continue
+
+            container = _release_container_for_link(
+                element
+            )
+
+            artist_link = (
+                container.select_one(
+                    'a[href*="/artist/"]'
+                )
+                if container
+                else None
+            )
+
+            artist = (
+                artist_link.get_text(
+                    " ",
+                    strip=True
+                )
+                if artist_link
+                else None
+            )
+
+            seen.add(
+                ("album", album_id)
+            )
+
+            favorites.append({
+                "type": "album",
+                "name": title,
+                "artist": artist,
+                "album": title,
+                "url": urljoin(
+                    BASE_URL,
+                    href
+                ),
+            })
+
+        if len(favorites) >= limit:
+            break
+
+    return favorites
+
+
+def _extract_profile_recent_ratings(
+    soup,
+    limit=5
+):
+
+    marker = _find_exact_text_marker(
+        soup,
+        "recently rated"
+    )
+
+    if marker is None:
+        return []
+
+    items = []
+    seen = set()
+
+    for element in marker.parent.next_elements:
+
+        if (
+            getattr(element, "name", None)
+            in {"h2", "h3"}
+            and element is not marker.parent
+        ):
+            heading = " ".join(
+                element.get_text(
+                    " ",
+                    strip=True
+                ).split()
+            ).casefold()
+
+            if heading != "recently rated":
+                break
+
+        if getattr(element, "name", None) != "a":
+            continue
+
+        album_id = extract_album_id(
+            element.get("href", "")
+        )
+
+        if not album_id or album_id in seen:
+            continue
+
+        container = _release_container_for_link(
+            element
+        )
+
+        item = parse_album_block(
+            container
+        )
+
+        if not item:
+            continue
+
+        seen.add(album_id)
+        items.append(item)
+
+        if len(items) >= limit:
+            break
+
+    return items
+
+
+def _extract_profile_average(soup):
+
+    marker = _find_exact_text_marker(
+        soup,
+        "rating distribution"
+    )
+
+    if marker is None:
+        return None
+
+    midpoint_map = {
+        "100": 100.0,
+        "90-99": 94.5,
+        "80-89": 84.5,
+        "70-79": 74.5,
+        "60-69": 64.5,
+        "50-59": 54.5,
+        "40-49": 44.5,
+        "30-39": 34.5,
+        "20-29": 24.5,
+        "10-19": 14.5,
+        "0-9": 4.5,
+    }
+
+    found = {}
+
+    # Najpierw próbujemy tabel.
+    for row in marker.parent.find_all_next(
+        "tr",
+        limit=30
+    ):
+        cells = [
+            " ".join(
+                cell.get_text(
+                    " ",
+                    strip=True
+                ).split()
+            )
+            for cell in row.find_all(
+                ["th", "td"]
+            )
+        ]
+
+        if not cells:
+            continue
+
+        row_text = " ".join(cells)
+        compact = re.sub(
+            r"\s+",
+            "",
+            row_text
+        )
+
+        label_match = re.search(
+            r"(100|90-99|80-89|70-79|60-69|50-59|40-49|30-39|20-29|10-19|0-9)",
+            compact
+        )
+
+        if not label_match:
+            continue
+
+        label = label_match.group(1)
+
+        # Liczba po etykiecie zakresu.
+        after = compact[
+            label_match.end():
+        ]
+
+        count_match = re.search(
+            r"([\d,]+)",
+            after
+        )
+
+        if count_match:
+            found[label] = int(
+                count_match.group(1).replace(
+                    ",",
+                    ""
+                )
+            )
+
+        if len(found) >= 11:
+            break
+
+    if not found:
+        # Fallback dla wariantu AOTY, w którym dystrybucja jest zrobiona
+        # z divów zamiast klasycznej tabeli.
+        texts = []
+        checked = 0
+
+        for element in marker.parent.next_elements:
+            if isinstance(element, str):
+                value = " ".join(
+                    str(element).split()
+                )
+
+                if value:
+                    texts.append(value)
+
+            checked += 1
+
+            if checked >= 350:
+                break
+
+        distribution_text = " ".join(
+            texts
+        )
+
+        for label in midpoint_map:
+            match = re.search(
+                rf"(?<!\\d){re.escape(label)}\\s+([\\d,]+)",
+                distribution_text
+            )
+
+            if match:
+                found[label] = int(
+                    match.group(1).replace(
+                        ",",
+                        ""
+                    )
+                )
+
+    if not found:
+        return None
+
+    total_count = sum(
+        found.values()
+    )
+
+    if total_count <= 0:
+        return None
+
+    weighted = sum(
+        midpoint_map[label] * count
+        for label, count in found.items()
+    )
+
+    return weighted / total_count
+
+
+def get_profile_data(username):
+
+    username = str(username).strip()
+    url = f"{BASE_URL}/user/{username}/"
+
+    html = fetch_page(url)
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    title = (
+        soup.title.get_text(
+            " ",
+            strip=True
+        )
+        if soup.title
+        else ""
+    )
+
+    if (
+        " - profile - album of the year"
+        not in title.casefold()
+    ):
+        raise AOTYUserNotFound()
+
+    heading = soup.find("h1")
+
+    display_username = (
+        heading.get_text(
+            " ",
+            strip=True
+        )
+        if heading
+        else username
+    )
+
+    page_text = " ".join(
+        soup.get_text(
+            " ",
+            strip=True
+        ).split()
+    )
+
+    average_rating = _extract_profile_average(
+        soup
+    )
+
+    return {
+        "username": display_username,
+        "url": url,
+        "avatar": _extract_profile_avatar(soup),
+        "ratings_count": _profile_count(
+            page_text,
+            "Ratings"
+        ),
+        "reviews_count": _profile_count(
+            page_text,
+            "Reviews"
+        ),
+        "lists_count": _profile_count(
+            page_text,
+            "Lists"
+        ),
+        "following_count": _profile_count(
+            page_text,
+            "Following"
+        ),
+        "followers_count": _profile_count(
+            page_text,
+            "Followers"
+        ),
+        # AOTY pokazuje Rating Distribution w przedziałach, więc ta
+        # wartość jest świadomie przybliżeniem ze środków przedziałów.
+        "average_rating": average_rating,
+        "average_rating_text": (
+            f"~{average_rating:.1f}"
+            if average_rating is not None
+            else None
+        ),
+        "favorites": _extract_profile_favorites(
+            soup,
+            limit=5
+        ),
+        "recent_ratings": _extract_profile_recent_ratings(
+            soup,
+            limit=5
+        ),
     }
 
 
@@ -3029,7 +4154,8 @@ async def check_user(
         users_data[
             username
         ] = {
-            "ratings": {}
+            "ratings": {},
+            "format_monitor_version": 1
         }
 
         known = (
@@ -3061,7 +4187,11 @@ async def check_user(
 
                 "album": item[
                     "album"
-                ]
+                ],
+
+                "release_format": item.get(
+                    "release_format"
+                )
             }
 
 
@@ -3072,6 +4202,48 @@ async def check_user(
             f"[AOTY] {username}: "
             "pierwsze uruchomienie — "
             "zapamiętuję aktualny stan."
+        )
+
+        return
+
+
+    # Pierwszy start po włączeniu monitorowania formatów.
+    # Seedujemy aktualnie pobrane pozycje, żeby stare single/reissue itd.
+    # nie zostały wysłane jako "nowe" tylko dlatego, że wcześniej bot
+    # ich nie monitorował.
+    if (
+        users_data[username].get(
+            "format_monitor_version"
+        )
+        != 1
+    ):
+        known = users_data[
+            username
+        ].setdefault(
+            "ratings",
+            {}
+        )
+
+        for item in ratings:
+            known[item["album_id"]] = {
+                "score": item["score"],
+                "date": item["date"],
+                "artist": item["artist"],
+                "album": item["album"],
+                "release_format": item.get(
+                    "release_format"
+                ),
+            }
+
+        users_data[username][
+            "format_monitor_version"
+        ] = 1
+
+        save_state()
+
+        print(
+            f"[AOTY] {username}: migracja formatów — "
+            "zapamiętuję aktualny stan bez wysyłania starych ocen."
         )
 
         return
@@ -3204,7 +4376,11 @@ async def check_user(
 
                 "album": item[
                     "album"
-                ]
+                ],
+
+                "release_format": item.get(
+                    "release_format"
+                )
             }
 
 
@@ -3269,7 +4445,11 @@ async def check_user(
 
                 "album": item[
                     "album"
-                ]
+                ],
+
+                "release_format": item.get(
+                    "release_format"
+                )
             }
 
 
@@ -3336,6 +4516,14 @@ async def check_user(
             ] = item[
                 "album"
             ]
+
+            known[
+                album_id
+            ][
+                "release_format"
+            ] = item.get(
+                "release_format"
+            )
 
 
     save_state()
@@ -3409,7 +4597,7 @@ monitor_task = None
 
 setup_last_command(
     tree=tree,
-    get_ratings=get_ratings,
+    get_ratings=get_recent_ratings,
     get_user_avatar=get_user_avatar,
     get_album_details=get_album_details,
     aoty_user_exists=aoty_user_exists,
@@ -3420,7 +4608,7 @@ setup_last_command(
 
 setup_recent_command(
     tree=tree,
-    get_ratings=get_ratings,
+    get_ratings=get_recent_ratings,
     get_user_avatar=get_user_avatar,
     get_album_details=get_album_details,
     aoty_user_exists=aoty_user_exists,
@@ -3431,6 +4619,7 @@ setup_recent_command(
 
 setup_artist_command(
     tree=tree,
+    rating_formats=RATING_FORMATS,
     search_aoty_artists=search_aoty_artists,
     resolve_artist=resolve_artist,
     get_artist_releases=get_artist_releases,
@@ -3448,6 +4637,15 @@ setup_album_command(
     resolve_album_for_artist=resolve_album_for_artist,
     get_album_details=get_album_details,
     get_user_rating_for_album=get_user_rating_for_album,
+    score_color=score_color,
+    score_icon=score_icon,
+    AOTYRateLimit=AOTYRateLimit,
+)
+
+setup_profile_command(
+    tree=tree,
+    get_profile_data=get_profile_data,
+    aoty_user_exists=aoty_user_exists,
     score_color=score_color,
     score_icon=score_icon,
     AOTYRateLimit=AOTYRateLimit,

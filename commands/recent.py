@@ -1,4 +1,5 @@
 import asyncio
+
 import discord
 import requests
 
@@ -34,12 +35,16 @@ def _rating_embed(
         other_genres_text = "Brak danych"
         all_genres_text = "Brak danych"
 
-    # Zmienne szczegółów zostają dostępne tutaj tak samo jak w /last.
+    # Te same zmienne szczegółów co w /last.
     user_score = details.get("user_score") or "Brak danych"
     aoty_user_score = user_score
     ratings_count = details.get("ratings_count") or "Brak danych"
     release_date = details.get("release_date") or "Brak danych"
-    album_format = details.get("album_format") or "Brak danych"
+    album_format = (
+        details.get("album_format")
+        or item.get("release_format")
+        or "Brak danych"
+    )
     label = details.get("label") or "Brak danych"
     labels = details.get("labels") or []
     labels_text = details.get("labels_text") or "Brak danych"
@@ -67,6 +72,18 @@ def _rating_embed(
         inline=True,
     )
 
+    embed.add_field(
+        name=f"👥 **{aoty_user_score}**/{ratings_count}",
+        value=" ",
+        inline=True,
+    )
+
+    embed.add_field(
+        name=f"📅 **{year_ranking_text}**",
+        value=" ",
+        inline=True,
+    )
+
     if avatar:
         embed.set_author(
             name=username,
@@ -83,11 +100,7 @@ def _rating_embed(
         embed.set_thumbnail(url=cover)
 
     embed.set_footer(
-        text=f"•  {date}",
-        icon_url=(
-            "https://encrypted-tbn0.gstatic.com/images?"
-            "q=tbn:ANd9GcSiJt1MSjldtmrIaTGoE2r3CgsaPB8l1UneW-j9w103bSS5ft45C-OLTCg&s=10"
-        ),
+        text=f"•  {date}  •  {album_format}",
     )
 
     return embed
@@ -105,14 +118,16 @@ def setup_recent_command(
 ):
     @tree.command(
         name="recent",
-        description="Pokazuje 5 ostatnich ocen użytkownika AOTY",
+        description="Pokazuje ostatnie oceny użytkownika AOTY",
     )
     @discord.app_commands.describe(
         username="Nazwa użytkownika na AOTY",
+        amount="Ile ostatnich ocen pokazać (1-20)",
     )
     async def recent(
         interaction: discord.Interaction,
         username: str,
+        amount: discord.app_commands.Range[int, 1, 20] = 5,
     ):
         await interaction.response.defer()
         username = username.strip()
@@ -132,6 +147,7 @@ def setup_recent_command(
             ratings = await asyncio.to_thread(
                 get_ratings,
                 username,
+                int(amount),
             )
 
         except AOTYRateLimit:
@@ -168,7 +184,7 @@ def setup_recent_command(
         except Exception:
             pass
 
-        recent_ratings = ratings[:5]
+        recent_ratings = ratings[:int(amount)]
         embeds = []
 
         for item in recent_ratings:
@@ -180,10 +196,9 @@ def setup_recent_command(
                     item["url"],
                 )
             except AOTYRateLimit:
-                await interaction.followup.send(
-                    "⚠️ AOTY chwilowo ogranicza liczbę zapytań."
-                )
-                return
+                # Nie przerywamy całego /recent tylko dlatego, że AOTY
+                # zablokowało dodatkowy request po szczegóły.
+                details = {}
             except Exception:
                 details = {}
 
@@ -198,6 +213,12 @@ def setup_recent_command(
                 )
             )
 
-        await interaction.followup.send(
-            embeds=embeds,
-        )
+            # Lekki odstęp przy większej liczbie pozycji.
+            await asyncio.sleep(0.12)
+
+        # Discord przyjmuje maksymalnie 10 embedów w jednej wiadomości.
+        # Dla 11-20 pozycji wysyłamy więc drugą wiadomość.
+        for start in range(0, len(embeds), 10):
+            await interaction.followup.send(
+                embeds=embeds[start:start + 10],
+            )
