@@ -11,16 +11,16 @@
         "enso",
         "kulkien"
     ],
-    "check_interval": 1800,
+    "check_interval": 1200,
 
     "rating_fetch_limits": {
         "lp": 500,
         "ep": 300,
         "mixtape": 50,
-        "single": 100,
+        "single": 50,
         "compilation": 20,
         "live": 20,
-        "reissue": 100,
+        "reissue": 30,
         "soundtrack": 20,
         "holiday": 0,
         "dj_mix": 0,
