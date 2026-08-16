@@ -26,6 +26,7 @@ from commands.profile import setup_profile_command
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+AOTY_ICON = os.path.join(BASE_DIR, "assets", "aoty.jpg")
 
 # Lokalnie bot dalej używa data.json obok bot.py.
 # Na hostingu można ustawić DATA_DIR (np. /app/data na Railway),

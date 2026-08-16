@@ -46,7 +46,7 @@ def setup_profile_command(
 ):
     @tree.command(
         name="profile",
-        description="Pokazuje kompaktowy profil użytkownika AOTY",
+        description="Pokazuje profil użytkownika AOTY",
     )
     @discord.app_commands.describe(
         username="Nazwa użytkownika na AOTY",
@@ -129,14 +129,27 @@ def setup_profile_command(
                 round(average_rating)
             )
 
+        file = discord.File(AOTY_ICON, filename="aoty.png")
+        
         embed = discord.Embed(
             title=display_username,
             url=profile_url,
             description=(
                 f"**{ratings_count}** ocen  •  "
-                f"średnia albumów **{average_rating_text}**"
+                f"x̄ **{average_rating_text}**"
             ),
             color=embed_color,
+        )
+
+        embed.add_field(
+            name=" ",
+            value=(
+                f"Reviews **{reviews_count}**  •  "
+                f"Lists **{lists_count}**\n"
+                f"Following **{following_count}**  •  "
+                f"Followers **{followers_count}**"
+            ),
+            inline=False,
         )
 
         if avatar:
@@ -165,17 +178,6 @@ def setup_profile_command(
         )
 
         embed.add_field(
-            name="Statystyki",
-            value=(
-                f"Reviews **{reviews_count}**  •  "
-                f"Lists **{lists_count}**\n"
-                f"Following **{following_count}**  •  "
-                f"Followers **{followers_count}**"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
             name="Ostatnie 5 ocen",
             value=(
                 "\n".join(recent_lines)
@@ -187,8 +189,10 @@ def setup_profile_command(
 
         embed.set_footer(
             text="AOTY.org • średnia jest przybliżona z Rating Distribution",
+            icon_url="attachment://aoty.jpg"
         )
 
         await interaction.followup.send(
             embed=embed,
+            file=file
         )
