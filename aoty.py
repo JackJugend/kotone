@@ -2498,15 +2498,27 @@ def _merge_partial_track_ratings(
     album_tracklist: list[dict],
     user_track_ratings: list[dict],
 ) -> list[dict]:
-    """Overlay partial user scores on the complete release tracklist.
+    """Overlay user scores on the complete release tracklist safely.
 
-    A user may rate only one song.  AOTY's compact Track Ratings layout can
-    also omit the visible track number.  We therefore match by:
-      1. normalized title when available;
-      2. track number as a fallback.
+    AOTY sometimes exposes nested DOM containers whose flattened text looks
+    like another track row. Example of the bad parse seen in Discord:
 
-    Every public-tracklist item remains present.  Missing user scores are
-    returned as score=None and rendered by Discord as NR.
+        100 | 2 Pitch the Baby / 100
+
+    even though the real row is simply track 2, "Pitch the Baby", score 100.
+
+    This function canonicalizes every parsed rating against the PUBLIC album
+    tracklist before rendering. One public track can therefore appear only
+    once in the final result.
+
+    Matching priority:
+      1. exact normalized track title;
+      2. a title accidentally prefixed with its track number
+         ("2 Pitch the Baby" -> track 2 "Pitch the Baby");
+      3. a valid parsed track number.
+
+    Unrated public tracks remain score=None -> NR.
+    Truly unmatched hidden/bonus tracks can still be appended.
     """
     album_tracklist = list(
         album_tracklist
@@ -2521,52 +2533,22 @@ def _merge_partial_track_ratings(
     if not album_tracklist:
         return user_track_ratings
 
-    by_number: dict[int, dict] = {}
-    by_title: dict[str, dict] = {}
+    # ------------------------------------------------------------------
+    # Canonical public-track indexes.
+    # ------------------------------------------------------------------
+    public_by_number: dict[int, dict] = {}
+    public_by_title: dict[str, dict] = {}
 
-    for rating in user_track_ratings:
-        title_key = _track_title_key(
-            rating.get("title")
-        )
-
-        if title_key:
-            by_title[
-                title_key
-            ] = rating
-
-        number = rating.get(
-            "number"
-        )
-
-        try:
-            number = (
-                int(number)
-                if number is not None
-                else None
-            )
-        except (TypeError, ValueError):
-            number = None
-
-        if number is not None:
-            by_number[
-                number
-            ] = rating
-
-    merged = []
-    used_rating_ids = set()
+    canonical_tracks = []
 
     for fallback_index, track in enumerate(
         album_tracklist,
         start=1,
     ):
-        number = track.get(
-            "number"
-        )
+        number = track.get("number")
 
         try:
-            number = int(
-                number
-            )
+            number = int(number)
         except (TypeError, ValueError):
             number = fallback_index
 
@@ -2575,32 +2557,192 @@ def _merge_partial_track_ratings(
             or f"Track {number}"
         )
 
+        canonical = dict(track)
+        canonical["number"] = number
+        canonical["title"] = title
+
+        canonical_tracks.append(
+            canonical
+        )
+
+        public_by_number[
+            number
+        ] = canonical
+
         title_key = _track_title_key(
             title
         )
 
-        # Title first: it is the safest route for the compact AOTY layout.
-        rating = (
-            by_title.get(
+        if title_key:
+            public_by_title[
                 title_key
-            )
-            if title_key
-            else None
+            ] = canonical
+
+    # ------------------------------------------------------------------
+    # Resolve every parsed user rating to at most ONE public track.
+    # ------------------------------------------------------------------
+    resolved_by_number: dict[int, dict] = {}
+    unresolved: list[dict] = []
+
+    for rating in user_track_ratings:
+        raw_title = " ".join(
+            str(
+                rating.get("title")
+                or ""
+            ).split()
+        ).strip()
+
+        raw_title_key = _track_title_key(
+            raw_title
         )
 
-        if rating is None:
-            rating = by_number.get(
-                number
+        parsed_number = rating.get(
+            "number"
+        )
+
+        try:
+            parsed_number = (
+                int(parsed_number)
+                if parsed_number is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            parsed_number = None
+
+        target = None
+        confidence = 0
+
+        # --------------------------------------------------------------
+        # 1. Exact title.
+        # --------------------------------------------------------------
+        if raw_title_key:
+            target = public_by_title.get(
+                raw_title_key
             )
 
-        if rating is not None:
-            used_rating_ids.add(
-                id(rating)
+            if target is not None:
+                confidence = 30
+
+                if (
+                    parsed_number is not None
+                    and parsed_number == target["number"]
+                ):
+                    confidence = 40
+
+        # --------------------------------------------------------------
+        # 2. Nested-container artefact:
+        #
+        #    parsed number: 100
+        #    parsed title : "2 Pitch the Baby"
+        #
+        # Strip the leading number ONLY when the remainder exactly matches
+        # the corresponding public track. This avoids breaking legitimate
+        # titles that genuinely start with a number.
+        # --------------------------------------------------------------
+        if target is None and raw_title:
+            prefix_match = re.match(
+                r"^\s*(\d{1,3})"
+                r"(?:[.|:)\-–—|]|\s)+"
+                r"(.+?)\s*$",
+                raw_title,
             )
+
+            if prefix_match:
+                prefix_number = int(
+                    prefix_match.group(1)
+                )
+
+                stripped_title = (
+                    prefix_match.group(2)
+                    .strip()
+                )
+
+                public_track = public_by_number.get(
+                    prefix_number
+                )
+
+                if (
+                    public_track is not None
+                    and _track_title_key(
+                        stripped_title
+                    )
+                    == _track_title_key(
+                        public_track.get("title")
+                    )
+                ):
+                    target = public_track
+                    confidence = 35
+
+        # --------------------------------------------------------------
+        # 3. Parsed number fallback.
+        # --------------------------------------------------------------
+        if (
+            target is None
+            and parsed_number is not None
+        ):
+            target = public_by_number.get(
+                parsed_number
+            )
+
+            if target is not None:
+                confidence = 20
+
+        if target is None:
+            unresolved.append(
+                rating
+            )
+            continue
+
+        target_number = target[
+            "number"
+        ]
+
+        candidate = {
+            "number": target_number,
+            "title": target.get(
+                "title"
+            ),
+            "score": rating.get(
+                "score"
+            ),
+            "_confidence": confidence,
+        }
+
+        existing = resolved_by_number.get(
+            target_number
+        )
+
+        if (
+            existing is None
+            or candidate["_confidence"]
+            > existing.get(
+                "_confidence",
+                0,
+            )
+        ):
+            resolved_by_number[
+                target_number
+            ] = candidate
+
+    # ------------------------------------------------------------------
+    # Render exactly one row for each public track.
+    # ------------------------------------------------------------------
+    merged = []
+
+    for track in canonical_tracks:
+        number = track[
+            "number"
+        ]
+
+        rating = resolved_by_number.get(
+            number
+        )
 
         merged.append({
             "number": number,
-            "title": title,
+            "title": track.get(
+                "title"
+            ),
             "score": (
                 rating.get("score")
                 if rating
@@ -2617,20 +2759,83 @@ def _merge_partial_track_ratings(
             ),
         })
 
-    # Preserve a rated hidden/bonus track that is genuinely absent from the
-    # public tracklist.
-    for rating in user_track_ratings:
-        if id(rating) in used_rating_ids:
+    # ------------------------------------------------------------------
+    # Preserve only genuinely unmatched hidden/bonus tracks.
+    #
+    # Before appending, one final guard removes malformed duplicates whose
+    # title becomes a public title after stripping a leading track number.
+    # ------------------------------------------------------------------
+    seen_extra_keys = set()
+
+    for rating in unresolved:
+        title = " ".join(
+            str(
+                rating.get("title")
+                or ""
+            ).split()
+        ).strip()
+
+        if not title:
             continue
+
+        title_key = _track_title_key(
+            title
+        )
+
+        if title_key in public_by_title:
+            continue
+
+        prefix_match = re.match(
+            r"^\s*(\d{1,3})"
+            r"(?:[.|:)\-–—|]|\s)+"
+            r"(.+?)\s*$",
+            title,
+        )
+
+        if prefix_match:
+            prefix_number = int(
+                prefix_match.group(1)
+            )
+
+            stripped_title = (
+                prefix_match.group(2)
+                .strip()
+            )
+
+            public_track = public_by_number.get(
+                prefix_number
+            )
+
+            if (
+                public_track is not None
+                and _track_title_key(
+                    stripped_title
+                )
+                == _track_title_key(
+                    public_track.get("title")
+                )
+            ):
+                # This is the exact duplicate artefact from a parent
+                # container. Never append it as a bonus track.
+                continue
+
+        extra_key = (
+            rating.get("number"),
+            title_key,
+        )
+
+        if extra_key in seen_extra_keys:
+            continue
+
+        seen_extra_keys.add(
+            extra_key
+        )
 
         merged.append({
             "number": rating.get(
                 "number"
             ),
-            "title": (
-                rating.get("title")
-                or "Nieznany utwór"
-            ),
+            "title": title,
             "score": rating.get(
                 "score"
             ),
