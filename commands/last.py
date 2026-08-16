@@ -114,6 +114,9 @@ def setup_last_command(
                     other_genres = ", ".join(genres[1:])
                     other_genres_text = other_genres
 
+            if other_genres_text != " ":
+                main_genre = ", ".join()
+
         except Exception:
             pass
 
@@ -125,8 +128,8 @@ def setup_last_command(
         )
 
         embed.add_field(
-                name=f"**{main_genre}**, {other_genres_text}",
-                value=f" ",
+                name=" ",
+                value=f"**{main_genre}**, {other_genres_text}",
                 inline=False
         )
 
