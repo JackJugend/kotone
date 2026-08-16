@@ -92,10 +92,10 @@ def setup_last_command(
         # Dodatkowe dane albumu do użycia w embedzie.
         year = ""
         genres = []
-        genres_text = ""
-        main_genre = ""
-        other_genres = ""
-        other_genres_text = ""
+        genres_text = " "
+        main_genre = "-"
+        other_genres = " "
+        other_genres_text = " "
 
         try:
             details = await asyncio.to_thread(
@@ -103,9 +103,9 @@ def setup_last_command(
                 url
             )
 
-            year = details.get("year") or "Brak danych"
+            year = details.get("year") or " "
             genres = details.get("genres") or []
-            genres_text = details.get("genres_text") or "Brak danych"
+            genres_text = details.get("genres_text") or "-"
 
             if genres:
                 main_genre = genres[0]
@@ -125,8 +125,8 @@ def setup_last_command(
         )
 
         embed.add_field(
-                name=f"**{main_genre}**",
-                value=f"{other_genres_text}",
+                name=f"**{main_genre}**, {other_genres_text}",
+                value=f" ",
                 inline=False
         )
 
