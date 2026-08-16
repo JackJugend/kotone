@@ -90,8 +90,57 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             missing="?",
         )
 
+        # /last already knows exactly which rating was selected, so fetch its
+        # user-specific detail NOW and give it to the View. This removes the
+        # old inconsistency where the main embed worked but Track ratings had
+        # to search for the same release again after the button was clicked.
+        live_extra = None
+
         try:
-            avatar = await asyncio.to_thread(aoty.get_user_avatar, username)
+            live_extra = await asyncio.to_thread(
+                aoty.get_user_rating_for_album,
+                username,
+                latest.get("album_id"),
+                latest.get("url"),
+                latest.get("release_format"),
+                10,
+                latest.get("review_url"),
+                latest.get("album"),
+            )
+
+            # Preserve the exact user-release URL discovered live.
+            if live_extra.get("review_url"):
+                latest["review_url"] = live_extra.get(
+                    "review_url"
+                )
+
+            if live_extra.get("has_review"):
+                latest["has_review"] = True
+
+            if live_extra.get("has_track_ratings"):
+                latest["has_track_ratings"] = True
+
+            if live_extra.get("liked"):
+                latest["liked"] = True
+
+        except aoty.AOTYRateLimit:
+            # Main /last should still render. The View will retry if the user
+            # presses a detail button later.
+            live_extra = None
+
+        except Exception as exc:
+            print(
+                f"[LAST] Nie udało się wstępnie pobrać szczegółów "
+                f"{username} / {latest.get('album_id')}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            live_extra = None
+
+        try:
+            avatar = await asyncio.to_thread(
+                aoty.get_user_avatar,
+                username,
+            )
         except Exception:
             avatar = None
 
@@ -162,6 +211,16 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             username=username,
             item=latest,
             main_embed=embed,
+            extra=(
+                live_extra
+                if (
+                    live_extra
+                    and not live_extra.get(
+                        "detail_incomplete"
+                    )
+                )
+                else None
+            ),
         )
 
         message = await interaction.followup.send(

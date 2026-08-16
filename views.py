@@ -169,7 +169,7 @@ class RatingDetailsMixin:
         extra = await _load_live_extra(
             self.username,
             self.item,
-            fallback_limit=60,
+            fallback_limit=10,
         )
 
         # Do not cache a temporary 429 response; the user may retry later.
