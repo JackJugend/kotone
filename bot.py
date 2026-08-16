@@ -3,16 +3,21 @@ import json
 import os
 import re
 import shutil
+import difflib
+import unicodedata
 
 
 from datetime import datetime, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote_plus, urlparse
 
 import discord
 import requests
 from bs4 import BeautifulSoup
 
 from commands.last import setup_last_command
+from commands.recent import setup_recent_command
+from commands.artist import setup_artist_command
+from commands.album import setup_album_command
 
 # ============================================================
 # KONFIGURACJA
@@ -269,6 +274,589 @@ def aoty_user_exists(username):
         in title.casefold()
     )
 
+# ============================================================
+# WYSZUKIWANIE ARTYSTÓW / WYDAŃ
+# ============================================================
+
+def normalize_match_text(text):
+
+    if not text:
+        return ""
+
+    text = unicodedata.normalize(
+        "NFKD",
+        str(text)
+    )
+
+    text = "".join(
+        char
+        for char in text
+        if not unicodedata.combining(char)
+    )
+
+    text = text.casefold()
+    text = text.replace("&", " and ")
+
+    return " ".join(
+        re.sub(
+            r"[^a-z0-9]+",
+            " ",
+            text
+        ).split()
+    )
+
+
+def fuzzy_match_score(query, candidate):
+
+    query_normalized = normalize_match_text(query)
+    candidate_normalized = normalize_match_text(candidate)
+
+    if not query_normalized or not candidate_normalized:
+        return 0.0
+
+    if query_normalized == candidate_normalized:
+        return 1.0
+
+    if query_normalized in candidate_normalized:
+        length_ratio = len(query_normalized) / max(
+            len(candidate_normalized),
+            1
+        )
+        return 0.90 + min(0.08, length_ratio * 0.08)
+
+    query_tokens = set(query_normalized.split())
+    candidate_tokens = set(candidate_normalized.split())
+
+    token_score = 0.0
+
+    if query_tokens and candidate_tokens:
+        token_score = (
+            len(query_tokens & candidate_tokens)
+            / len(query_tokens | candidate_tokens)
+        )
+
+    sequence_score = difflib.SequenceMatcher(
+        None,
+        query_normalized,
+        candidate_normalized
+    ).ratio()
+
+    return max(
+        sequence_score,
+        token_score * 0.95
+    )
+
+
+def _artist_direct_value_to_url(value):
+
+    prefix = "aoty_artist:"
+
+    if not value.startswith(prefix):
+        return None
+
+    path_part = value[len(prefix):].strip("/ ")
+
+    if not re.fullmatch(
+        r"\d+(?:-[^/?#]+)?",
+        path_part
+    ):
+        return None
+
+    return f"{BASE_URL}/artist/{path_part}/"
+
+
+def search_aoty_artists(query, limit=10):
+
+    query = str(query or "").strip()
+
+    if not query:
+        return []
+
+    direct_url = _artist_direct_value_to_url(query)
+
+    if direct_url:
+        try:
+            html = fetch_page(direct_url)
+            soup = BeautifulSoup(html, "html.parser")
+            heading = soup.find("h1")
+            name = (
+                heading.get_text(" ", strip=True)
+                if heading
+                else query
+            )
+
+            return [{
+                "name": name,
+                "url": direct_url,
+                "value": (
+                    "aoty_artist:"
+                    + direct_url.split("/artist/", 1)[1].strip("/")
+                ),
+                "score": 1.0,
+            }]
+
+        except Exception:
+            return []
+
+    search_url = (
+        f"{BASE_URL}/search/artists/"
+        f"?q={quote_plus(query)}"
+    )
+
+    html = fetch_page(search_url)
+    soup = BeautifulSoup(html, "html.parser")
+
+    candidates = {}
+
+    # Jeżeli wyszukiwarka skieruje nas od razu na profil,
+    # canonical pozwala nadal odzyskać właściwy URL artysty.
+    canonical = soup.find(
+        "link",
+        rel=lambda value: value and "canonical" in str(value).casefold()
+    )
+
+    if canonical:
+        canonical_url = canonical.get("href", "")
+
+        if "/artist/" in canonical_url:
+            heading = soup.find("h1")
+            name = (
+                heading.get_text(" ", strip=True)
+                if heading
+                else query
+            )
+            candidates[canonical_url] = name
+
+    for link in soup.select('a[href*="/artist/"]'):
+
+        href = link.get("href", "")
+        match = re.search(
+            r"/artist/(\d+(?:-[^/?#]+)?)/?",
+            href
+        )
+
+        if not match:
+            continue
+
+        name = link.get_text(
+            " ",
+            strip=True
+        )
+
+        if not name:
+            continue
+
+        artist_path = match.group(1)
+        artist_url = f"{BASE_URL}/artist/{artist_path}/"
+
+        # Nawigacja strony również może zawierać /artist/.
+        # Odrzucamy oczywiste etykiety interfejsu.
+        if name.casefold() in {
+            "artists",
+            "highest rated",
+            "random",
+            "similar artists",
+            "related artists",
+        }:
+            continue
+
+        candidates.setdefault(
+            artist_url,
+            name
+        )
+
+    ranked = []
+
+    for artist_url, name in candidates.items():
+        score = fuzzy_match_score(
+            query,
+            name
+        )
+
+        ranked.append({
+            "name": name,
+            "url": artist_url,
+            "value": (
+                "aoty_artist:"
+                + artist_url.split("/artist/", 1)[1].strip("/")
+            ),
+            "score": score,
+        })
+
+    ranked.sort(
+        key=lambda item: item["score"],
+        reverse=True
+    )
+
+    return ranked[:max(1, int(limit))]
+
+
+def resolve_artist(query):
+
+    query = str(query or "").strip()
+
+    direct_url = _artist_direct_value_to_url(query)
+
+    if direct_url:
+        html = fetch_page(direct_url)
+        soup = BeautifulSoup(html, "html.parser")
+        heading = soup.find("h1")
+
+        if not heading:
+            return None
+
+        name = heading.get_text(
+            " ",
+            strip=True
+        )
+
+        return {
+            "name": name,
+            "url": direct_url,
+            "value": query,
+            "score": 1.0,
+        }
+
+    candidates = search_aoty_artists(
+        query,
+        limit=8
+    )
+
+    if not candidates:
+        return None
+
+    best = candidates[0]
+
+    # Wyszukiwarka AOTY sama zwraca wyniki relewantne,
+    # ale nie przyjmujemy zupełnie przypadkowego pierwszego linku.
+    if (
+        best["score"] < 0.28
+        and normalize_match_text(query)
+        not in normalize_match_text(best["name"])
+    ):
+        return None
+
+    return best
+
+
+def _release_container_for_link(link):
+
+    album_match = re.search(
+        r"/album/(\d+)",
+        link.get("href", "")
+    )
+
+    if not album_match:
+        return link.parent
+
+    album_id = album_match.group(1)
+    node = link
+    best = link.parent
+
+    for _ in range(9):
+        node = node.parent
+
+        if not node:
+            break
+
+        found_ids = set()
+
+        for album_link in node.select(
+            'a[href*="/album/"]'
+        ):
+            found = re.search(
+                r"/album/(\d+)",
+                album_link.get("href", "")
+            )
+
+            if found:
+                found_ids.add(found.group(1))
+
+        if len(found_ids) > 1:
+            break
+
+        if album_id in found_ids:
+            best = node
+
+    return best
+
+
+def _extract_release_format(text):
+
+    if not text:
+        return None
+
+    known_formats = [
+        "Mixtape",
+        "Compilation",
+        "Soundtrack",
+        "Reissue",
+        "Remix",
+        "Live",
+        "Bootleg",
+        "DJ Mix",
+        "Demo",
+        "Single",
+        "EP",
+        "LP",
+    ]
+
+    for release_format in known_formats:
+        if re.search(
+            rf"\b{re.escape(release_format)}\b",
+            text,
+            flags=re.IGNORECASE
+        ):
+            return release_format
+
+    return None
+
+
+def _extract_release_cover(container):
+
+    if not container:
+        return None
+
+    image = container.select_one("img")
+
+    if not image:
+        return None
+
+    cover = (
+        image.get("data-src")
+        or image.get("data-lazy-src")
+        or image.get("src")
+    )
+
+    if not cover:
+        return None
+
+    if cover.startswith("//"):
+        return "https:" + cover
+
+    if cover.startswith("/"):
+        return urljoin(
+            BASE_URL,
+            cover
+        )
+
+    return cover
+
+
+def get_artist_releases(artist_url):
+
+    artist_base_url = str(artist_url).split("?", 1)[0].rstrip("/") + "/"
+    page_url = artist_base_url + "?type=all"
+
+    html = fetch_page(page_url)
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    heading = soup.find("h1")
+    artist_name = (
+        heading.get_text(" ", strip=True)
+        if heading
+        else "Nieznany artysta"
+    )
+
+    artist_image = None
+
+    # Na profilu artysty główne zdjęcie jest zwykle pierwszym sensownym
+    # obrazem po H1. Meta og:image jest stabilniejszym fallbackiem.
+    og_image = soup.find(
+        "meta",
+        attrs={"property": "og:image"}
+    )
+
+    if og_image:
+        artist_image = og_image.get("content")
+
+    releases = []
+    seen_ids = set()
+
+    for link in soup.select('a[href*="/album/"]'):
+
+        href = link.get("href", "")
+        album_match = re.search(
+            r"/album/(\d+)",
+            href
+        )
+
+        if not album_match:
+            continue
+
+        album_id = album_match.group(1)
+
+        if album_id in seen_ids:
+            continue
+
+        title = link.get_text(
+            " ",
+            strip=True
+        )
+
+        if not title:
+            continue
+
+        container = _release_container_for_link(
+            link
+        )
+
+        container_text = (
+            " ".join(
+                container.get_text(
+                    " ",
+                    strip=True
+                ).split()
+            )
+            if container
+            else title
+        )
+
+        year_match = re.search(
+            r"\b(?:19|20)\d{2}\b",
+            container_text
+        )
+
+        year = (
+            year_match.group(0)
+            if year_match
+            else None
+        )
+
+        release_format = _extract_release_format(
+            container_text
+        )
+
+        user_score = None
+
+        user_score_match = re.search(
+            r"\b(100|\d{1,2})\s*user\s*score\b",
+            container_text,
+            flags=re.IGNORECASE
+        )
+
+        if user_score_match:
+            user_score = user_score_match.group(1)
+
+        ratings_count = None
+
+        count_match = re.search(
+            r"user\s*score\s*\(([\d,]+)\)",
+            container_text,
+            flags=re.IGNORECASE
+        )
+
+        if count_match:
+            ratings_count = count_match.group(1)
+
+        album_url = urljoin(
+            BASE_URL,
+            href
+        )
+
+        releases.append({
+            "album_id": album_id,
+            "title": title,
+            "album": title,
+            "artist": artist_name,
+            "url": album_url,
+            "year": year,
+            "album_format": release_format,
+            "user_score": user_score,
+            "ratings_count": ratings_count,
+            "cover": _extract_release_cover(container),
+        })
+
+        seen_ids.add(album_id)
+
+    return {
+        "artist": artist_name,
+        "url": artist_base_url,
+        "image": artist_image,
+        "releases": releases,
+    }
+
+
+def rank_artist_releases(releases, query):
+
+    query = str(query or "").strip()
+
+    direct_id = None
+
+    if query.startswith("aoty_album:"):
+        direct_value = query[len("aoty_album:"):]
+        direct_match = re.match(
+            r"(\d+)",
+            direct_value
+        )
+
+        if direct_match:
+            direct_id = direct_match.group(1)
+
+    ranked = []
+
+    for release in releases:
+
+        if direct_id and release.get("album_id") == direct_id:
+            score = 2.0
+        else:
+            score = fuzzy_match_score(
+                query,
+                release.get("title", "")
+            )
+
+        ranked.append((
+            score,
+            release
+        ))
+
+    ranked.sort(
+        key=lambda pair: pair[0],
+        reverse=True
+    )
+
+    return ranked
+
+
+def resolve_album_for_artist(artist_query, album_query):
+
+    artist_info = resolve_artist(
+        artist_query
+    )
+
+    if not artist_info:
+        return None, None
+
+    discography = get_artist_releases(
+        artist_info["url"]
+    )
+
+    ranked = rank_artist_releases(
+        discography["releases"],
+        album_query
+    )
+
+    if not ranked:
+        return artist_info, None
+
+    score, release = ranked[0]
+
+    direct_choice = str(album_query).startswith(
+        "aoty_album:"
+    )
+
+    if not direct_choice and score < 0.28:
+        return artist_info, None
+
+    release = dict(release)
+    release["match_score"] = score
+
+    return artist_info, release
+
+
 def get_user_avatar(username):
 
     url = f"{BASE_URL}/user/{username}/"
@@ -311,14 +899,9 @@ def get_user_avatar(username):
 def _find_details_row(soup, label_name):
 
     # Na AOTY etykiety w sekcji Details mają formę np. "/ Genre".
-    # Szukamy dokładnie tej etykiety, a potem zostajemy w NAJBLIŻSZYM
-    # wierszu. Dzięki temu przy braku gatunków nie wchodzimy wyżej w DOM
-    # i nie łapiemy przypadkowych linków /genre/ z reszty strony.
+    # Zostajemy w najbliższym wierszu danego pola, żeby nie łapać
+    # przypadkowych danych z innych części strony.
     wanted = label_name.strip().casefold()
-    exact_labels = {
-        f"/ {wanted}",
-        wanted,
-    }
 
     candidates = []
 
@@ -330,11 +913,21 @@ def _find_details_row(soup, label_name):
         elif normalized == wanted:
             candidates.append(string)
 
+    known_labels = {
+        "release date",
+        "format",
+        "label",
+        "producer",
+        "writer",
+        "genre",
+        "vibe",
+    }
+
     for label in candidates:
         container = label.parent
         best = container
 
-        for _ in range(6):
+        for _ in range(7):
             if not container:
                 break
 
@@ -342,17 +935,13 @@ def _find_details_row(soup, label_name):
 
             for part in container.stripped_strings:
                 normalized = " ".join(str(part).split()).casefold()
+                normalized = normalized.lstrip("/ ").strip()
 
-                if normalized in {
-                    "/ release date", "release date",
-                    "/ format", "format",
-                    "/ label", "label",
-                    "/ genre", "genre",
-                }:
-                    labels_here.add(normalized.lstrip("/ "))
+                if normalized in known_labels:
+                    labels_here.add(normalized)
 
-            # Gdy weszliśmy do kontenera zawierającego kilka pól Details,
-            # jesteśmy już za wysoko — wracamy do poprzedniego poziomu.
+            # Jeżeli kontener zawiera już kilka pól Details,
+            # weszliśmy za wysoko w DOM.
             if len(labels_here) > 1:
                 break
 
@@ -365,6 +954,28 @@ def _find_details_row(soup, label_name):
             return best
 
     return None
+
+
+def _details_value_text(row, label_name):
+
+    if not row:
+        return None
+
+    text = " ".join(
+        row.get_text(" ", strip=True).split()
+    )
+
+    # Usuwamy końcową etykietę, np. "/ Release Date".
+    text = re.sub(
+        rf"\s*/\s*{re.escape(label_name)}\s*(?:\+)?\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE
+    )
+
+    text = text.strip(" /")
+
+    return text or None
 
 
 def _is_secondary_genre_link(link, row):
@@ -381,7 +992,6 @@ def _is_secondary_genre_link(link, row):
 
         marker = f"{classes} {node_id}"
 
-        # AOTY może oznaczać secondary genres klasą / id.
         if any(word in marker for word in (
             "secondary",
             "secondarygenre",
@@ -390,7 +1000,6 @@ def _is_secondary_genre_link(link, row):
         )):
             return True
 
-        # Dodatkowy fallback na wypadek, gdy mniejsza czcionka jest inline.
         size_match = re.search(
             r"font-size:([0-9.]+)(px|em|rem|%)",
             style
@@ -415,6 +1024,167 @@ def _is_secondary_genre_link(link, row):
     return False
 
 
+def _extract_aoty_user_score(soup):
+
+    for string in soup.find_all(string=True):
+        normalized = " ".join(str(string).split()).casefold()
+
+        if normalized != "user score":
+            continue
+
+        checked = 0
+
+        for next_string in string.parent.find_all_next(string=True):
+            text = " ".join(str(next_string).split())
+
+            if not text:
+                continue
+
+            if text.casefold() == "user score":
+                continue
+
+            match = re.fullmatch(
+                r"(100|\d{1,2})",
+                text
+            )
+
+            if match:
+                return match.group(1)
+
+            checked += 1
+
+            if checked >= 15:
+                break
+
+    return None
+
+
+def _extract_tracklist(soup):
+
+    heading = None
+
+    for candidate in soup.find_all(["h2", "h3"]):
+        heading_text = " ".join(
+            candidate.get_text(" ", strip=True).split()
+        ).casefold()
+
+        if heading_text == "track list":
+            heading = candidate
+            break
+
+    if not heading:
+        return []
+
+    tracks = []
+    seen_urls = set()
+    current_disc = None
+
+    for element in heading.next_elements:
+
+        # Następna sekcja = koniec tracklisty.
+        if (
+            element is not heading
+            and getattr(element, "name", None) in {"h2", "h3"}
+        ):
+            break
+
+        if isinstance(element, str):
+            text = " ".join(str(element).split())
+
+            if re.fullmatch(
+                r"disc\s+\d+",
+                text,
+                flags=re.IGNORECASE
+            ):
+                current_disc = text
+
+            continue
+
+        if getattr(element, "name", None) != "a":
+            continue
+
+        href = element.get("href", "")
+
+        if "/song/" not in href:
+            continue
+
+        title = element.get_text(
+            " ",
+            strip=True
+        )
+
+        if not title:
+            continue
+
+        song_url = urljoin(
+            BASE_URL,
+            href
+        )
+
+        if song_url in seen_urls:
+            continue
+
+        seen_urls.add(song_url)
+
+        # Szukamy najmniejszego sensownego kontenera jednego utworu.
+        node = element.parent
+        row = node
+
+        for _ in range(7):
+            if not node:
+                break
+
+            song_links = node.select(
+                'a[href*="/song/"]'
+            )
+
+            if len(song_links) > 1:
+                break
+
+            row = node
+            node = node.parent
+
+        row_text = (
+            " ".join(
+                row.get_text(" ", strip=True).split()
+            )
+            if row
+            else title
+        )
+
+        number_match = re.match(
+            r"^\s*(\d{1,3})\b",
+            row_text
+        )
+
+        duration_match = re.search(
+            r"\b\d{1,2}:\d{2}\b",
+            row_text
+        )
+
+        number = (
+            int(number_match.group(1))
+            if number_match
+            else len(tracks) + 1
+        )
+
+        duration = (
+            duration_match.group(0)
+            if duration_match
+            else None
+        )
+
+        tracks.append({
+            "number": number,
+            "title": title,
+            "duration": duration,
+            "disc": current_disc,
+            "url": song_url,
+        })
+
+    return tracks
+
+
 def get_album_details(album_url):
 
     html = fetch_page(album_url)
@@ -424,11 +1194,31 @@ def get_album_details(album_url):
         "html.parser"
     )
 
-    year = None
-    genres = []
+    # ==========================
+    # USER SCORE / LICZBA OCEN
+    # ==========================
+
+    user_score = _extract_aoty_user_score(
+        soup
+    )
+
+    page_text = " ".join(
+        soup.get_text(" ", strip=True).split()
+    )
+
+    ratings_count = None
+
+    ratings_match = re.search(
+        r"\bBased on\s+([\d,.]+(?:K|M)?)\s+ratings\b",
+        page_text,
+        flags=re.IGNORECASE
+    )
+
+    if ratings_match:
+        ratings_count = ratings_match.group(1)
 
     # ==========================
-    # ROK WYDANIA
+    # RELEASE DATE / ROK
     # ==========================
 
     release_row = _find_details_row(
@@ -436,17 +1226,82 @@ def get_album_details(album_url):
         "release date"
     )
 
-    if release_row:
-        match = re.search(
+    release_date = _details_value_text(
+        release_row,
+        "release date"
+    )
+
+    year = None
+
+    if release_date:
+        year_match = re.search(
             r"\b(?:19|20)\d{2}\b",
-            release_row.get_text(" ", strip=True)
+            release_date
         )
 
-        if match:
-            year = match.group(0)
+        if year_match:
+            year = year_match.group(0)
 
     # ==========================
-    # TYLKO PRIMARY GENRES
+    # FORMAT
+    # ==========================
+
+    format_row = _find_details_row(
+        soup,
+        "format"
+    )
+
+    album_format = _details_value_text(
+        format_row,
+        "format"
+    )
+
+    # ==========================
+    # LABEL
+    # ==========================
+
+    label_row = _find_details_row(
+        soup,
+        "label"
+    )
+
+    labels = []
+
+    if label_row:
+        for link in label_row.select(
+            'a[href*="/label/"]'
+        ):
+            name = link.get_text(
+                " ",
+                strip=True
+            )
+
+            if name and name not in labels:
+                labels.append(name)
+
+    if not labels:
+        fallback_label = _details_value_text(
+            label_row,
+            "label"
+        )
+
+        if fallback_label:
+            labels.append(fallback_label)
+
+    label = (
+        labels[0]
+        if labels
+        else None
+    )
+
+    labels_text = (
+        ", ".join(labels)
+        if labels
+        else None
+    )
+
+    # ==========================
+    # PRIMARY + SECONDARY GENRES
     # ==========================
 
     genre_row = _find_details_row(
@@ -454,13 +1309,13 @@ def get_album_details(album_url):
         "genre"
     )
 
+    genres = []
+    secondary_genres = []
+
     if genre_row:
         passed_visual_break = False
         found_primary = False
 
-        # Iterujemy po DOM w kolejności wyświetlania. Secondary genres na
-        # AOTY są prezentowane osobno / mniejszą czcionką. Ignorujemy linki
-        # oznaczone jako secondary oraz linki po pierwszym <br> po primary.
         for element in genre_row.descendants:
 
             if getattr(element, "name", None) == "br":
@@ -476,34 +1331,163 @@ def get_album_details(album_url):
             if "/genre/" not in href:
                 continue
 
-            if passed_visual_break:
-                continue
-
-            if _is_secondary_genre_link(
-                element,
-                genre_row
-            ):
-                continue
-
             genre = element.get_text(
                 " ",
                 strip=True
             )
 
-            if genre and genre not in genres:
-                genres.append(genre)
-                found_primary = True
+            if not genre:
+                continue
+
+            is_secondary = (
+                passed_visual_break
+                or _is_secondary_genre_link(
+                    element,
+                    genre_row
+                )
+            )
+
+            if is_secondary:
+                if genre not in secondary_genres:
+                    secondary_genres.append(genre)
+            else:
+                if genre not in genres:
+                    genres.append(genre)
+                    found_primary = True
 
     genres_text = (
         ", ".join(genres)
         if genres
-        else "Brak danych"
+        else None
+    )
+
+    secondary_genres_text = (
+        ", ".join(secondary_genres)
+        if secondary_genres
+        else None
+    )
+
+    # ==========================
+    # VIBE
+    # ==========================
+
+    vibe_row = _find_details_row(
+        soup,
+        "vibe"
+    )
+
+    vibes = []
+
+    if vibe_row:
+        for link in vibe_row.select("a[href]"):
+            href = link.get("href", "")
+
+            if "/vibe/" not in href:
+                continue
+
+            vibe = link.get_text(
+                " ",
+                strip=True
+            )
+
+            if vibe and vibe not in vibes:
+                vibes.append(vibe)
+
+    vibes_text = (
+        ", ".join(vibes)
+        if vibes
+        else None
+    )
+
+    # ==========================
+    # ROCZNY RANKING UŻYTKOWNIKÓW
+    # np. "2024 Ratings: #96"
+    # ==========================
+
+    ranking_year = None
+    year_ranking = None
+    year_ranking_text = None
+
+    ranking_match = re.search(
+        r"\b((?:19|20)\d{2})\s+Ratings:\s*#\s*([\d,]+)",
+        page_text,
+        flags=re.IGNORECASE
+    )
+
+    if ranking_match:
+        ranking_year = ranking_match.group(1)
+        year_ranking = ranking_match.group(2)
+        year_ranking_text = (
+            f"{ranking_year} Ratings: #{year_ranking}"
+        )
+
+    # ==========================
+    # TRACKLISTA
+    # ==========================
+
+    tracklist = _extract_tracklist(
+        soup
+    )
+
+    tracklist_lines = []
+    previous_disc = None
+
+    for track in tracklist:
+        disc = track.get("disc")
+
+        if disc and disc != previous_disc:
+            tracklist_lines.append(disc)
+            previous_disc = disc
+
+        line = (
+            f"{track['number']}. "
+            f"{track['title']}"
+        )
+
+        if track.get("duration"):
+            line += f" — {track['duration']}"
+
+        tracklist_lines.append(line)
+
+    tracklist_text = (
+        "\n".join(tracklist_lines)
+        if tracklist_lines
+        else None
     )
 
     return {
+        # średnia użytkowników AOTY
+        "user_score": user_score,
+        "ratings_count": ratings_count,
+
+        # wydanie
+        "release_date": release_date,
         "year": year,
+        "album_format": album_format,
+
+        # label
+        "label": label,
+        "labels": labels,
+        "labels_text": labels_text,
+
+        # gatunki
         "genres": genres,
-        "genres_text": genres_text
+        "genres_text": genres_text,
+        "secondary_genres": secondary_genres,
+        "secondary_genres_text": secondary_genres_text,
+
+        # vibe
+        "vibes": vibes,
+        "vibes_text": vibes_text,
+
+        # ranking roczny
+        "ranking_year": ranking_year,
+        "year_ranking": year_ranking,
+        "year_ranking_text": year_ranking_text,
+
+        # tracklista
+        "tracklist": tracklist,
+        "tracklist_text": tracklist_text,
     }
 
 
@@ -1333,6 +2317,65 @@ def get_ratings(username, max_pages=3):
 
 
 # ============================================================
+# OCENA KONKRETNEGO ALBUMU PRZEZ MONITOROWANEGO USERA
+# ============================================================
+
+def get_user_rating_for_album(username, album_id):
+
+    username = str(username)
+    album_id = str(album_id)
+
+    users_data = data.get(
+        "users",
+        {}
+    )
+
+    user_state = users_data.get(
+        username
+    )
+
+    if user_state is None:
+        # Fallback na różnice wielkości liter w nazwie usera.
+        for saved_username, saved_state in users_data.items():
+            if saved_username.casefold() == username.casefold():
+                user_state = saved_state
+                break
+
+    if user_state:
+        known = user_state.get(
+            "ratings",
+            {}
+        ).get(album_id)
+
+        if known is not None:
+            return {
+                "score": str(known.get("score", "")) or None,
+                "date": known.get("date"),
+                "source": "data.json",
+            }
+
+    # Jeśli albumu nie ma w pamięci, sprawdzamy bieżące strony ratings.
+    # get_ratings() ma własny limit stron, więc nie pobieramy całej historii.
+    ratings = get_ratings(
+        username
+    )
+
+    for item in ratings:
+        if str(item.get("album_id")) == album_id:
+            return {
+                "score": str(item.get("score", "")) or None,
+                "date": item.get("date"),
+                "source": "AOTY",
+            }
+
+    return {
+        "score": None,
+        "date": None,
+        "source": None,
+    }
+
+
+# ============================================================
 # KOLORY
 # ============================================================
 
@@ -1589,7 +2632,19 @@ async def send_new_rating(username, item, avatar=None):
 
     # Dodatkowe dane albumu do użycia w embedzie.
     # Pobieramy je dopiero przy faktycznie wysyłanej aktualizacji.
+    # Wszystkie dodatkowe dane z aktualnej strony albumu.
+    user_score = "Brak danych"
+    aoty_user_score = "Brak danych"
+    ratings_count = "Brak danych"
+
+    release_date = "Brak danych"
     year = "Brak danych"
+    album_format = "Brak danych"
+
+    label = "Brak danych"
+    labels = []
+    labels_text = "Brak danych"
+
     genres = []
     genres_text = "Brak danych"
     main_genre = "Brak danych"
@@ -1597,15 +2652,58 @@ async def send_new_rating(username, item, avatar=None):
     other_genres_text = "Brak danych"
     all_genres_text = "Brak danych"
 
+    secondary_genres = []
+    secondary_genres_text = "Brak danych"
+
+    vibes = []
+    vibes_text = "Brak danych"
+
+    ranking_year = "Brak danych"
+    year_ranking = "Brak danych"
+    year_ranking_text = "Brak danych"
+
+    tracklist = []
+    tracklist_text = "Brak danych"
+
     try:
         details = await asyncio.to_thread(
             get_album_details,
             url
         )
 
+        user_score = details.get("user_score") or "Brak danych"
+        aoty_user_score = user_score
+        ratings_count = details.get("ratings_count") or "Brak danych"
+
+        release_date = details.get("release_date") or "Brak danych"
         year = details.get("year") or "Brak danych"
+        album_format = details.get("album_format") or "Brak danych"
+
+        label = details.get("label") or "Brak danych"
+        labels = details.get("labels") or []
+        labels_text = details.get("labels_text") or "Brak danych"
+
         genres = details.get("genres") or []
         genres_text = details.get("genres_text") or "Brak danych"
+
+        secondary_genres = details.get("secondary_genres") or []
+        secondary_genres_text = (
+            details.get("secondary_genres_text")
+            or "Brak danych"
+        )
+
+        vibes = details.get("vibes") or []
+        vibes_text = details.get("vibes_text") or "Brak danych"
+
+        ranking_year = details.get("ranking_year") or "Brak danych"
+        year_ranking = details.get("year_ranking") or "Brak danych"
+        year_ranking_text = (
+            details.get("year_ranking_text")
+            or "Brak danych"
+        )
+
+        tracklist = details.get("tracklist") or []
+        tracklist_text = details.get("tracklist_text") or "Brak danych"
 
         if genres:
             main_genre = genres[0]
@@ -1697,7 +2795,19 @@ async def send_changed_rating(
 
     # Dodatkowe dane albumu do użycia w embedzie.
     # Pobieramy je dopiero przy faktycznie wysyłanej zmianie oceny.
+    # Wszystkie dodatkowe dane z aktualnej strony albumu.
+    user_score = "Brak danych"
+    aoty_user_score = "Brak danych"
+    ratings_count = "Brak danych"
+
+    release_date = "Brak danych"
     year = "Brak danych"
+    album_format = "Brak danych"
+
+    label = "Brak danych"
+    labels = []
+    labels_text = "Brak danych"
+
     genres = []
     genres_text = "Brak danych"
     main_genre = "Brak danych"
@@ -1705,15 +2815,58 @@ async def send_changed_rating(
     other_genres_text = "Brak danych"
     all_genres_text = "Brak danych"
 
+    secondary_genres = []
+    secondary_genres_text = "Brak danych"
+
+    vibes = []
+    vibes_text = "Brak danych"
+
+    ranking_year = "Brak danych"
+    year_ranking = "Brak danych"
+    year_ranking_text = "Brak danych"
+
+    tracklist = []
+    tracklist_text = "Brak danych"
+
     try:
         details = await asyncio.to_thread(
             get_album_details,
             url
         )
 
+        user_score = details.get("user_score") or "Brak danych"
+        aoty_user_score = user_score
+        ratings_count = details.get("ratings_count") or "Brak danych"
+
+        release_date = details.get("release_date") or "Brak danych"
         year = details.get("year") or "Brak danych"
+        album_format = details.get("album_format") or "Brak danych"
+
+        label = details.get("label") or "Brak danych"
+        labels = details.get("labels") or []
+        labels_text = details.get("labels_text") or "Brak danych"
+
         genres = details.get("genres") or []
         genres_text = details.get("genres_text") or "Brak danych"
+
+        secondary_genres = details.get("secondary_genres") or []
+        secondary_genres_text = (
+            details.get("secondary_genres_text")
+            or "Brak danych"
+        )
+
+        vibes = details.get("vibes") or []
+        vibes_text = details.get("vibes_text") or "Brak danych"
+
+        ranking_year = details.get("ranking_year") or "Brak danych"
+        year_ranking = details.get("year_ranking") or "Brak danych"
+        year_ranking_text = (
+            details.get("year_ranking_text")
+            or "Brak danych"
+        )
+
+        tracklist = details.get("tracklist") or []
+        tracklist_text = details.get("tracklist_text") or "Brak danych"
 
         if genres:
             main_genre = genres[0]
@@ -2260,6 +3413,41 @@ setup_last_command(
     get_user_avatar=get_user_avatar,
     get_album_details=get_album_details,
     aoty_user_exists=aoty_user_exists,
+    score_color=score_color,
+    score_icon=score_icon,
+    AOTYRateLimit=AOTYRateLimit,
+)
+
+setup_recent_command(
+    tree=tree,
+    get_ratings=get_ratings,
+    get_user_avatar=get_user_avatar,
+    get_album_details=get_album_details,
+    aoty_user_exists=aoty_user_exists,
+    score_color=score_color,
+    score_icon=score_icon,
+    AOTYRateLimit=AOTYRateLimit,
+)
+
+setup_artist_command(
+    tree=tree,
+    search_aoty_artists=search_aoty_artists,
+    resolve_artist=resolve_artist,
+    get_artist_releases=get_artist_releases,
+    get_album_details=get_album_details,
+    AOTYRateLimit=AOTYRateLimit,
+)
+
+setup_album_command(
+    tree=tree,
+    users=USERS,
+    search_aoty_artists=search_aoty_artists,
+    resolve_artist=resolve_artist,
+    get_artist_releases=get_artist_releases,
+    rank_artist_releases=rank_artist_releases,
+    resolve_album_for_artist=resolve_album_for_artist,
+    get_album_details=get_album_details,
+    get_user_rating_for_album=get_user_rating_for_album,
     score_color=score_color,
     score_icon=score_icon,
     AOTYRateLimit=AOTYRateLimit,
