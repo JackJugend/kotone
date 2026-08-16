@@ -4,6 +4,18 @@ import requests
 
 from display_utils import display_romanized_name
 
+import os
+
+BASE_DIR = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+
+AOTY_ICON = os.path.join(
+    BASE_DIR,
+    "assets",
+    "aoty.jpg"
+)
+
 def setup_last_command(
     tree,
     get_ratings,
@@ -181,6 +193,8 @@ def setup_last_command(
         except Exception:
             pass
 
+        file = discord.File(AOTY_ICON, filename="aoty.jpg")
+
         embed = discord.Embed(
                 title=f"{score_icon(score)} {display_artist} • **{display_album}** ({year})",
                 url=url,
@@ -205,16 +219,10 @@ def setup_last_command(
                 value=" ",
                 inline=True
         )
-
-        embed.add_field(
-                name=f"**{album_format}**",
-                value=" ",
-                inline=True
-        )
         
         if avatar:
             embed.set_author(
-                name=username,
+                name=f"{album_format}{username} • {date}",
                 url=f"https://www.albumoftheyear.org/user/{username}",
                 icon_url=avatar
             )
@@ -229,7 +237,7 @@ def setup_last_command(
             )
 
         embed.set_footer(
-            text=f"{date} • {label}",
+            text=f"{release_date} • {label}",
             icon_url="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSiJt1MSjldtmrIaTGoE2r3CgsaPB8l1UneW-j9w103bSS5ft45C-OLTCg&s=10"
         )
 

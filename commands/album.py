@@ -166,7 +166,7 @@ def setup_album_command(
 
     @tree.command(
         name="album",
-        description="Pokazuje wydanie i live oceny użytkowników z config.json",
+        description="Pokazuje wydanie album z AOTY",
     )
     @discord.app_commands.describe(
         artist="Artysta na AOTY",
