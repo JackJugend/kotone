@@ -189,7 +189,7 @@ def setup_last_command(
         
         )
                 embed.add_field(
-                name=f"\👥 **{user_score}**",
+                name=f"\👥 **{aoty_user_score}**/{ratings_count}",
                 value=" ",
                 inline=True
 
