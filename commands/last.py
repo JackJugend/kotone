@@ -90,6 +90,12 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             missing="?",
         )
 
+        if variables.artist_url:
+            latest["artist_url"] = variables.artist_url
+
+        if variables.album_url:
+            latest["url"] = variables.album_url
+
         # /last already knows exactly which rating was selected, so fetch its
         # user-specific detail NOW and give it to the View. This removes the
         # old inconsistency where the main embed worked but Track ratings had
@@ -156,21 +162,42 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         )
         vibes_display = variables.vibes_text if variables.vibes else " "
 
-        # Wygląd zachowany z obecnej wersji /last.
+        # Separate clickable Artist + Album links.
+        artist_link = (
+            f"[{variables.display_artist}]({variables.artist_url})"
+            if variables.artist_url
+            else variables.display_artist
+        )
+
+        album_link = (
+            f"[{variables.display_album}]({variables.album_url})"
+            if variables.album_url
+            else variables.display_album
+        )
+
+        release_links = (
+            f"**{artist_link}**  •  **{album_link}**"
+        )
+
+        # Main /last embed.
         embed = discord.Embed(
             title=(
                 f"\\{score_icon(variables.score)} "
-                f"{variables.display_artist} — **{variables.display_album}** "
+                f"{variables.display_artist} — "
+                f"**{variables.display_album}** "
                 f"({variables.year})"
             ),
-            url=variables.url,
+            url=variables.album_url or variables.url,
             description=(
-                f"# — \\⭐ **{variables.score}** \\⭐ — \n"
-                f"{variables.all_genres_text}\n"
-                f"{secondary_genres_display}\n"
+                f"{release_links}\\n\\n"
+                f"# — \\⭐ **{variables.score}** \\⭐ — \\n"
+                f"{variables.all_genres_text}\\n"
+                f"{secondary_genres_display}\\n"
                 f"{vibes_display}"
             ),
-            color=score_color(variables.score),
+            color=score_color(
+                variables.score
+            ),
         )
 
         embed.add_field(
@@ -181,28 +208,235 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             value=" ",
             inline=True,
         )
+
         embed.add_field(
-            name=f"\\📅 **{variables.year_ranking_text}**",
+            name=(
+                f"\\📅 **{variables.year_ranking_text}**"
+            ),
             value=" ",
             inline=True,
         )
 
         if avatar:
             embed.set_author(
-                name=f"{username}  •  {variables.date}",
-                url=f"https://www.albumoftheyear.org/user/{username}",
+                name=(
+                    f"{username}  •  "
+                    f"{variables.date}"
+                ),
+                url=(
+                    f"https://www.albumoftheyear.org/"
+                    f"user/{username}"
+                ),
                 icon_url=avatar,
             )
         else:
-            embed.set_author(name=f"{username}  •  {variables.date}")
+            embed.set_author(
+                name=(
+                    f"{username}  •  "
+                    f"{variables.date}"
+                )
+            )
 
         if variables.cover:
-            embed.set_thumbnail(url=variables.cover)
+            embed.set_thumbnail(
+                url=variables.cover
+            )
 
         embed.set_footer(
             text=(
-                f"{variables.album_format}  •  {variables.release_date}  •  "
-                f"{variables.labels_text}{footer_flags}"
+                f"{variables.album_format}  •  "
+                f"{variables.release_date}  •  "
+                f"{variables.labels_text}"
+                f"{footer_flags}"
+            ),
+            icon_url=AOTY_ICON_ATTACHMENT,
+        )
+
+        # -----------------------------
+        # Szczegóły tab
+        # -----------------------------
+        details_lines = [
+            release_links,
+            "",
+            (
+                f"**AOTY User Score:** "
+                f"{variables.aoty_user_score}"
+            ),
+            (
+                f"**Ratings:** "
+                f"{variables.ratings_count}"
+            ),
+            (
+                f"**Release date:** "
+                f"{variables.release_date}"
+            ),
+            (
+                f"**Format:** "
+                f"{variables.album_format}"
+            ),
+            (
+                f"**Label:** "
+                f"{variables.labels_text}"
+            ),
+            (
+                f"**Genre:** "
+                f"{variables.genres_text}"
+            ),
+        ]
+
+        if variables.secondary_genres:
+            details_lines.append(
+                (
+                    f"**Secondary genres:** "
+                    f"{', '.join(variables.secondary_genres)}"
+                )
+            )
+
+        if variables.vibes:
+            details_lines.append(
+                (
+                    f"**Vibes:** "
+                    f"{', '.join(variables.vibes)}"
+                )
+            )
+
+        if (
+            variables.year_ranking_text
+            and variables.year_ranking_text != "?"
+        ):
+            details_lines.append(
+                (
+                    f"**{variables.ranking_year or variables.year} "
+                    f"Ratings:** "
+                    f"{variables.year_ranking_text}"
+                )
+            )
+
+        details_embed = discord.Embed(
+            title=(
+                f"ℹ {variables.display_artist} — "
+                f"{variables.display_album}"
+            ),
+            url=variables.album_url or variables.url,
+            description="\\n".join(
+                details_lines
+            ),
+            color=score_color(
+                variables.score
+            ),
+        )
+
+        if variables.cover:
+            details_embed.set_thumbnail(
+                url=variables.cover
+            )
+
+        details_embed.set_author(
+            name=(
+                f"{username}  •  "
+                f"{variables.date}"
+            ),
+            url=(
+                f"https://www.albumoftheyear.org/"
+                f"user/{username}"
+            ),
+            icon_url=avatar if avatar else None,
+        )
+
+        details_embed.set_footer(
+            text=(
+                f"AOTY • "
+                f"{score_icon(variables.score)} "
+                f"{variables.score}"
+            ),
+            icon_url=AOTY_ICON_ATTACHMENT,
+        )
+
+        # -----------------------------
+        # Public Tracklista tab
+        # -----------------------------
+        track_lines = []
+
+        for track in variables.tracklist:
+            number = (
+                track.get("number")
+                or "?"
+            )
+
+            title = (
+                track.get("title")
+                or "Nieznany utwór"
+            )
+
+            duration = track.get(
+                "duration"
+            )
+
+            public_score = (
+                track.get("user_score")
+                or "NR"
+            )
+
+            line = (
+                f"**{number}.** {title}"
+            )
+
+            if duration:
+                line += (
+                    f" `{duration}`"
+                )
+
+            line += (
+                f" — **{public_score}**"
+            )
+
+            track_lines.append(
+                line
+            )
+
+        if not track_lines:
+            track_lines = [
+                "Brak tracklisty na AOTY."
+            ]
+
+        tracklist_embed = discord.Embed(
+            title=(
+                f"≡ {variables.display_artist} — "
+                f"{variables.display_album}"
+            ),
+            url=variables.album_url or variables.url,
+            description=(
+                f"{release_links}\\n\\n"
+                + "\\n".join(
+                    track_lines
+                )
+            )[:4000],
+            color=score_color(
+                variables.score
+            ),
+        )
+
+        if variables.cover:
+            tracklist_embed.set_thumbnail(
+                url=variables.cover
+            )
+
+        tracklist_embed.set_author(
+            name=(
+                f"{username}  •  "
+                f"{variables.date}"
+            ),
+            url=(
+                f"https://www.albumoftheyear.org/"
+                f"user/{username}"
+            ),
+            icon_url=avatar if avatar else None,
+        )
+
+        tracklist_embed.set_footer(
+            text=(
+                "AOTY track scores • "
+                f"{variables.album_format}"
             ),
             icon_url=AOTY_ICON_ATTACHMENT,
         )
@@ -221,6 +455,10 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
                 )
                 else None
             ),
+            details_embed=details_embed,
+            tracklist_embed=tracklist_embed,
+            artist_url=variables.artist_url or None,
+            album_url=variables.album_url or variables.url or None,
         )
 
         message = await interaction.followup.send(

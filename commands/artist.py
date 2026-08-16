@@ -204,7 +204,25 @@ def _artist_header_text(discography):
         or "0"
     )
 
+    artist_name = display_romanized_name(
+        discography.get(
+            "artist"
+        )
+        or "Nieznany artysta"
+    )
+
+    artist_url = discography.get(
+        "url"
+    )
+
+    artist_link = (
+        f"[{artist_name}]({artist_url})"
+        if artist_url
+        else artist_name
+    )
+
     lines = [
+        f"**{artist_link}**",
         (
             f"⭐ **User Score: {score}**"
             f"  •  **{ratings_count} ratings**"

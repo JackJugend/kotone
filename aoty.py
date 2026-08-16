@@ -1704,130 +1704,39 @@ def _normalize_count(value: str | None) -> str | None:
     return value or None
 
 
-def _extract_ratings_count(soup: BeautifulSoup) -> str | None:
-    """Extract the release User Score ratings count.
+def _extract_ratings_count(
+    soup: BeautifulSoup,
+) -> str | None:
+    """Extract album-level AOTY rating count.
 
-    The most stable AOTY source is the link to the release's user-reviews
-    page, whose visible text is e.g. ``574 ratings``.  Only after that do we
-    use the surrounding ``User Score -> Based on ... ratings`` text.
+    On the public album page the reliable visible layout is:
 
-    This deliberately ignores yearly ranking text such as:
-        2025 Ratings: #3,076
+        User Score
+        90
+        Based on 16,391 ratings
+
+    The first "Based on N ratings" BEFORE Details is the album count.  This is
+    intentionally simpler and more robust than trying to depend on one exact
+    link/class name, which AOTY changes fairly often.
     """
 
-    def normalize(value):
+    def normalize_count(value):
         if value is None:
             return None
 
-        value = str(value).replace("\xa0", " ")
-        value = re.sub(r"\s+", "", value)
+        value = str(value).replace(
+            "\xa0",
+            " ",
+        )
+
+        value = re.sub(
+            r"\s+",
+            "",
+            value,
+        )
 
         return value or None
 
-    count_text_pattern = re.compile(
-        r"^\s*([\d][\d,.]*(?:\s*[KM])?)\s+ratings\s*$",
-        flags=re.IGNORECASE,
-    )
-
-    based_on_pattern = re.compile(
-        r"\bBased\s+on\s+"
-        r"([\d][\d,.]*(?:\s*[KM])?)"
-        r"\s+ratings\b",
-        flags=re.IGNORECASE,
-    )
-
-    # ------------------------------------------------------------------
-    # 1. Strongest source: the link that opens User Reviews.
-    #
-    # AOTY overview HTML uses a link around the visible "574 ratings".
-    # This avoids accidentally reading another "N ratings" elsewhere.
-    # ------------------------------------------------------------------
-    for link in soup.find_all("a", href=True):
-        href = str(link.get("href", "")).casefold()
-
-        if "user-reviews" not in href:
-            continue
-
-        link_text = " ".join(
-            link.get_text(
-                " ",
-                strip=True,
-            )
-            .replace("\xa0", " ")
-            .split()
-        )
-
-        match = count_text_pattern.fullmatch(
-            link_text
-        )
-
-        if match:
-            return normalize(
-                match.group(1)
-            )
-
-    # ------------------------------------------------------------------
-    # 2. Exact User Score marker and a short following window.
-    # ------------------------------------------------------------------
-    for string in soup.find_all(string=True):
-        marker_text = " ".join(
-            str(string).split()
-        ).casefold()
-
-        if marker_text != "user score":
-            continue
-
-        parts = []
-        checked = 0
-
-        for next_string in string.parent.find_all_next(
-            string=True
-        ):
-            value = " ".join(
-                str(next_string)
-                .replace("\xa0", " ")
-                .split()
-            )
-
-            if not value:
-                continue
-
-            if (
-                checked > 0
-                and value.casefold() in {
-                    "critic score",
-                    "track ratings",
-                    "popular user reviews",
-                    "user reviews",
-                }
-            ):
-                break
-
-            parts.append(
-                value
-            )
-
-            neighborhood = " ".join(
-                parts[-10:]
-            )
-
-            match = based_on_pattern.search(
-                neighborhood
-            )
-
-            if match:
-                return normalize(
-                    match.group(1)
-                )
-
-            checked += 1
-
-            if checked >= 30:
-                break
-
-    # ------------------------------------------------------------------
-    # 3. User Score (574) layout used by some AOTY subpages.
-    # ------------------------------------------------------------------
     page_text = " ".join(
         soup.get_text(
             " ",
@@ -1837,6 +1746,51 @@ def _extract_ratings_count(soup: BeautifulSoup) -> str | None:
         .split()
     )
 
+    # --------------------------------------------------------
+    # 1. The top summary block only.
+    # --------------------------------------------------------
+    top_text = re.split(
+        r"\bDetails\b",
+        page_text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    match = re.search(
+        r"\bBased\s+on\s+"
+        r"([\d][\d,.]*(?:\s*[KM])?)"
+        r"\s+ratings\b",
+        top_text,
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        return normalize_count(
+            match.group(1)
+        )
+
+    # --------------------------------------------------------
+    # 2. Explicit User Score -> Based on N ratings window.
+    # --------------------------------------------------------
+    match = re.search(
+        r"\bUser\s*Score\b"
+        r".{0,260}?"
+        r"\bBased\s+on\s+"
+        r"([\d][\d,.]*(?:\s*[KM])?)"
+        r"\s+ratings\b",
+        page_text,
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        return normalize_count(
+            match.group(1)
+        )
+
+    # --------------------------------------------------------
+    # 3. AOTY User Reviews layout:
+    #       User Score (16,298)
+    # --------------------------------------------------------
     match = re.search(
         r"\bUser\s*Score\s*\(\s*"
         r"([\d][\d,.]*(?:\s*[KM])?)"
@@ -1846,29 +1800,93 @@ def _extract_ratings_count(soup: BeautifulSoup) -> str | None:
     )
 
     if match:
-        return normalize(
+        return normalize_count(
             match.group(1)
         )
 
-    # ------------------------------------------------------------------
-    # 4. Strict whole-page fallback anchored to User Score.
-    # ------------------------------------------------------------------
-    match = re.search(
-        r"\bUser\s*Score\b"
-        r".{0,180}?"
+    # --------------------------------------------------------
+    # 4. DOM fallback: any compact node containing exactly
+    #    "Based on N ratings".
+    # --------------------------------------------------------
+    pattern = re.compile(
         r"\bBased\s+on\s+"
         r"([\d][\d,.]*(?:\s*[KM])?)"
         r"\s+ratings\b",
-        page_text,
         flags=re.IGNORECASE,
     )
 
-    if match:
-        return normalize(
-            match.group(1)
+    for element in soup.find_all(
+        ["div", "span", "a", "p"],
+    ):
+        value = " ".join(
+            element.get_text(
+                " ",
+                strip=True,
+            )
+            .replace("\xa0", " ")
+            .split()
         )
 
+        if not value or len(value) > 120:
+            continue
+
+        match = pattern.search(
+            value
+        )
+
+        if match:
+            return normalize_count(
+                match.group(1)
+            )
+
     return None
+
+
+def _album_user_reviews_url(
+    album_url: str,
+) -> str:
+    """Build AOTY's /user-reviews/ route from a public album URL."""
+    value = str(
+        album_url or ""
+    ).split(
+        "?",
+        1,
+    )[0].rstrip("/")
+
+    value = re.sub(
+        r"\.php$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    return (
+        value
+        + "/user-reviews/"
+    )
+
+
+def _fetch_album_ratings_count_fallback(
+    album_url: str,
+) -> str | None:
+    """Dedicated fallback used only when the overview count was not parsed."""
+    if not album_url:
+        return None
+
+    reviews_url = _album_user_reviews_url(
+        album_url
+    )
+
+    soup = BeautifulSoup(
+        fetch_page(
+            reviews_url
+        ),
+        "html.parser",
+    )
+
+    return _extract_ratings_count(
+        soup
+    )
 
 
 def _extract_tracklist(soup: BeautifulSoup) -> list[dict]:
@@ -1954,12 +1972,115 @@ def _extract_tracklist(soup: BeautifulSoup) -> list[dict]:
     return tracks
 
 
+def _extract_album_artist_info(
+    soup: BeautifulSoup,
+) -> tuple[str | None, str | None]:
+    """Return album artist name + exact AOTY artist URL."""
+    heading = soup.find(
+        "h1"
+    )
+
+    candidates = []
+
+    if heading is not None:
+        # Artist is normally immediately before the album H1.
+        candidates.extend(
+            heading.find_all_previous(
+                "a",
+                href=True,
+                limit=12,
+            )
+        )
+
+    candidates.extend(
+        soup.select(
+            'a[href*="/artist/"]'
+        )
+    )
+
+    seen = set()
+
+    for link in candidates:
+        href = str(
+            link.get(
+                "href",
+                "",
+            )
+        )
+
+        if "/artist/" not in href:
+            continue
+
+        name = " ".join(
+            link.get_text(
+                " ",
+                strip=True,
+            ).split()
+        )
+
+        if not name:
+            continue
+
+        url = urljoin(
+            BASE_URL,
+            href,
+        )
+
+        key = (
+            name.casefold(),
+            url,
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(
+            key
+        )
+
+        return (
+            name,
+            url,
+        )
+
+    return (
+        None,
+        None,
+    )
+
+
 def get_album_details(album_url: str) -> dict:
     soup = BeautifulSoup(fetch_page(album_url), "html.parser")
     page_text = " ".join(soup.get_text(" ", strip=True).split())
 
+    album_heading = soup.find("h1")
+    album_title = (
+        " ".join(
+            album_heading.get_text(
+                " ",
+                strip=True,
+            ).split()
+        )
+        if album_heading
+        else None
+    )
+
+    artist_name, artist_url = _extract_album_artist_info(
+        soup
+    )
+
     user_score = _extract_aoty_user_score(soup)
     ratings_count = _extract_ratings_count(soup)
+
+    if ratings_count is None:
+        try:
+            ratings_count = _fetch_album_ratings_count_fallback(
+                album_url
+            )
+        except AOTYRateLimit:
+            raise
+        except Exception:
+            ratings_count = None
 
     release_row = _find_details_row(soup, "release date")
     release_date = _details_value_text(release_row, "release date")
@@ -2084,6 +2205,9 @@ def get_album_details(album_url: str) -> dict:
 
     return {
         "url": album_url,
+        "album": album_title,
+        "artist": artist_name,
+        "artist_url": artist_url,
         "user_score": user_score,
         "ratings_count": ratings_count,
         "release_date": release_date,
@@ -2513,11 +2637,48 @@ def parse_album_block(block) -> dict | None:
         album = clean_text(album_link)
 
     artist = None
-    artist_element = block.select_one(".artistTitle")
+    artist_url = None
+
+    artist_element = block.select_one(
+        ".artistTitle"
+    )
+
+    artist_link = None
+
     if artist_element:
-        artist = clean_text(artist_element)
-    if not artist:
-        artist = clean_text(block.select_one('a[href*="/artist/"]'))
+        artist = clean_text(
+            artist_element
+        )
+
+        if (
+            artist_element.name == "a"
+            and artist_element.get("href")
+        ):
+            artist_link = artist_element
+        else:
+            artist_link = artist_element.select_one(
+                'a[href*="/artist/"]'
+            )
+
+    if artist_link is None:
+        artist_link = block.select_one(
+            'a[href*="/artist/"]'
+        )
+
+    if not artist and artist_link:
+        artist = clean_text(
+            artist_link
+        )
+
+    if artist_link and artist_link.get(
+        "href"
+    ):
+        artist_url = urljoin(
+            BASE_URL,
+            artist_link.get(
+                "href"
+            ),
+        )
 
     score = extract_score(block)
     if score is None:
@@ -2536,6 +2697,7 @@ def parse_album_block(block) -> dict | None:
     return {
         "album_id": album_id,
         "artist": artist or "Nieznany artysta",
+        "artist_url": artist_url,
         "album": album or f"Album #{album_id}",
         "score": score,
         "date": date,

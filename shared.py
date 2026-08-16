@@ -88,6 +88,10 @@ class ReleaseVariables:
     release_format: str | None = None
     album_id: str = ""
 
+    # Linki AOTY.
+    artist_url: str = ""
+    album_url: str = ""
+
     # Średnia AOTY.
     user_score: Any = None
     aoty_user_score: Any = None
@@ -247,6 +251,16 @@ def build_release_variables(
         cover=item.get("cover") or details.get("cover"),
         release_format=item.get("release_format") or details.get("album_format"),
         album_id=str(item.get("album_id") or ""),
+        artist_url=str(
+            item.get("artist_url")
+            or details.get("artist_url")
+            or ""
+        ),
+        album_url=str(
+            item.get("url")
+            or details.get("url")
+            or ""
+        ),
         user_score=user_score,
         aoty_user_score=user_score,
         ratings_count=details.get("ratings_count") or missing,

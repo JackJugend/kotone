@@ -19,6 +19,48 @@ def _trim_description(text: str, limit: int = 4000) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+
+def _release_links_line(
+    item: dict,
+) -> str:
+    artist = display_romanized_name(
+        item.get("artist")
+        or "Nieznany artysta"
+    )
+
+    album = display_romanized_name(
+        item.get("album")
+        or item.get("title")
+        or "Nieznane wydanie"
+    )
+
+    artist_url = item.get(
+        "artist_url"
+    )
+
+    album_url = item.get(
+        "url"
+    )
+
+    artist_text = (
+        f"[{artist}]({artist_url})"
+        if artist_url
+        else artist
+    )
+
+    album_text = (
+        f"[{album}]({album_url})"
+        if album_url
+        else album
+    )
+
+    return (
+        f"**{artist_text}**  •  "
+        f"**{album_text}**"
+    )
+
+
+
 def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
     artist = display_romanized_name(item.get("artist") or "Nieznany artysta")
     album = display_romanized_name(item.get("album") or item.get("title") or "Nieznane wydanie")
@@ -28,7 +70,9 @@ def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
     embed = discord.Embed(
         title=f"✎ {artist} — {album}",
         url=extra.get("review_url") or item.get("url"),
-        description=_trim_description(review_text),
+        description=_trim_description(
+            f"{_release_links_line(item)}\n\n{review_text}"
+        ),
         color=score_color(score),
     )
 
@@ -58,7 +102,12 @@ def build_track_ratings_embed(username: str, item: dict, extra: dict) -> discord
         track_score = track.get("score") or "NR"
         lines.append(f"**{number}.** {title} — **{track_score}**")
 
-    description = "\n".join(lines) if lines else "Brak ocen tracklisty."
+    tracks_text = "\n".join(lines) if lines else "Brak ocen tracklisty."
+
+    description = (
+        f"{_release_links_line(item)}\n\n"
+        f"{tracks_text}"
+    )
 
     embed = discord.Embed(
         title=f"☷ {artist} — {album}",
@@ -183,7 +232,16 @@ class RatingDetailsMixin:
 
 
 class SingleRatingView(TimedDisableView, RatingDetailsMixin):
-    """Main/review/track-ratings switcher for one user rating."""
+    """Interactive tabs for one rating.
+
+    /last can additionally provide:
+      - Szczegóły
+      - Tracklista
+      - direct Artysta / Album URL buttons
+
+    Other places that use SingleRatingView keep working because all extended
+    arguments are optional.
+    """
 
     def __init__(
         self,
@@ -192,55 +250,193 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         item: dict,
         main_embed: discord.Embed,
         extra: dict | None = None,
+        details_embed: discord.Embed | None = None,
+        tracklist_embed: discord.Embed | None = None,
+        artist_url: str | None = None,
+        album_url: str | None = None,
         timeout: float = VIEW_TIMEOUT_SECONDS,
     ):
-        super().__init__(timeout=timeout)
+        super().__init__(
+            timeout=timeout
+        )
+
         self.username = username
-        self.item = dict(item)
+        self.item = dict(
+            item
+        )
+
         self.main_embed = main_embed
+        self.details_embed = details_embed
+        self.tracklist_embed = tracklist_embed
+
         self._extra_cache = extra
 
-    @discord.ui.button(label="Główne", style=discord.ButtonStyle.secondary)
-    async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(embed=self.main_embed, view=self)
+        # Extended /last controls only.
+        if self.details_embed is None:
+            self.remove_item(
+                self.details_button
+            )
 
-    @discord.ui.button(label="Recenzja", style=discord.ButtonStyle.secondary)
-    async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        extra = await self._load_extra()
+        if self.tracklist_embed is None:
+            self.remove_item(
+                self.tracklist_button
+            )
 
-        if extra.get("rate_limited"):
-            await interaction.followup.send(
-                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+        if artist_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="Artysta",
+                    style=discord.ButtonStyle.link,
+                    url=artist_url,
+                    row=1,
+                )
+            )
+
+        if album_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="Album",
+                    style=discord.ButtonStyle.link,
+                    url=album_url,
+                    row=1,
+                )
+            )
+
+    @discord.ui.button(
+        label="Główne",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+    )
+    async def main_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.edit_message(
+            embed=self.main_embed,
+            view=self,
+        )
+
+    @discord.ui.button(
+        label="Szczegóły",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+    )
+    async def details_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if self.details_embed is None:
+            await interaction.response.send_message(
+                "Brak szczegółów wydania.",
                 ephemeral=True,
             )
             return
 
-        if not extra.get("review_text"):
-            await interaction.followup.send("Ta ocena nie ma recenzji.", ephemeral=True)
-            return
-
-        await interaction.message.edit(
-            embed=build_review_embed(self.username, self.item, extra),
+        await interaction.response.edit_message(
+            embed=self.details_embed,
             view=self,
         )
 
-    @discord.ui.button(label="Track ratings", style=discord.ButtonStyle.secondary)
-    async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="Tracklista",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+    )
+    async def tracklist_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if self.tracklist_embed is None:
+            await interaction.response.send_message(
+                "Brak tracklisty.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.edit_message(
+            embed=self.tracklist_embed,
+            view=self,
+        )
+
+    @discord.ui.button(
+        label="Recenzja",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+    )
+    async def review_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
         await interaction.response.defer()
+
         extra = await self._load_extra()
 
-        if extra.get("rate_limited"):
+        if extra.get(
+            "rate_limited"
+        ):
             await interaction.followup.send(
-                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. "
+                "Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
+
+        if not extra.get(
+            "review_text"
+        ):
+            await interaction.followup.send(
+                "Ta ocena nie ma recenzji.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.message.edit(
+            embed=build_review_embed(
+                self.username,
+                self.item,
+                extra,
+            ),
+            view=self,
+        )
+
+    @discord.ui.button(
+        label="Track ratings",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+    )
+    async def tracks_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.defer()
+
+        extra = await self._load_extra()
+
+        if extra.get(
+            "rate_limited"
+        ):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. "
+                "Spróbuj ponownie za chwilę.",
                 ephemeral=True,
             )
             return
 
         if (
-            extra.get("detail_incomplete")
-            and extra.get("has_track_ratings")
-            and not extra.get("track_ratings")
+            extra.get(
+                "detail_incomplete"
+            )
+            and extra.get(
+                "has_track_ratings"
+            )
+            and not extra.get(
+                "track_ratings"
+            )
         ):
             await interaction.followup.send(
                 "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
@@ -250,12 +446,21 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
             )
             return
 
-        if not extra.get("has_track_ratings"):
-            await interaction.followup.send("Ta ocena nie ma ocen tracklisty.", ephemeral=True)
+        if not extra.get(
+            "has_track_ratings"
+        ):
+            await interaction.followup.send(
+                "Ta ocena nie ma ocen tracklisty.",
+                ephemeral=True,
+            )
             return
 
         await interaction.message.edit(
-            embed=build_track_ratings_embed(self.username, self.item, extra),
+            embed=build_track_ratings_embed(
+                self.username,
+                self.item,
+                extra,
+            ),
             view=self,
         )
 
