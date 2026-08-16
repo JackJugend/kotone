@@ -359,4 +359,5 @@ def setup_album_command(
 
         await interaction.followup.send(
             embed=embed,
+            file=file
         )

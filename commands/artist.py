@@ -223,4 +223,5 @@ def setup_artist_command(
 
         await interaction.followup.send(
             embed=embed,
+            file=file
         )
