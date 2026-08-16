@@ -122,16 +122,10 @@ def setup_last_command(
             pass
 
         embed = discord.Embed(
-                title=f"{album} ({year})",
+                title=f"{artist} - **{album}** ({year})",
                 url=url,
-                description=f"**{artist}**",
+                description=f"{all_genres_text}",
                 color=score_color(score),
-        )
-
-        embed.add_field(
-                name="",
-                value=f"{all_genres_text}",
-                inline=False
         )
 
         embed.add_field(
@@ -143,6 +137,7 @@ def setup_last_command(
         if avatar:
             embed.set_author(
                 name=username,
+                url=f"https://www.albumoftheyear.org/user/{username}",
                 icon_url=avatar
             )
         else:
@@ -156,7 +151,8 @@ def setup_last_command(
             )
 
         embed.set_footer(
-            text=f"{date}  🔥"
+            text=f"{date}  🔥",
+            icon_url="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSiJt1MSjldtmrIaTGoE2r3CgsaPB8l1UneW-j9w103bSS5ft45C-OLTCg&s=10"
         )
 
         await interaction.followup.send(
