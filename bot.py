@@ -1967,6 +1967,14 @@ async def setup_hook():
         guild=guild
     )
 
+# Usuwamy stare globalne komendy,
+# żeby Discord nie pokazywał ich podwójnie
+    tree.clear_commands(
+        guild=None
+    )
+
+    await tree.sync()
+
     print(
         f"[DISCORD] Zsynchronizowano "
         f"{len(synced)} komend na serwerze."
