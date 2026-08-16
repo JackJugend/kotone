@@ -308,6 +308,98 @@ def get_user_avatar(username):
     return None
 
 
+def get_album_details(album_url):
+
+    html = fetch_page(album_url)
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    year = None
+    genres = []
+
+    # Rok wydania — szukamy w wierszu "Release Date".
+    release_label = soup.find(
+        string=lambda text: (
+            text
+            and "release date" in text.casefold()
+        )
+    )
+
+    if release_label:
+
+        container = release_label.parent
+
+        for _ in range(6):
+
+            if not container:
+                break
+
+            text = container.get_text(
+                " ",
+                strip=True
+            )
+
+            match = re.search(
+                r"\b(?:19|20)\d{2}\b",
+                text
+            )
+
+            if match:
+                year = match.group(0)
+                break
+
+            container = container.parent
+
+    # Gatunki — bierzemy linki /genre/ z najbliższego
+    # kontenera odpowiadającego wierszowi "Genre".
+    genre_label = soup.find(
+        string=lambda text: (
+            text
+            and text.strip().casefold().endswith("genre")
+        )
+    )
+
+    if genre_label:
+
+        container = genre_label.parent
+
+        for _ in range(6):
+
+            if not container:
+                break
+
+            genre_links = container.select(
+                'a[href*="/genre/"]'
+            )
+
+            if genre_links:
+
+                for link in genre_links:
+
+                    genre = link.get_text(
+                        " ",
+                        strip=True
+                    )
+
+                    if (
+                        genre
+                        and genre not in genres
+                    ):
+                        genres.append(genre)
+
+                break
+
+            container = container.parent
+
+    return {
+        "year": year,
+        "genres": genres
+    }
+
+
 # ============================================================
 # TEKST
 # ============================================================
@@ -1388,6 +1480,30 @@ async def send_new_rating(username, item, avatar=None):
     url = item["url"]
     cover = item["cover"]
 
+    # Dodatkowe dane albumu do użycia w embedzie.
+    # Pobieramy je dopiero przy faktycznie wysyłanej aktualizacji.
+    year = "Brak danych"
+    genres = []
+    genres_text = "Brak danych"
+
+    try:
+        details = await asyncio.to_thread(
+            get_album_details,
+            url
+        )
+
+        year = details.get("year") or "Brak danych"
+        genres = details.get("genres") or []
+
+        if genres:
+            genres_text = ", ".join(genres)
+
+    except Exception as e:
+        print(
+            f"[AOTY] Nie udało się pobrać szczegółów albumu "
+            f"{artist} — {album}: {type(e).__name__}: {e}"
+        )
+
     embed = discord.Embed(
         title=f"{album}",
         url=url,
@@ -1459,6 +1575,30 @@ async def send_changed_rating(
     date = item["date"]
     url = item["url"]
     cover = item["cover"]
+
+    # Dodatkowe dane albumu do użycia w embedzie.
+    # Pobieramy je dopiero przy faktycznie wysyłanej zmianie oceny.
+    year = "Brak danych"
+    genres = []
+    genres_text = "Brak danych"
+
+    try:
+        details = await asyncio.to_thread(
+            get_album_details,
+            url
+        )
+
+        year = details.get("year") or "Brak danych"
+        genres = details.get("genres") or []
+
+        if genres:
+            genres_text = ", ".join(genres)
+
+    except Exception as e:
+        print(
+            f"[AOTY] Nie udało się pobrać szczegółów albumu "
+            f"{artist} — {album}: {type(e).__name__}: {e}"
+        )
 
     embed = discord.Embed(
         title=f"{album}",
@@ -1987,6 +2127,7 @@ setup_last_command(
     tree=tree,
     get_ratings=get_ratings,
     get_user_avatar=get_user_avatar,
+    get_album_details=get_album_details,
     aoty_user_exists=aoty_user_exists,
     score_color=score_color,
     score_icon=score_icon,

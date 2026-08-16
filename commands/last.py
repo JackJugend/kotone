@@ -6,6 +6,7 @@ def setup_last_command(
     tree,
     get_ratings,
     get_user_avatar,
+    get_album_details,
     aoty_user_exists,
     score_color,
     score_icon,
@@ -88,8 +89,28 @@ def setup_last_command(
         url = latest["url"]
         cover = latest["cover"]
 
+        # Dodatkowe dane albumu do użycia w embedzie.
+        year = "Brak danych"
+        genres = []
+        genres_text = "Brak danych"
+
+        try:
+            details = await asyncio.to_thread(
+                get_album_details,
+                url
+            )
+
+            year = details.get("year") or "Brak danych"
+            genres = details.get("genres") or []
+
+            if genres:
+                genres_text = ", ".join(genres)
+
+        except Exception:
+            pass
+
         embed = discord.Embed(
-                title=f"{album}",
+                title=f"{album} ({year})",
                 url=url,
                 description=f"**{artist}**",
                 color=score_color(score),
