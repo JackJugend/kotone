@@ -8,7 +8,15 @@ import unicodedata
 
 
 from datetime import datetime, timedelta
-from urllib.parse import urljoin, quote_plus, urlparse
+from urllib.parse import (
+    urljoin,
+    quote_plus,
+    urlparse,
+    urlsplit,
+    urlunsplit,
+    parse_qsl,
+    urlencode,
+)
 
 import discord
 import requests
@@ -3056,6 +3064,633 @@ def _find_exact_text_marker(soup, wanted):
     return None
 
 
+
+# ============================================================
+# FAVORITES PROFILU — ALBUMY + ARTYŚCI
+# ============================================================
+
+# AOTY pokazuje na profilu tylko jeden z dwóch widoków Favorites jako
+# domyślny. Drugi widok jest przełączany kontrolką na stronie.
+#
+# Najpierw próbujemy odczytać prawdziwy URL / parametr z HTML kontrolki.
+# Jeżeli AOTY nie umieści URL-a jawnie w HTML, mamy kilka ostrożnych
+# fallbacków. Każdy wynik jest WALIDOWANY — nie przyjmujemy strony,
+# jeżeli nadal pokazuje ten sam typ Favorites.
+_FAVORITES_SWITCH_STRATEGIES = {}
+
+
+def _normalize_small_text(value):
+
+    return " ".join(
+        str(value or "").split()
+    ).casefold()
+
+
+def _detect_profile_favorite_kind(soup):
+
+    marker = _find_exact_text_marker(
+        soup,
+        "favorites"
+    )
+
+    if marker is None:
+        return None
+
+    checked = 0
+
+    for string in marker.parent.find_all_next(
+        string=True
+    ):
+
+        text = _normalize_small_text(
+            string
+        )
+
+        if not text:
+            continue
+
+        if text == "albums":
+            return "albums"
+
+        if text == "artists":
+            return "artists"
+
+        if (
+            text.startswith("best of ")
+            or text in {
+                "recently rated",
+                "recently listened",
+                "recently liked",
+            }
+        ):
+            break
+
+        checked += 1
+
+        if checked >= 45:
+            break
+
+    return None
+
+
+def _url_with_query_value(
+    base_url,
+    key,
+    value
+):
+
+    parts = urlsplit(
+        base_url
+    )
+
+    query = dict(
+        parse_qsl(
+            parts.query,
+            keep_blank_values=True
+        )
+    )
+
+    query[key] = value
+
+    return urlunsplit((
+        parts.scheme,
+        parts.netloc,
+        parts.path,
+        urlencode(query),
+        parts.fragment,
+    ))
+
+
+def _favorites_switch_urls_from_html(
+    soup,
+    profile_url,
+    target_kind
+):
+
+    marker = _find_exact_text_marker(
+        soup,
+        "favorites"
+    )
+
+    if marker is None:
+        return []
+
+    target_tokens = {
+        target_kind,
+        target_kind.rstrip("s"),
+    }
+
+    urls = []
+    seen = set()
+
+    def add_url(value):
+
+        if not value:
+            return
+
+        value = str(value).strip()
+
+        # Odrzucamy rzeczy, które ewidentnie nie są URL-em.
+        if value.startswith((
+            "javascript:",
+            "#"
+        )):
+            return
+
+        if not (
+            value.startswith(("http://", "https://", "/", "?"))
+            or "/user/" in value
+        ):
+            return
+
+        absolute = urljoin(
+            profile_url,
+            value
+        )
+
+        if absolute in seen:
+            return
+
+        seen.add(absolute)
+        urls.append(absolute)
+
+    # Bierzemy niewielki kontener wokół nagłówka Favorites.
+    container = marker.parent
+
+    for _ in range(4):
+
+        parent = getattr(
+            container,
+            "parent",
+            None
+        )
+
+        if parent is None:
+            break
+
+        container = parent
+
+        # Nie wspinamy się do body/html, bo wtedy zaczęlibyśmy analizować
+        # wszystkie linki na profilu.
+        if getattr(container, "name", None) in {
+            "body",
+            "html"
+        }:
+            break
+
+    candidates = []
+
+    try:
+        candidates = container.find_all(
+            True,
+            limit=140
+        )
+    except Exception:
+        candidates = []
+
+    for element in candidates:
+
+        text = _normalize_small_text(
+            element.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        attrs = getattr(
+            element,
+            "attrs",
+            {}
+        ) or {}
+
+        flat_attrs = []
+
+        for key, raw_value in attrs.items():
+
+            if isinstance(
+                raw_value,
+                (list, tuple)
+            ):
+                raw_value = " ".join(
+                    str(part)
+                    for part in raw_value
+                )
+
+            flat_attrs.append(
+                f"{key}={raw_value}"
+            )
+
+        attrs_text = _normalize_small_text(
+            " ".join(flat_attrs)
+        )
+
+        relevant = (
+            any(
+                token in text
+                for token in target_tokens
+            )
+            or any(
+                token in attrs_text
+                for token in target_tokens
+            )
+        )
+
+        if not relevant:
+            continue
+
+        # Zwykły href.
+        add_url(
+            element.get("href")
+        )
+
+        # Typowe data-* atrybuty używane przez kontrolki AJAX.
+        for attr_name in (
+            "data-url",
+            "data-href",
+            "data-src",
+            "data-endpoint",
+            "data-ajax-url",
+            "data-load-url",
+        ):
+            add_url(
+                element.get(
+                    attr_name
+                )
+            )
+
+        # onclick może zawierać ścieżkę w cudzysłowie.
+        onclick = str(
+            element.get(
+                "onclick",
+                ""
+            )
+        )
+
+        for match in re.findall(
+            r"""["']([^"']+)["']""",
+            onclick
+        ):
+            add_url(
+                match
+            )
+
+        # Jeżeli kontrolka jest buttonem/inputem formularza.
+        name = element.get("name")
+        value = element.get("value")
+
+        if (
+            name
+            and value
+            and any(
+                token in _normalize_small_text(value)
+                for token in target_tokens
+            )
+        ):
+            form = element.find_parent(
+                "form"
+            )
+
+            action = (
+                form.get("action")
+                if form
+                else profile_url
+            ) or profile_url
+
+            action = urljoin(
+                profile_url,
+                action
+            )
+
+            add_url(
+                _url_with_query_value(
+                    action,
+                    name,
+                    value
+                )
+            )
+
+    # Inline JS czasem trzyma endpoint jako string.
+    for script in soup.find_all(
+        "script"
+    ):
+
+        script_text = str(
+            script.string
+            or script.get_text(
+                " ",
+                strip=False
+            )
+            or ""
+        )
+
+        lowered = script_text.casefold()
+
+        if (
+            "favorite" not in lowered
+            or not any(
+                token in lowered
+                for token in target_tokens
+            )
+        ):
+            continue
+
+        for match in re.findall(
+            r"""["']([^"']*(?:favorite|favourite)[^"']*)["']""",
+            script_text,
+            flags=re.IGNORECASE
+        ):
+            add_url(
+                match
+            )
+
+    return urls
+
+
+def _favorite_variant_fallback_urls(
+    profile_url,
+    target_kind
+):
+
+    # Wartości w liczbie pojedynczej też są spotykane w kontrolkach WWW.
+    singular = (
+        "artist"
+        if target_kind == "artists"
+        else "album"
+    )
+
+    urls = []
+
+    # Najbardziej prawdopodobne warianty GET. Nie robimy wielu requestów
+    # w ciemno — zatrzymujemy się natychmiast po poprawnie zwalidowanym.
+    for key in (
+        "favorites",
+        "favorite",
+        "fav",
+        "favorite_type",
+        "favorites_type",
+        "view",
+        "type",
+    ):
+        urls.append(
+            _url_with_query_value(
+                profile_url,
+                key,
+                target_kind
+            )
+        )
+        urls.append(
+            _url_with_query_value(
+                profile_url,
+                key,
+                singular
+            )
+        )
+
+    base = profile_url.rstrip("/")
+
+    urls.extend([
+        f"{base}/favorites/{target_kind}/",
+        f"{base}/favorites/{singular}/",
+    ])
+
+    # Dedup bez zmiany kolejności.
+    result = []
+    seen = set()
+
+    for url in urls:
+
+        if url in seen:
+            continue
+
+        seen.add(url)
+        result.append(url)
+
+    return result
+
+
+def _strategy_url_for_profile(
+    profile_url,
+    strategy,
+    target_kind
+):
+
+    strategy_type = strategy.get(
+        "type"
+    )
+
+    if strategy_type == "query":
+
+        return _url_with_query_value(
+            profile_url,
+            strategy["key"],
+            strategy["value"],
+        )
+
+    if strategy_type == "path":
+
+        base = profile_url.rstrip("/")
+
+        return (
+            f"{base}/favorites/"
+            f"{strategy['value']}/"
+        )
+
+    return None
+
+
+def _strategy_from_working_url(
+    profile_url,
+    working_url,
+    target_kind
+):
+
+    base_parts = urlsplit(
+        profile_url
+    )
+
+    work_parts = urlsplit(
+        working_url
+    )
+
+    query_pairs = dict(
+        parse_qsl(
+            work_parts.query,
+            keep_blank_values=True
+        )
+    )
+
+    for key, value in query_pairs.items():
+
+        value_normalized = _normalize_small_text(
+            value
+        )
+
+        if value_normalized in {
+            target_kind,
+            target_kind.rstrip("s"),
+        }:
+            return {
+                "type": "query",
+                "key": key,
+                "value": value,
+            }
+
+    base_path = base_parts.path.rstrip("/")
+    work_path = work_parts.path.rstrip("/")
+
+    if work_path.startswith(
+        base_path + "/favorites/"
+    ):
+        value = work_path.rsplit(
+            "/",
+            1
+        )[-1]
+
+        return {
+            "type": "path",
+            "value": value,
+        }
+
+    return None
+
+
+def _fetch_profile_favorite_variant(
+    username,
+    soup,
+    profile_url,
+    target_kind,
+    limit=5
+):
+
+    current_kind = _detect_profile_favorite_kind(
+        soup
+    )
+
+    if current_kind == target_kind:
+
+        parsed = _extract_profile_favorites(
+            soup,
+            limit=limit
+        )
+
+        return (
+            parsed.get(target_kind)
+            or []
+        )
+
+    # Jeżeli raz znaleźliśmy działający sposób przełączania, używamy go
+    # od razu dla kolejnych profili — jeden request zamiast serii prób.
+    cached_strategy = _FAVORITES_SWITCH_STRATEGIES.get(
+        target_kind
+    )
+
+    candidate_urls = []
+
+    if cached_strategy:
+
+        cached_url = _strategy_url_for_profile(
+            profile_url,
+            cached_strategy,
+            target_kind,
+        )
+
+        if cached_url:
+            candidate_urls.append(
+                cached_url
+            )
+
+    # Najpierw URL faktycznie znaleziony w HTML kontrolki AOTY.
+    candidate_urls.extend(
+        _favorites_switch_urls_from_html(
+            soup,
+            profile_url,
+            target_kind,
+        )
+    )
+
+    # Dopiero potem fallback, jeżeli strona ukrywa endpoint w JS.
+    candidate_urls.extend(
+        _favorite_variant_fallback_urls(
+            profile_url,
+            target_kind,
+        )
+    )
+
+    seen = set()
+
+    for candidate_url in candidate_urls:
+
+        if candidate_url in seen:
+            continue
+
+        seen.add(
+            candidate_url
+        )
+
+        try:
+            html = fetch_page(
+                candidate_url
+            )
+
+            candidate_soup = BeautifulSoup(
+                html,
+                "html.parser"
+            )
+
+        except AOTYRateLimit:
+            raise
+
+        except Exception:
+            continue
+
+        candidate_kind = _detect_profile_favorite_kind(
+            candidate_soup
+        )
+
+        # Najważniejsze zabezpieczenie: jeśli AOTY zignorowało parametr
+        # i zwróciło zwykły profil z tym samym widokiem, NIE akceptujemy go.
+        if candidate_kind != target_kind:
+            continue
+
+        parsed = _extract_profile_favorites(
+            candidate_soup,
+            limit=limit
+        )
+
+        items = (
+            parsed.get(target_kind)
+            or []
+        )
+
+        if not items:
+            continue
+
+        strategy = _strategy_from_working_url(
+            profile_url,
+            candidate_url,
+            target_kind,
+        )
+
+        if strategy:
+            _FAVORITES_SWITCH_STRATEGIES[
+                target_kind
+            ] = strategy
+
+        print(
+            f"[AOTY] {username}: pobrano ukryte Favorites "
+            f"({target_kind}) przez {candidate_url}"
+        )
+
+        return items
+
+    print(
+        f"[AOTY] {username}: nie udało się automatycznie "
+        f"przełączyć Favorites na {target_kind}."
+    )
+
+    return []
+
+
 def _artist_link_is_part_of_album_favorite(link):
 
     node = link
@@ -3554,6 +4189,37 @@ def get_profile_data(username):
         favorite_groups.get("artists")
         or []
     )
+
+    # Profil AOTY renderuje domyślnie tylko jeden typ Favorites.
+    # Jeżeli drugi typ nie znajduje się w HTML, bot próbuje użyć tej
+    # samej kontrolki / wariantu strony, z którego korzysta AOTY.
+    current_favorite_kind = _detect_profile_favorite_kind(
+        soup
+    )
+
+    if (
+        current_favorite_kind == "albums"
+        and not favorite_artists
+    ):
+        favorite_artists = _fetch_profile_favorite_variant(
+            username=username,
+            soup=soup,
+            profile_url=url,
+            target_kind="artists",
+            limit=5,
+        )
+
+    elif (
+        current_favorite_kind == "artists"
+        and not favorite_albums
+    ):
+        favorite_albums = _fetch_profile_favorite_variant(
+            username=username,
+            soup=soup,
+            profile_url=url,
+            target_kind="albums",
+            limit=5,
+        )
 
     return {
         "username": display_username,
