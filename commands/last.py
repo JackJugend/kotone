@@ -198,7 +198,7 @@ def setup_last_command(
         embed = discord.Embed(
                 title=f"\{score_icon(score)} {display_artist} — **{display_album}** ({year})",
                 url=url,
-                description=f"### {all_genres_text}\n### *{secondary_genres_text}*\n-# {vibes_text}\n# \⭐ **{score}**",
+                description=f"### {all_genres_text}\n-# {secondary_genres_text}\n-# *{vibes_text}*\n# \⭐ **{score}**",
                 color=score_color(score),
         )
         
