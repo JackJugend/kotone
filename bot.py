@@ -250,6 +250,19 @@ def get_user_avatar(username):
         "html.parser"
     )
 
+    print("=== USER DEBUG ===")
+    print("USERNAME:", username)
+    print("URL:", url)
+    print("TITLE:", soup.title)
+    print(
+        "H1:",
+        [
+            x.get_text(" ", strip=True)
+            for x in soup.find_all("h1")
+        ]
+)
+print("=== END DEBUG ===")
+
 
     for img in soup.find_all("img"):
 
