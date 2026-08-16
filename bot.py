@@ -1595,6 +1595,7 @@ async def send_new_rating(username, item, avatar=None):
     main_genre = "Brak danych"
     other_genres = "Brak danych"
     other_genres_text = "Brak danych"
+    all_genres_text = "Brak danych"
 
     try:
         details = await asyncio.to_thread(
@@ -1612,6 +1613,9 @@ async def send_new_rating(username, item, avatar=None):
             if len(genres) > 1:
                 other_genres = ", ".join(genres[1:])
                 other_genres_text = other_genres
+                all_genres_text = f"{main_genre}, {other_genres_text}"
+            else:
+                all_genres_text = main_genre
 
     except Exception as e:
         print(
@@ -1699,6 +1703,7 @@ async def send_changed_rating(
     main_genre = "Brak danych"
     other_genres = "Brak danych"
     other_genres_text = "Brak danych"
+    all_genres_text = "Brak danych"
 
     try:
         details = await asyncio.to_thread(
@@ -1716,6 +1721,9 @@ async def send_changed_rating(
             if len(genres) > 1:
                 other_genres = ", ".join(genres[1:])
                 other_genres_text = other_genres
+                all_genres_text = f"{main_genre}, {other_genres_text}"
+            else:
+                all_genres_text = main_genre
 
     except Exception as e:
         print(

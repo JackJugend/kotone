@@ -90,12 +90,13 @@ def setup_last_command(
         cover = latest["cover"]
 
         # Dodatkowe dane albumu do użycia w embedzie.
-        year = ""
+        year = "Brak danych"
         genres = []
-        genres_text = " "
-        main_genre = "-"
-        other_genres = " "
-        other_genres_text = " "
+        genres_text = "Brak danych"
+        main_genre = "Brak danych"
+        other_genres = "Brak danych"
+        other_genres_text = "Brak danych"
+        all_genres_text = "Brak danych"
 
         try:
             details = await asyncio.to_thread(
@@ -103,9 +104,9 @@ def setup_last_command(
                 url
             )
 
-            year = details.get("year") or " "
+            year = details.get("year") or "Brak danych"
             genres = details.get("genres") or []
-            genres_text = details.get("genres_text") or "-"
+            genres_text = details.get("genres_text") or "Brak danych"
 
             if genres:
                 main_genre = genres[0]
@@ -113,23 +114,23 @@ def setup_last_command(
                 if len(genres) > 1:
                     other_genres = ", ".join(genres[1:])
                     other_genres_text = other_genres
-
-            if other_genres_text != " ":
-                main_genre = ", ".join()
+                    all_genres_text = f"**{main_genre}**, {other_genres_text}"
+                else:
+                    all_genres_text = main_genre
 
         except Exception:
             pass
 
         embed = discord.Embed(
-                title=f"{album} ({year})",
+                title=f"{album}",
                 url=url,
                 description=f"**{artist}**",
                 color=score_color(score),
         )
 
         embed.add_field(
-                name=" ",
-                value=f"**{main_genre}** {other_genres_text}",
+                name="",
+                value=f"{all_genres_text}",
                 inline=False
         )
 
