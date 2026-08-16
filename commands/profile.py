@@ -12,7 +12,7 @@ BASE_DIR = os.path.dirname(
 AOTY_ICON = os.path.join(
     BASE_DIR,
     "assets",
-    "aoty.png"
+    "aoty.jpg"
 )
 
 
@@ -141,7 +141,7 @@ def setup_profile_command(
                 round(average_rating)
             )
 
-        file = discord.File(AOTY_ICON, filename="aoty.png")
+        file = discord.File(AOTY_ICON, filename="aoty.jpg")
 
         embed = discord.Embed(
             title=display_username,
