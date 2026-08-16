@@ -188,13 +188,13 @@ def setup_last_command(
                 inline=True
         
         )
-                embed.add_field(
+        embed.add_field(
                 name=f"👥\uFE0E **{aoty_user_score}**/{ratings_count}",
                 value=" ",
                 inline=True
 
         )
-                embed.add_field(
+        embed.add_field(
                 name=f"📅\uFE0E **{year_ranking_text}**",
                 value=" ",
                 inline=True
