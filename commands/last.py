@@ -129,7 +129,7 @@ def setup_last_command(
 
         embed.add_field(
                 name=" ",
-                value=f"**{main_genre}**, {other_genres_text}",
+                value=f"**{main_genre}** {other_genres_text}",
                 inline=False
         )
 
