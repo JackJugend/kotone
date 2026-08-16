@@ -172,6 +172,9 @@ def extract_album_id(href: str) -> str | None:
 _USER_SEARCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _USER_SEARCH_CACHE_TTL = 45
 
+_ARTIST_SEARCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_ARTIST_SEARCH_CACHE_TTL = 90
+
 
 def _parse_user_search_results(soup: BeautifulSoup, query: str) -> list[dict]:
     candidates: dict[str, dict] = {}
@@ -292,52 +295,59 @@ def _artist_direct_value_to_url(value: str) -> str | None:
     return f"{BASE_URL}/artist/{path_part}/"
 
 
-def search_aoty_artists(query: str, limit: int = 10) -> list[dict]:
-    query = str(query or "").strip()
-
-    if not query:
-        return []
-
-    direct_url = _artist_direct_value_to_url(query)
-
-    if direct_url:
-        try:
-            soup = BeautifulSoup(fetch_page(direct_url), "html.parser")
-            heading = soup.find("h1")
-            name = heading.get_text(" ", strip=True) if heading else query
-            return [{
-                "name": name,
-                "url": direct_url,
-                "value": "aoty_artist:" + direct_url.split("/artist/", 1)[1].strip("/"),
-                "score": 1.0,
-            }]
-        except Exception:
-            return []
-
-    search_url = f"{BASE_URL}/search/artists/?q={quote_plus(query)}"
-    soup = BeautifulSoup(fetch_page(search_url), "html.parser")
+def _artist_search_candidates_from_soup(
+    soup: BeautifulSoup,
+) -> dict[str, str]:
+    """Collect artist profile links from an AOTY search-result page."""
     candidates: dict[str, str] = {}
 
     canonical = soup.find(
         "link",
-        rel=lambda value: value and "canonical" in str(value).casefold(),
+        rel=lambda value: (
+            value
+            and "canonical" in str(value).casefold()
+        ),
     )
 
     if canonical:
-        canonical_url = canonical.get("href", "")
+        canonical_url = canonical.get(
+            "href",
+            "",
+        )
+
         if "/artist/" in canonical_url:
             heading = soup.find("h1")
-            name = heading.get_text(" ", strip=True) if heading else query
-            candidates[canonical_url] = name
+            name = (
+                heading.get_text(" ", strip=True)
+                if heading
+                else ""
+            )
 
-    for link in soup.select('a[href*="/artist/"]'):
-        href = link.get("href", "")
-        match = re.search(r"/artist/(\d+(?:-[^/?#]+)?)/?", href)
+            if name:
+                candidates[
+                    canonical_url
+                ] = name
+
+    for link in soup.select(
+        'a[href*="/artist/"]'
+    ):
+        href = link.get(
+            "href",
+            "",
+        )
+
+        match = re.search(
+            r"/artist/(\d+(?:-[^/?#]+)?)/?",
+            href,
+        )
 
         if not match:
             continue
 
-        name = link.get_text(" ", strip=True)
+        name = link.get_text(
+            " ",
+            strip=True,
+        )
 
         if not name or name.casefold() in {
             "artists",
@@ -348,21 +358,383 @@ def search_aoty_artists(query: str, limit: int = 10) -> list[dict]:
         }:
             continue
 
-        artist_url = f"{BASE_URL}/artist/{match.group(1)}/"
-        candidates.setdefault(artist_url, name)
+        artist_url = (
+            f"{BASE_URL}/artist/"
+            f"{match.group(1)}/"
+        )
+
+        candidates.setdefault(
+            artist_url,
+            name,
+        )
+
+    return candidates
+
+
+def _artist_search_query_variants(
+    query: str,
+) -> list[str]:
+    """Useful query variants for AOTY's search.
+
+    AOTY's canonical display name can differ from an AKA word order, e.g.
+    "Sheena Ringo" (AKA) vs "Ringo Sheena" (display name).  Trying the reversed
+    two-word form lets us reach the artist page, where the real AKA list is
+    then verified.
+    """
+    query = " ".join(
+        str(query or "").split()
+    )
+
+    variants = [
+        query,
+    ]
+
+    parts = query.split()
+
+    if len(parts) == 2:
+        reversed_query = (
+            f"{parts[1]} {parts[0]}"
+        )
+
+        if (
+            normalize_match_text(
+                reversed_query
+            )
+            != normalize_match_text(
+                query
+            )
+        ):
+            variants.append(
+                reversed_query
+            )
+
+    return variants
+
+
+def _artist_search_score(
+    query: str,
+    name: str,
+    akas: list[str],
+) -> tuple[float, str | None]:
+    """Rank by the best match among canonical name AND AOTY AKAs."""
+    normalized_query = normalize_match_text(
+        query
+    )
+
+    best_score = fuzzy_match_score(
+        query,
+        name,
+    )
+
+    matched_aka = None
+
+    for aka in akas:
+        score = fuzzy_match_score(
+            query,
+            aka,
+        )
+
+        normalized_aka = normalize_match_text(
+            aka
+        )
+
+        # Exact AKA should always beat a merely fuzzy canonical-name match.
+        if (
+            normalized_query
+            and normalized_aka == normalized_query
+        ):
+            score = max(
+                score,
+                1.25,
+            )
+
+        elif (
+            normalized_query
+            and normalized_query in normalized_aka
+        ):
+            score = max(
+                score,
+                1.05,
+            )
+
+        if score > best_score:
+            best_score = score
+            matched_aka = aka
+
+    return (
+        best_score,
+        matched_aka,
+    )
+
+
+def search_aoty_artists(
+    query: str,
+    limit: int = 10,
+) -> list[dict]:
+    """Search AOTY artists by canonical name OR AOTY Also Known As values."""
+    query = str(
+        query or ""
+    ).strip()
+
+    if not query:
+        return []
+
+    direct_url = _artist_direct_value_to_url(
+        query
+    )
+
+    if direct_url:
+        try:
+            soup = BeautifulSoup(
+                fetch_page(
+                    direct_url
+                ),
+                "html.parser",
+            )
+
+            heading = soup.find(
+                "h1"
+            )
+
+            name = (
+                heading.get_text(
+                    " ",
+                    strip=True,
+                )
+                if heading
+                else query
+            )
+
+            metadata = _extract_artist_metadata(
+                soup
+            )
+
+            return [{
+                "name": name,
+                "url": direct_url,
+                "value": (
+                    "aoty_artist:"
+                    + direct_url
+                    .split(
+                        "/artist/",
+                        1,
+                    )[1]
+                    .strip("/")
+                ),
+                "score": 1.0,
+                "akas": metadata.get(
+                    "akas",
+                    [],
+                ),
+                "matched_aka": None,
+            }]
+
+        except Exception:
+            return []
+
+    cache_key = normalize_match_text(
+        query
+    )
+
+    now = time.monotonic()
+
+    cached = _ARTIST_SEARCH_CACHE.get(
+        cache_key
+    )
+
+    if (
+        cached
+        and now - cached[0]
+        < _ARTIST_SEARCH_CACHE_TTL
+    ):
+        return cached[1][
+            :max(
+                1,
+                int(limit),
+            )
+        ]
+
+    candidates: dict[str, str] = {}
+
+    # --------------------------------------------------------
+    # 1. Native artist search + useful name-order variant.
+    # --------------------------------------------------------
+    for variant in _artist_search_query_variants(
+        query
+    ):
+        search_url = (
+            f"{BASE_URL}/search/artists/"
+            f"?q={quote_plus(variant)}"
+        )
+
+        try:
+            soup = BeautifulSoup(
+                fetch_page(
+                    search_url
+                ),
+                "html.parser",
+            )
+        except AOTYRateLimit:
+            raise
+        except Exception:
+            continue
+
+        found = _artist_search_candidates_from_soup(
+            soup
+        )
+
+        for artist_url, name in found.items():
+            candidates.setdefault(
+                artist_url,
+                name,
+            )
+
+    # --------------------------------------------------------
+    # 2. Album-search fallback.
+    #
+    # Some aliases are visible on release pages/search results even when
+    # /search/artists does not return the artist for that AKA.
+    # --------------------------------------------------------
+    if len(candidates) < max(3, int(limit)):
+        for variant in _artist_search_query_variants(
+            query
+        ):
+            search_url = (
+                f"{BASE_URL}/search/albums/"
+                f"?q={quote_plus(variant)}"
+            )
+
+            try:
+                soup = BeautifulSoup(
+                    fetch_page(
+                        search_url
+                    ),
+                    "html.parser",
+                )
+            except AOTYRateLimit:
+                raise
+            except Exception:
+                continue
+
+            found = _artist_search_candidates_from_soup(
+                soup
+            )
+
+            for artist_url, name in found.items():
+                candidates.setdefault(
+                    artist_url,
+                    name,
+                )
+
+            if len(candidates) >= max(
+                6,
+                int(limit),
+            ):
+                break
+
+    # --------------------------------------------------------
+    # 3. Verify/rank with the REAL AOTY AKA list from artist profiles.
+    #
+    # Only inspect a modest number of candidates to avoid hammering AOTY
+    # during Discord autocomplete.
+    # --------------------------------------------------------
+    prelim = sorted(
+        candidates.items(),
+        key=lambda pair: fuzzy_match_score(
+            query,
+            pair[1],
+        ),
+        reverse=True,
+    )[:12]
 
     ranked = []
 
-    for artist_url, name in candidates.items():
+    for artist_url, fallback_name in prelim:
+        name = fallback_name
+        akas = []
+
+        try:
+            artist_soup = BeautifulSoup(
+                fetch_page(
+                    artist_url
+                ),
+                "html.parser",
+            )
+
+            heading = artist_soup.find(
+                "h1"
+            )
+
+            if heading:
+                name = heading.get_text(
+                    " ",
+                    strip=True,
+                )
+
+            metadata = _extract_artist_metadata(
+                artist_soup
+            )
+
+            akas = list(
+                metadata.get(
+                    "akas",
+                    [],
+                )
+            )
+
+        except AOTYRateLimit:
+            # Keep already-found search results rather than failing the whole
+            # autocomplete just because AKA enrichment got rate-limited.
+            pass
+
+        except Exception:
+            pass
+
+        score, matched_aka = _artist_search_score(
+            query,
+            name,
+            akas,
+        )
+
         ranked.append({
             "name": name,
             "url": artist_url,
-            "value": "aoty_artist:" + artist_url.split("/artist/", 1)[1].strip("/"),
-            "score": fuzzy_match_score(query, name),
+            "value": (
+                "aoty_artist:"
+                + artist_url
+                .split(
+                    "/artist/",
+                    1,
+                )[1]
+                .strip("/")
+            ),
+            "score": score,
+            "akas": akas,
+            "matched_aka": matched_aka,
         })
 
-    ranked.sort(key=lambda item: item["score"], reverse=True)
-    return ranked[:max(1, int(limit))]
+    ranked.sort(
+        key=lambda item: item[
+            "score"
+        ],
+        reverse=True,
+    )
+
+    results = ranked[
+        :max(
+            1,
+            int(limit),
+        )
+    ]
+
+    _ARTIST_SEARCH_CACHE[
+        cache_key
+    ] = (
+        now,
+        results,
+    )
+
+    return results
 
 
 def resolve_artist(query: str) -> dict | None:
@@ -390,9 +762,23 @@ def resolve_artist(query: str) -> dict | None:
 
     best = candidates[0]
 
+    matched_aka = (
+        best.get(
+            "matched_aka"
+        )
+        or ""
+    )
+
     if (
         best["score"] < 0.28
-        and normalize_match_text(query) not in normalize_match_text(best["name"])
+        and normalize_match_text(query)
+        not in normalize_match_text(
+            best["name"]
+        )
+        and normalize_match_text(query)
+        not in normalize_match_text(
+            matched_aka
+        )
     ):
         return None
 
@@ -835,6 +1221,87 @@ def _extract_artist_ratings_count(
     return None
 
 
+
+def _extract_artist_followers(
+    soup: BeautifulSoup,
+) -> str | None:
+    """Read artist followers from the AOTY artist-page header.
+
+    Current AOTY layout:
+        Follow
+        184 Followers
+
+    The parser is anchored near the Follow control first so it does not grab
+    unrelated follower text from another part of the page.
+    """
+    followers_pattern = re.compile(
+        r"^\s*([\d][\d,.]*(?:\s*[KM])?)\s+Followers\s*$",
+        flags=re.IGNORECASE,
+    )
+
+    # 1. Strongest path: find the Follow control and inspect nearby text.
+    for string in soup.find_all(string=True):
+        if " ".join(str(string).split()).casefold() != "follow":
+            continue
+
+        checked = 0
+
+        for next_string in string.parent.find_all_next(
+            string=True
+        ):
+            value = " ".join(
+                str(next_string)
+                .replace("\xa0", " ")
+                .split()
+            )
+
+            if not value:
+                continue
+
+            match = followers_pattern.fullmatch(
+                value
+            )
+
+            if match:
+                return re.sub(
+                    r"\s+",
+                    "",
+                    match.group(1),
+                )
+
+            checked += 1
+
+            if checked >= 12:
+                break
+
+    # 2. Strict whole-page fallback.
+    page_text = " ".join(
+        soup.get_text(
+            " ",
+            strip=True,
+        )
+        .replace("\xa0", " ")
+        .split()
+    )
+
+    match = re.search(
+        r"\bFollow\b.{0,80}?"
+        r"([\d][\d,.]*(?:\s*[KM])?)"
+        r"\s+Followers\b",
+        page_text,
+        flags=re.IGNORECASE,
+    )
+
+    if match:
+        return re.sub(
+            r"\s+",
+            "",
+            match.group(1),
+        )
+
+    return None
+
+
 def _extract_artist_metadata(
     soup: BeautifulSoup,
 ) -> dict:
@@ -911,6 +1378,12 @@ def _extract_artist_metadata(
         ),
         "artist_ratings_count": (
             _extract_artist_ratings_count(
+                soup
+            )
+            or "0"
+        ),
+        "artist_followers": (
+            _extract_artist_followers(
                 soup
             )
             or "0"

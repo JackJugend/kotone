@@ -197,10 +197,18 @@ def _artist_header_text(discography):
         or "0"
     )
 
+    followers = (
+        discography.get(
+            "artist_followers"
+        )
+        or "0"
+    )
+
     lines = [
         (
             f"⭐ **User Score: {score}**"
             f"  •  **{ratings_count} ratings**"
+            f"  •  **{followers} Followers**"
         )
     ]
 
@@ -865,15 +873,37 @@ def setup_artist_command(
         except Exception:
             return []
 
-        return [
-            discord.app_commands.Choice(
-                name=display_romanized_name(
-                    item["name"]
-                )[:100],
-                value=item["value"][:100],
+        choices = []
+
+        for item in results[:10]:
+            display_name = display_romanized_name(
+                item["name"]
             )
-            for item in results[:10]
-        ]
+
+            matched_aka = item.get(
+                "matched_aka"
+            )
+
+            if matched_aka:
+                aka_display = display_romanized_name(
+                    matched_aka
+                )
+
+                label = (
+                    f"{display_name} — AKA: "
+                    f"{aka_display}"
+                )
+            else:
+                label = display_name
+
+            choices.append(
+                discord.app_commands.Choice(
+                    name=label[:100],
+                    value=item["value"][:100],
+                )
+            )
+
+        return choices
 
     @tree.command(
         name="artist",
@@ -889,8 +919,6 @@ def setup_artist_command(
         interaction: discord.Interaction,
         artist: str,
     ):
-        # Nie ma już slash-option "format".
-        # Format i rok zmienia się wyłącznie dropdownami pod embedem.
         await interaction.response.defer()
 
         try:

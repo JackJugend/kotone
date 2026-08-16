@@ -55,14 +55,29 @@ async def setup_hook() -> None:
     """Guild-sync commands so new/changed commands appear immediately."""
     guild = discord.Object(id=GUILD_ID)
 
+    # Force-remove the previous guild schema first. This is important after
+    # deleting slash-command options (e.g. the old /artist "format" field),
+    # because Discord can otherwise keep showing a stale command definition.
+    tree.clear_commands(
+        guild=guild
+    )
+    await tree.sync(
+        guild=guild
+    )
+
     # Commands are declared as global objects in discord.py and copied only to
-    # the configured development/production guild. This keeps /check and all
-    # other commands on that server and gives near-immediate propagation.
-    tree.copy_global_to(guild=guild)
-    synced = await tree.sync(guild=guild)
+    # the configured guild, so the fresh schema appears almost immediately.
+    tree.copy_global_to(
+        guild=guild
+    )
+    synced = await tree.sync(
+        guild=guild
+    )
 
     # Remove old global copies left by earlier Kotone versions.
-    tree.clear_commands(guild=None)
+    tree.clear_commands(
+        guild=None
+    )
     await tree.sync()
 
     print(
