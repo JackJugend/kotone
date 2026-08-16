@@ -1015,121 +1015,83 @@ def parse_generic(soup):
 # POBIERANIE OCEN
 # ============================================================
 
-def get_ratings(username):
+def get_ratings(username, max_pages=5):
 
-    url = (
-        f"{BASE_URL}/user/"
-        f"{username}/ratings/"
-    )
+    all_ratings = []
+    seen = set()
 
-    html = fetch_page(
-        url
-    )
+    for page in range(1, max_pages + 1):
 
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
+        if page == 1:
+            url = f"{BASE_URL}/user/{username}/ratings/"
+        else:
+            url = f"{BASE_URL}/user/{username}/ratings/{page}/"
 
+        html = fetch_page(url)
 
-    results = {}
-
-
-    # ========================================================
-    # NORMALNY PARSER
-    # ========================================================
-
-    blocks = soup.select(
-        ".albumBlock"
-    )
-
-    for block in blocks:
-
-        item = parse_album_block(
-            block
+        soup = BeautifulSoup(
+            html,
+            "html.parser"
         )
 
-        if not item:
-            continue
+        results = {}
 
-        results[
-            item["album_id"]
-        ] = item
+        for block in soup.select(".albumBlock"):
 
+            item = parse_album_block(block)
 
-    # ========================================================
-    # FALLBACK — ZAWSZE
-    # ========================================================
+            if not item:
+                continue
 
-    for item in parse_generic(
-        soup
-    ):
+            results[item["album_id"]] = item
 
-        album_id = item[
-            "album_id"
-        ]
+        for item in parse_generic(soup):
 
-        if album_id not in results:
+            album_id = item["album_id"]
 
-            results[
-                album_id
-            ] = item
+            if album_id not in results:
+                results[album_id] = item
 
+        page_ratings = []
 
-    # ========================================================
-    # KOLEJNOŚĆ ZE STRONY
-    # ========================================================
+        added = set()
 
-    ratings = []
+        for link in soup.select('a[href*="/album/"]'):
 
-    added = set()
-
-
-    for link in soup.select(
-        'a[href*="/album/"]'
-    ):
-
-        album_id = extract_album_id(
-            link.get(
-                "href",
-                ""
-            )
-        )
-
-        if not album_id:
-            continue
-
-        if album_id not in results:
-            continue
-
-        if album_id in added:
-            continue
-
-        ratings.append(
-            results[
-                album_id
-            ]
-        )
-
-        added.add(
-            album_id
-        )
-
-
-    # Wszystko, czego nie udało się umieścić
-    # według kolejności linków.
-    for album_id, item in (
-        results.items()
-    ):
-
-        if album_id not in added:
-
-            ratings.append(
-                item
+            album_id = extract_album_id(
+                link.get("href", "")
             )
 
+            if not album_id:
+                continue
 
-    return ratings
+            if album_id not in results:
+                continue
+
+            if album_id in added:
+                continue
+
+            page_ratings.append(
+                results[album_id]
+            )
+
+            added.add(album_id)
+
+        if not page_ratings:
+            break
+
+        for item in page_ratings:
+
+            album_id = item["album_id"]
+
+            if album_id in seen:
+                continue
+
+            seen.add(album_id)
+
+            all_ratings.append(item)
+
+    return all_ratings
 
 
 # ============================================================
