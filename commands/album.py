@@ -243,4 +243,9 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             rating_infos=rating_infos,
         )
 
-        await interaction.followup.send(embed=embed, view=view)
+        message = await interaction.followup.send(
+            embed=embed,
+            view=view,
+            wait=True,
+        )
+        view.bind_message(message)

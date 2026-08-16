@@ -155,7 +155,11 @@ class RatingMonitor:
         )
 
         try:
-            await channel.send(embed=embed, view=view)
+            message = await channel.send(
+                embed=embed,
+                view=view,
+            )
+            view.bind_message(message)
             print(
                 f"[DISCORD] Wysłano: {variables.artist} — "
                 f"{variables.album} ({variables.score}/100)"
@@ -217,7 +221,11 @@ class RatingMonitor:
         )
 
         try:
-            await channel.send(embed=embed, view=view)
+            message = await channel.send(
+                embed=embed,
+                view=view,
+            )
+            view.bind_message(message)
             print(
                 f"[DISCORD] Wysłano zmianę: {variables.artist} — "
                 f"{variables.album} {old_score} → {variables.score}"

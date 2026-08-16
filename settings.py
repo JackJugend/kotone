@@ -15,10 +15,17 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 BASE_URL = "https://www.albumoftheyear.org"
 
-# Asset używany w footerach embedów.
+# Ikona AOTY do footerów embedów.
+#
+# Używamy publicznego faviconu AOTY zamiast attachment://aoty.jpg.
+# Dzięki temu po przełączeniu embeda buttonem lokalny plik nie zostaje
+# jako osobny, ogromny obrazek nad embedem.
 AOTY_ICON = os.path.join(BASE_DIR, "assets", "aoty.jpg")
 AOTY_ICON_FILENAME = "aoty.jpg"
-AOTY_ICON_ATTACHMENT = "attachment://aoty.jpg"
+AOTY_ICON_URL = "https://cdn.albumoftheyear.org/images/favicon.png"
+
+# Zachowujemy starą nazwę zmiennej dla kompatybilności istniejących komend.
+AOTY_ICON_ATTACHMENT = AOTY_ICON_URL
 
 DEFAULT_DATA_FILE = os.path.join(BASE_DIR, "data.json")
 DATA_DIR = os.getenv("DATA_DIR")

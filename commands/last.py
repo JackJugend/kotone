@@ -7,7 +7,6 @@ import aoty
 from settings import AOTY_ICON_ATTACHMENT, RATING_FORMATS
 from shared import (
     build_release_variables,
-    make_aoty_file,
     rating_flags_text,
     score_color,
     score_icon,
@@ -170,8 +169,9 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             main_embed=embed,
         )
 
-        await interaction.followup.send(
+        message = await interaction.followup.send(
             embed=embed,
-            file=make_aoty_file(),
             view=view,
+            wait=True,
         )
+        view.bind_message(message)

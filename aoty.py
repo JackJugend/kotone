@@ -771,7 +771,7 @@ def _extract_aoty_user_score(soup: BeautifulSoup) -> str | None:
 
 
 def _normalize_count(value: str | None) -> str | None:
-    """Normalize a displayed ratings count without changing its meaning."""
+    """Normalize the AOTY count while preserving commas / K / M."""
     if not value:
         return None
 
@@ -781,123 +781,82 @@ def _normalize_count(value: str | None) -> str | None:
     return value or None
 
 
-def _count_from_text(
-    text: str | None,
-    *,
-    allow_generic: bool = True,
-) -> str | None:
-    """Extract a count from text that explicitly refers to user ratings."""
-    if not text:
-        return None
-
-    normalized = " ".join(
-        str(text)
-        .replace("\xa0", " ")
-        .split()
-    )
-
-    patterns = [
-        r"\bBased\s+on\s+([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b",
-        r"\bUser\s*Score\s*\(\s*([\d][\d,.]*(?:\s*[KM])?)\s*\)",
-    ]
-
-    if allow_generic:
-        # Negative lookahead prevents a yearly rank such as
-        # "2024 Ratings: #96" from being mistaken for a count.
-        patterns.append(
-            r"\b([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b(?!\s*:)"
-        )
-
-    for pattern in patterns:
-        match = re.search(
-            pattern,
-            normalized,
-            flags=re.IGNORECASE,
-        )
-
-        if match:
-            return _normalize_count(
-                match.group(1)
-            )
-
-    return None
-
-
 def _extract_ratings_count(soup: BeautifulSoup) -> str | None:
-    """Extract the current number of AOTY user ratings for a release.
+    """Read ONLY the count belonging to the release's User Score.
 
-    Current AOTY overview pages visually show e.g.:
+    AOTY currently renders the section in the form:
 
         User Score
-        79
-        Based on 2,096 ratings
+        61
+        Based on 574 ratings
 
-    Depending on the page/layout, those words may be split across several
-    tags. We therefore inspect the User Score neighborhood first.
+    The previous broad fallback could accidentally pick another number from
+    the page (for example a song/user count).  This version anchors the search
+    to ``User Score`` and requires the explicit ``Based on ... ratings`` text.
     """
 
+    count_pattern = re.compile(
+        r"\bBased\s+on\s+"
+        r"([\d][\d,.]*(?:\s*[KM])?)"
+        r"\s+ratings\b",
+        flags=re.IGNORECASE,
+    )
+
     # ------------------------------------------------------------------
-    # 1. Strings immediately following the "User Score" label.
+    # 1. Exact User Score marker -> nearby strings.
+    #
+    # Works both for:
+    #   "Based on 574 ratings"
+    # and split DOM:
+    #   "Based on" + "574" + "ratings"
     # ------------------------------------------------------------------
     for string in soup.find_all(string=True):
-        marker_text = " ".join(
-            str(string).split()
-        ).casefold()
-
-        if marker_text != "user score":
+        if " ".join(str(string).split()).casefold() != "user score":
             continue
 
-        nearby_parts = []
+        parts = []
         checked = 0
 
-        for next_string in string.parent.find_all_next(
-            string=True
-        ):
-            part = " ".join(
+        for next_string in string.parent.find_all_next(string=True):
+            value = " ".join(
                 str(next_string)
                 .replace("\xa0", " ")
                 .split()
             )
 
-            if not part:
+            if not value:
                 continue
 
-            nearby_parts.append(
-                part
-            )
+            # Another score block means we have left the User Score area.
+            if (
+                checked > 0
+                and value.casefold() in {
+                    "critic score",
+                    "track ratings",
+                    "popular user reviews",
+                    "user reviews",
+                }
+            ):
+                break
 
-            # Complete fragment, e.g. "2,096 ratings".
-            count = _count_from_text(
-                part,
-                allow_generic=True,
-            )
+            parts.append(value)
 
-            if count:
-                return count
+            # Only a small rolling window close to User Score is accepted.
+            neighborhood = " ".join(parts[-10:])
+            match = count_pattern.search(neighborhood)
 
-            # When siblings are split, require the strong wording
-            # "Based on ... ratings" to avoid treating the User Score
-            # itself as a rating count.
-            neighborhood = " ".join(
-                nearby_parts[-12:]
-            )
-
-            count = _count_from_text(
-                neighborhood,
-                allow_generic=False,
-            )
-
-            if count:
-                return count
+            if match:
+                return _normalize_count(match.group(1))
 
             checked += 1
-
-            # The count is close to User Score. Do not wander into reviews.
-            if checked >= 35:
+            if checked >= 28:
                 break
 
     # ------------------------------------------------------------------
-    # 2. Parent/ancestor area around User Score.
+    # 2. Closest ancestors of the User Score marker.
+    #
+    # This catches layouts where the count is hidden in nested spans but
+    # still belongs to one score component.
     # ------------------------------------------------------------------
     for string in soup.find_all(string=True):
         if " ".join(str(string).split()).casefold() != "user score":
@@ -905,41 +864,27 @@ def _extract_ratings_count(soup: BeautifulSoup) -> str | None:
 
         node = string.parent
 
-        for _ in range(7):
-            if not node:
+        for _ in range(5):
+            if node is None:
                 break
 
             node_text = " ".join(
-                node.get_text(
-                    " ",
-                    strip=True,
-                )
+                node.get_text(" ", strip=True)
                 .replace("\xa0", " ")
                 .split()
             )
 
-            count = _count_from_text(
-                node_text,
-                allow_generic=False,
-            )
+            # Do not accept an ancestor that clearly contains another score
+            # section too — that container is already too broad.
+            lower = node_text.casefold()
+            if "critic score" not in lower or "user score" not in lower:
+                match = count_pattern.search(node_text)
+                if match:
+                    return _normalize_count(match.group(1))
 
-            if count:
-                return count
-
-            try:
-                descendants = node.find_all(
-                    True,
-                    limit=100,
-                )
-            except Exception:
-                descendants = []
-
-            for element in descendants:
-                attrs = getattr(
-                    element,
-                    "attrs",
-                    {},
-                ) or {}
+            # Accessibility attributes sometimes contain "574 ratings".
+            for element in node.find_all(True, limit=80):
+                attrs = getattr(element, "attrs", {}) or {}
 
                 for attr_name in (
                     "aria-label",
@@ -947,106 +892,67 @@ def _extract_ratings_count(soup: BeautifulSoup) -> str | None:
                     "data-title",
                     "data-label",
                 ):
-                    count = _count_from_text(
-                        attrs.get(attr_name),
-                        allow_generic=True,
+                    attr_value = " ".join(
+                        str(attrs.get(attr_name) or "")
+                        .replace("\xa0", " ")
+                        .split()
                     )
 
-                    if count:
-                        return count
+                    # Attribute fallback still needs explicit ratings wording.
+                    attr_match = re.search(
+                        r"\b([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b",
+                        attr_value,
+                        flags=re.IGNORECASE,
+                    )
+
+                    if attr_match:
+                        return _normalize_count(attr_match.group(1))
 
             node = node.parent
 
     # ------------------------------------------------------------------
-    # 3. Direct scan for an element that itself says "2,096 ratings".
-    # ------------------------------------------------------------------
-    for element in soup.find_all(
-        ["a", "span", "div", "p", "small"]
-    ):
-        element_text = " ".join(
-            element.get_text(
-                " ",
-                strip=True,
-            )
-            .replace("\xa0", " ")
-            .split()
-        )
-
-        if "rating" not in element_text.casefold():
-            continue
-
-        count = _count_from_text(
-            element_text,
-            allow_generic=True,
-        )
-
-        if count:
-            return count
-
-    # ------------------------------------------------------------------
-    # 4. Whole-page strong fallbacks.
+    # 3. Strict whole-page fallback.
+    #
+    # Crucially this still starts at User Score.  There is NO generic
+    # "first N ratings anywhere on the page" fallback anymore.
     # ------------------------------------------------------------------
     page_text = " ".join(
-        soup.get_text(
-            " ",
-            strip=True,
-        )
+        soup.get_text(" ", strip=True)
         .replace("\xa0", " ")
         .split()
     )
 
-    patterns = (
-        r"\bUser\s*Score\b.{0,160}?\bBased\s+on\s+"
-        r"([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b",
-
+    match = re.search(
+        r"\bUser\s*Score\b"
+        r".{0,120}?"
         r"\bBased\s+on\s+"
-        r"([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b",
-
-        r"\bUser\s*Score\s*\(\s*"
-        r"([\d][\d,.]*(?:\s*[KM])?)\s*\)",
+        r"([\d][\d,.]*(?:\s*[KM])?)"
+        r"\s+ratings\b",
+        page_text,
+        flags=re.IGNORECASE,
     )
 
-    for pattern in patterns:
-        match = re.search(
-            pattern,
-            page_text,
-            flags=re.IGNORECASE,
-        )
-
-        if match:
-            return _normalize_count(
-                match.group(1)
-            )
+    if match:
+        return _normalize_count(match.group(1))
 
     # ------------------------------------------------------------------
-    # 5. Last-resort HTML/attribute scan.
+    # 4. Raw HTML fallback, still anchored to User Score.
     # ------------------------------------------------------------------
-    source = str(soup).replace(
-        "\xa0",
-        " ",
+    source = str(soup).replace("\xa0", " ")
+
+    match = re.search(
+        r"User\s*Score"
+        r".{0,1800}?"
+        r"Based\s+on"
+        r".{0,500}?"
+        r"([\d][\d,.]*(?:\s*[KM])?)"
+        r"(?:&nbsp;|\s|<[^>]+>)*ratings",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
     )
 
-    patterns = (
-        r"Based\s+on[^<]{0,80}"
-        r"([\d][\d,.]*(?:\s*[KM])?)"
-        r"(?:&nbsp;|\s)*ratings",
-
-        r"""(?:aria-label|title)=["'][^"']*?"""
-        r"([\d][\d,.]*(?:\s*[KM])?)"
-        r"\s+ratings(?!\s*:)[^\"']*[\"']",
-    )
-
-    for pattern in patterns:
-        match = re.search(
-            pattern,
-            source,
-            flags=re.IGNORECASE,
-        )
-
-        if match:
-            return _normalize_count(
-                match.group(1)
-            )
+    if match:
+        return _normalize_count(match.group(1))
 
     return None
 
@@ -1893,35 +1799,99 @@ def get_recent_ratings(
 # Per-user release page: review, track ratings, like
 # ---------------------------------------------------------------------------
 
-def _fetch_user_release_page(username: str, album_id: str, album_url: str | None):
-    if not album_url or "/album/" not in str(album_url):
-        return None, None
+def _fetch_user_release_page(
+    username: str,
+    album_id: str,
+    album_url: str | None,
+    user_release_url: str | None = None,
+):
+    """Fetch the canonical /user/<name>/album/<release>/ page.
 
-    release_path = str(album_url).split("/album/", 1)[1].strip("/")
-    if not release_path:
-        return None, None
+    The public album URL and the user-rating URL do NOT use the same slug.
+    Example:
+        /album/1225702-kiiikiii-uncut-gem.php
+    vs:
+        /user/<name>/album/1225702-uncut-gem/
 
-    user_url = f"{BASE_URL}/user/{username}/album/{release_path}/"
-    response = session.get(user_url, timeout=30)
+    Therefore the exact URL captured from the user's rating card is preferred.
+    """
 
-    if response.status_code == 429:
-        retry_after = response.headers.get("Retry-After")
-        message = "HTTP 429 - za dużo zapytań"
-        if retry_after:
-            message += f" (Retry-After: {retry_after}s)"
-        raise AOTYRateLimit(message)
+    username = str(username).strip()
+    album_id = str(album_id).strip()
 
-    if response.status_code == 404:
-        return None, user_url
+    candidates = []
 
-    response.raise_for_status()
-    final_url = response.url.casefold()
-    required_path = f"/user/{str(username).casefold()}/album/"
+    def add_candidate(url):
+        if not url:
+            return
 
-    if required_path not in final_url or str(album_id) not in final_url:
-        return None, user_url
+        absolute = urljoin(BASE_URL, str(url).strip())
 
-    return BeautifulSoup(response.text, "html.parser"), response.url
+        if absolute not in candidates:
+            candidates.append(absolute)
+
+    # Best source: exact /user/.../album/... href from AOTY itself.
+    add_candidate(user_release_url)
+
+    # AOTY may redirect this short ID-only route to its canonical user URL.
+    add_candidate(
+        f"{BASE_URL}/user/{username}/album/{album_id}/"
+    )
+
+    # Keep the old derived URL only as a final compatibility fallback.
+    if album_url and "/album/" in str(album_url):
+        release_path = str(album_url).split("/album/", 1)[1].strip("/")
+        if release_path:
+            release_path = re.sub(
+                r"\.php$",
+                "",
+                release_path,
+                flags=re.IGNORECASE,
+            )
+            add_candidate(
+                f"{BASE_URL}/user/{username}/album/{release_path}/"
+            )
+
+    last_url = None
+
+    for candidate in candidates:
+        last_url = candidate
+
+        response = session.get(
+            candidate,
+            timeout=30,
+        )
+
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            message = "HTTP 429 - za dużo zapytań"
+            if retry_after:
+                message += f" (Retry-After: {retry_after}s)"
+            raise AOTYRateLimit(message)
+
+        if response.status_code == 404:
+            continue
+
+        response.raise_for_status()
+
+        final_url = response.url
+        final_lower = final_url.casefold()
+        required_user = f"/user/{username.casefold()}/album/"
+
+        # AOTY sometimes redirects an invalid user-album URL to a generic
+        # album/profile page. Accept only the correct user's album page.
+        if required_user not in final_lower:
+            continue
+
+        if str(album_id) not in final_lower:
+            continue
+
+        return BeautifulSoup(
+            response.text,
+            "html.parser",
+        ), final_url
+
+    return None, last_url
 
 
 def _extract_user_score_from_user_release_page(soup: BeautifulSoup, username: str) -> str | None:
@@ -2427,11 +2397,13 @@ def get_user_rating_for_album(
     album_url: str | None = None,
     release_format: str | None = None,
     fallback_limit: int | None = None,
+    user_release_url: str | None = None,
 ) -> dict:
-    """Fetch a user's rating and attached review/track-rating/like metadata.
+    """Fetch one user's live score + review + track ratings + like state.
 
-    This function intentionally never reads data.json; /album and buttons use
-    live AOTY state every time.
+    ``user_release_url`` is optional and preserves backwards compatibility.
+    When available it should be the exact /user/.../album/... URL captured
+    from the rating card.
     """
 
     username = str(username).strip()
@@ -2440,39 +2412,63 @@ def get_user_rating_for_album(
     if fallback_limit is None:
         fallback_limit = ALBUM_LOOKUP_FALLBACK_LIMIT
 
+    def parse_user_page(
+        soup: BeautifulSoup,
+        resolved_user_url: str | None,
+    ) -> dict:
+        score = _extract_user_score_from_user_release_page(
+            soup,
+            username,
+        )
+
+        review_text = _extract_review_text(
+            soup
+        )
+
+        partial_track_ratings = _extract_user_track_ratings(
+            soup
+        )
+
+        # A partial set is VALID. Expand against the complete public
+        # tracklist so every unrated song is returned with score=None -> NR.
+        track_ratings = _complete_user_track_ratings(
+            album_url,
+            partial_track_ratings,
+        )
+
+        return {
+            "score": str(score) if score is not None else None,
+            "date": extract_date(soup),
+            "source": "AOTY live",
+            "review_url": resolved_user_url,
+            "review_text": review_text,
+            "has_review": bool(review_text),
+            "track_ratings": track_ratings,
+
+            # True if at least ONE real track score exists.
+            "has_track_ratings": bool(
+                partial_track_ratings
+            ),
+
+            "liked": _detect_user_like(soup),
+        }
+
+    # ------------------------------------------------------------------
+    # 1. Direct user-release page.
+    # ------------------------------------------------------------------
     try:
-        soup, user_url = _fetch_user_release_page(username, album_id, album_url)
+        soup, resolved_user_url = _fetch_user_release_page(
+            username,
+            album_id,
+            album_url,
+            user_release_url=user_release_url,
+        )
 
         if soup is not None:
-            score = _extract_user_score_from_user_release_page(soup, username)
-            review_text = _extract_review_text(soup)
-            partial_track_ratings = _extract_user_track_ratings(
-                soup
+            return parse_user_page(
+                soup,
+                resolved_user_url,
             )
-
-            # Expand a partial set of scores against the full tracklist.
-            # Missing user scores remain None and are shown as NR.
-            track_ratings = _complete_user_track_ratings(
-                album_url,
-                partial_track_ratings,
-            )
-
-            return {
-                "score": str(score) if score is not None else None,
-                "date": extract_date(soup),
-                "source": "AOTY live",
-                "review_url": user_url,
-                "review_text": review_text,
-                "has_review": bool(review_text),
-                "track_ratings": track_ratings,
-
-                # This means: user rated at least one track.
-                "has_track_ratings": bool(
-                    partial_track_ratings
-                ),
-
-                "liked": _detect_user_like(soup),
-            }
 
     except AOTYRateLimit:
         raise
@@ -2481,32 +2477,92 @@ def get_user_rating_for_album(
     except Exception:
         pass
 
-    format_key = _format_key_from_label(release_format)
+    # ------------------------------------------------------------------
+    # 2. Find the release on the user's ratings list.
+    #
+    # Apart from the score this gives us AOTY's exact canonical
+    # /user/.../album/... link. Once found, fetch that page and parse the
+    # real review/track ratings instead of returning flags only.
+    # ------------------------------------------------------------------
+    format_key = _format_key_from_label(
+        release_format
+    )
 
     if format_key:
-        ratings = get_ratings_for_format(username, format_key, fallback_limit)
+        ratings = get_ratings_for_format(
+            username,
+            format_key,
+            fallback_limit,
+        )
     else:
-        ratings = _get_ratings_from_route(username, slug=None, limit=fallback_limit)
+        ratings = _get_ratings_from_route(
+            username,
+            slug=None,
+            limit=fallback_limit,
+        )
 
     for item in ratings:
-        if str(item.get("album_id")) == album_id:
-            return {
-                "score": str(item.get("score", "")) or None,
-                "date": item.get("date"),
-                "source": "AOTY live",
-                "review_url": item.get("review_url"),
-                "review_text": None,
-                "has_review": bool(item.get("has_review")),
-                "track_ratings": [],
-                "has_track_ratings": bool(item.get("has_track_ratings")),
-                "liked": bool(item.get("liked")),
-            }
+        if str(item.get("album_id")) != album_id:
+            continue
+
+        exact_user_url = (
+            item.get("review_url")
+            or user_release_url
+        )
+
+        if exact_user_url:
+            try:
+                soup, resolved_user_url = _fetch_user_release_page(
+                    username,
+                    album_id,
+                    album_url,
+                    user_release_url=exact_user_url,
+                )
+
+                if soup is not None:
+                    result = parse_user_page(
+                        soup,
+                        resolved_user_url,
+                    )
+
+                    # Preserve the list score/date if the detail page parser
+                    # somehow cannot read those two fields.
+                    if result.get("score") is None:
+                        result["score"] = (
+                            str(item.get("score", ""))
+                            or None
+                        )
+
+                    if not result.get("date"):
+                        result["date"] = item.get("date")
+
+                    return result
+
+            except AOTYRateLimit:
+                raise
+            except Exception:
+                pass
+
+        # Last fallback: the list can still tell us score + flags.
+        return {
+            "score": str(item.get("score", "")) or None,
+            "date": item.get("date"),
+            "source": "AOTY live",
+            "review_url": exact_user_url,
+            "review_text": None,
+            "has_review": bool(item.get("has_review")),
+            "track_ratings": [],
+            "has_track_ratings": bool(
+                item.get("has_track_ratings")
+            ),
+            "liked": bool(item.get("liked")),
+        }
 
     return {
         "score": None,
         "date": None,
         "source": "AOTY live",
-        "review_url": None,
+        "review_url": user_release_url,
         "review_text": None,
         "has_review": False,
         "track_ratings": [],

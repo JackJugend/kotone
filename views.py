@@ -80,6 +80,41 @@ def build_track_ratings_embed(username: str, item: dict, extra: dict) -> discord
     return embed
 
 
+VIEW_TIMEOUT_SECONDS = 15 * 60
+
+
+class TimedDisableView(discord.ui.View):
+    """A view that visibly disables every control after 15 minutes."""
+
+    def __init__(
+        self,
+        *,
+        timeout: float = VIEW_TIMEOUT_SECONDS,
+    ):
+        super().__init__(timeout=timeout)
+        self.message = None
+
+    def bind_message(self, message) -> None:
+        """Remember the sent Discord message so on_timeout can edit it."""
+        self.message = message
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+
+        if self.message is None:
+            return
+
+        try:
+            await self.message.edit(
+                view=self
+            )
+        except Exception:
+            # Deleted message / missing permission / expired webhook token:
+            # controls are still dead server-side because the View timed out.
+            pass
+
+
 class RatingDetailsMixin:
     username: str
     item: dict
@@ -95,11 +130,13 @@ class RatingDetailsMixin:
             self.item.get("album_id"),
             self.item.get("url"),
             self.item.get("release_format") or self.item.get("album_format"),
+            None,
+            self.item.get("review_url"),
         )
         return self._extra_cache
 
 
-class SingleRatingView(discord.ui.View, RatingDetailsMixin):
+class SingleRatingView(TimedDisableView, RatingDetailsMixin):
     """Main/review/track-ratings switcher for one user rating."""
 
     def __init__(
@@ -109,7 +146,7 @@ class SingleRatingView(discord.ui.View, RatingDetailsMixin):
         item: dict,
         main_embed: discord.Embed,
         extra: dict | None = None,
-        timeout: float = 600,
+        timeout: float = VIEW_TIMEOUT_SECONDS,
     ):
         super().__init__(timeout=timeout)
         self.username = username
@@ -184,7 +221,7 @@ class RatingSelect(discord.ui.Select):
         await interaction.response.defer()
 
 
-class MultiRatingView(discord.ui.View):
+class MultiRatingView(TimedDisableView):
     """Details controls for a message containing several rating embeds."""
 
     def __init__(
@@ -193,7 +230,7 @@ class MultiRatingView(discord.ui.View):
         username: str,
         items: list[dict],
         main_embeds: list[discord.Embed],
-        timeout: float = 600,
+        timeout: float = VIEW_TIMEOUT_SECONDS,
     ):
         super().__init__(timeout=timeout)
         self.username = username
@@ -214,6 +251,8 @@ class MultiRatingView(discord.ui.View):
             item.get("album_id"),
             item.get("url"),
             item.get("release_format"),
+            None,
+            item.get("review_url"),
         )
         return self._selected_extra
 
@@ -282,7 +321,7 @@ class UserRatingSelect(discord.ui.Select):
         await interaction.response.defer()
 
 
-class AlbumRatingView(discord.ui.View):
+class AlbumRatingView(TimedDisableView):
     """Review/track detail switcher for /album and config users."""
 
     def __init__(
@@ -292,7 +331,7 @@ class AlbumRatingView(discord.ui.View):
         release_item: dict,
         usernames: list[str],
         rating_infos: dict[str, dict],
-        timeout: float = 600,
+        timeout: float = VIEW_TIMEOUT_SECONDS,
     ):
         super().__init__(timeout=timeout)
         self.main_embed = main_embed
@@ -308,7 +347,10 @@ class AlbumRatingView(discord.ui.View):
         username = self.selected_username
         cached = self.rating_infos.get(username, {})
 
-        if cached.get("review_text") is not None or cached.get("track_ratings"):
+        if (
+            cached.get("review_text") is not None
+            or cached.get("track_ratings")
+        ):
             return cached
 
         extra = await asyncio.to_thread(
@@ -317,6 +359,8 @@ class AlbumRatingView(discord.ui.View):
             self.release_item.get("album_id"),
             self.release_item.get("url"),
             self.release_item.get("release_format") or self.release_item.get("album_format"),
+            None,
+            self.release_item.get("review_url"),
         )
         self.rating_infos[username] = extra
         return extra
@@ -399,7 +443,7 @@ class ProfileRatingSelect(discord.ui.Select):
         await interaction.response.defer()
 
 
-class ProfilePagerView(discord.ui.View):
+class ProfilePagerView(TimedDisableView):
     """Up to 10 pages of five profile ratings, with dynamic arrows."""
 
     def __init__(
@@ -408,7 +452,7 @@ class ProfilePagerView(discord.ui.View):
         username: str,
         ratings: list[dict],
         build_page_embed: Callable[[int], discord.Embed],
-        timeout: float = 900,
+        timeout: float = VIEW_TIMEOUT_SECONDS,
     ):
         super().__init__(timeout=timeout)
         self.username = username
@@ -507,6 +551,8 @@ class ProfilePagerView(discord.ui.View):
             item.get("album_id"),
             item.get("url"),
             item.get("release_format"),
+            None,
+            item.get("review_url"),
         )
         return self._selected_extra
 

@@ -8,7 +8,6 @@ from display_utils import display_romanized_name
 from settings import AOTY_ICON_ATTACHMENT
 from shared import (
     build_profile_variables,
-    make_aoty_file,
     rating_flags_text,
     score_color,
     score_icon,
@@ -188,8 +187,9 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             build_page_embed=build_page_embed,
         )
 
-        await interaction.followup.send(
+        message = await interaction.followup.send(
             embed=first_embed,
-            file=make_aoty_file(),
             view=view,
+            wait=True,
         )
+        view.bind_message(message)

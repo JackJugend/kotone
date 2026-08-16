@@ -145,7 +145,9 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
                 items=batch_items,
                 main_embeds=batch_embeds,
             )
-            await interaction.followup.send(
+            message = await interaction.followup.send(
                 embeds=batch_embeds,
                 view=view,
+                wait=True,
             )
+            view.bind_message(message)
