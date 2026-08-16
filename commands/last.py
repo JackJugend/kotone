@@ -93,6 +93,9 @@ def setup_last_command(
         year = "Brak danych"
         genres = []
         genres_text = "Brak danych"
+        main_genre = "Brak danych"
+        other_genres = []
+        other_genres_text = "Brak danych"
 
         try:
             details = await asyncio.to_thread(
@@ -105,6 +108,11 @@ def setup_last_command(
 
             if genres:
                 genres_text = ", ".join(genres)
+                main_genre = genres[0]
+                other_genres = genres[1:]
+
+                if other_genres:
+                    other_genres_text = ", ".join(other_genres)
 
         except Exception:
             pass
@@ -114,6 +122,13 @@ def setup_last_command(
                 url=url,
                 description=f"**{artist}**",
                 color=score_color(score),
+        )
+
+        
+        embed.add_field(
+                name=f"**{main_genre}**",
+                value=f"{other_genres}",
+                inline=True
         )
 
         embed.add_field(
