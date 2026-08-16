@@ -183,19 +183,19 @@ def setup_last_command(
         )
 
         embed.add_field(
-                name=f"\⭐ **{score}**",
+                name=f"⭐ **{score}**",
                 value=" ",
                 inline=True
         
         )
                 embed.add_field(
-                name=f"\👥 **{aoty_user_score}**/{ratings_count}",
+                name=f"👥 **{aoty_user_score}**/{ratings_count}",
                 value=" ",
                 inline=True
 
         )
                 embed.add_field(
-                name=f"\📅 **{year_ranking_text}**",
+                name=f"📅 **{year_ranking_text}**",
                 value=" ",
                 inline=True
         )
