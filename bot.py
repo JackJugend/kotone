@@ -1015,7 +1015,7 @@ def parse_generic(soup):
 # POBIERANIE OCEN
 # ============================================================
 
-def get_ratings(username, max_pages=5):
+def get_ratings(username, max_pages=3):
 
     all_ratings = []
     seen = set()
