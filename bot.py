@@ -111,6 +111,9 @@ session.headers.update(HEADERS)
 class AOTYRateLimit(Exception):
     pass
 
+class AOTYUserNotFound(Exception):
+    pass
+
 
 # ============================================================
 # PAMIĘĆ
@@ -200,7 +203,7 @@ def save_state():
 # HTTP
 # ============================================================
 
-def fetch_page(url):
+def fetch_page(url, expected_url=None):
 
     response = session.get(
         url,
@@ -225,6 +228,14 @@ def fetch_page(url):
         )
 
     response.raise_for_status()
+
+    if expected_url:
+
+    final_url = response.url.rstrip("/").lower()
+    expected = expected_url.rstrip("/").lower()
+
+        if final_url != expected:
+            raise AOTYUserNotFound()
 
     return response.text
 
@@ -1027,7 +1038,7 @@ def get_ratings(username, max_pages=3):
         else:
             url = f"{BASE_URL}/user/{username}/ratings/{page}/"
 
-        html = fetch_page(url)
+        html = fetch_page(url, expected_url=url)
 
         soup = BeautifulSoup(
             html,
@@ -1951,6 +1962,7 @@ setup_last_command(
     score_color=score_color,
     score_icon=score_icon,
     AOTYRateLimit=AOTYRateLimit,
+    AOTYUserNotFound=AOTYUserNotFound,
 )
 
 async def setup_hook():
