@@ -90,12 +90,12 @@ def setup_last_command(
         cover = latest["cover"]
 
         # Dodatkowe dane albumu do użycia w embedzie.
-        year = "Brak danych"
+        year = ""
         genres = []
-        genres_text = "Brak danych"
-        main_genre = "Brak danych"
-        other_genres = "Brak danych"
-        other_genres_text = "Brak danych"
+        genres_text = ""
+        main_genre = ""
+        other_genres = ""
+        other_genres_text = ""
 
         try:
             details = await asyncio.to_thread(
