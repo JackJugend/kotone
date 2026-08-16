@@ -113,7 +113,7 @@ def setup_last_command(
         ratings_count = "?"
 
         release_date = "?"
-        year = " "
+        year = "?"
         album_format = "?"
 
         label = "?"
