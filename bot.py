@@ -231,8 +231,8 @@ def fetch_page(url, expected_url=None):
 
     if expected_url:
 
-    final_url = response.url.rstrip("/").lower()
-    expected = expected_url.rstrip("/").lower()
+        final_url = response.url.rstrip("/").lower()
+        expected = expected_url.rstrip("/").lower()
 
         if final_url != expected:
             raise AOTYUserNotFound()
