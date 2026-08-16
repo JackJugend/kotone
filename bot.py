@@ -1418,7 +1418,7 @@ def get_album_details(album_url):
         ranking_year = ranking_match.group(1)
         year_ranking = ranking_match.group(2)
         year_ranking_text = (
-            f"{ranking_year} Ratings: #{year_ranking}"
+            f"#{year_ranking}"
         )
 
     # ==========================

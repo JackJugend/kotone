@@ -90,37 +90,37 @@ def setup_last_command(
         cover = latest["cover"]
 
         # Dodatkowe dane albumu do użycia w embedzie.
-        user_score = "Brak danych"
-        aoty_user_score = "Brak danych"
-        ratings_count = "Brak danych"
+        user_score = "?"
+        aoty_user_score = "?"
+        ratings_count = "?"
 
-        release_date = "Brak danych"
+        release_date = "?"
         year = " "
-        album_format = "Brak danych"
+        album_format = "?"
 
-        label = "Brak danych"
+        label = "?"
         labels = []
-        labels_text = "Brak danych"
+        labels_text = "?"
 
         genres = []
-        genres_text = "Brak danych"
-        main_genre = "Brak danych"
-        other_genres = "Brak danych"
-        other_genres_text = "Brak danych"
-        all_genres_text = "Brak danych"
+        genres_text = "?"
+        main_genre = "?"
+        other_genres = "?"
+        other_genres_text = "?"
+        all_genres_text = "?"
 
         secondary_genres = []
-        secondary_genres_text = "Brak danych"
+        secondary_genres_text = "?"
 
         vibes = []
-        vibes_text = "Brak danych"
+        vibes_text = "?"
 
-        ranking_year = "Brak danych"
-        year_ranking = "Brak danych"
-        year_ranking_text = "Brak danych"
+        ranking_year = "?"
+        year_ranking = "?"
+        year_ranking_text = "?"
 
         tracklist = []
-        tracklist_text = "Brak danych"
+        tracklist_text = "?"
 
         try:
             details = await asyncio.to_thread(
@@ -128,39 +128,39 @@ def setup_last_command(
                 url
             )
 
-            user_score = details.get("user_score") or "Brak danych"
+            user_score = details.get("user_score") or "?"
             aoty_user_score = user_score
-            ratings_count = details.get("ratings_count") or "Brak danych"
+            ratings_count = details.get("ratings_count") or "?"
 
-            release_date = details.get("release_date") or "Brak danych"
-            year = details.get("year") or "Brak danych"
-            album_format = details.get("album_format") or "Brak danych"
+            release_date = details.get("release_date") or "?"
+            year = details.get("year") or "?"
+            album_format = details.get("album_format") or "?"
 
-            label = details.get("label") or "Brak danych"
+            label = details.get("label") or "?"
             labels = details.get("labels") or []
-            labels_text = details.get("labels_text") or "Brak danych"
+            labels_text = details.get("labels_text") or "?"
 
             genres = details.get("genres") or []
-            genres_text = details.get("genres_text") or "Brak danych"
+            genres_text = details.get("genres_text") or "?"
 
             secondary_genres = details.get("secondary_genres") or []
             secondary_genres_text = (
                 details.get("secondary_genres_text")
-                or "Brak danych"
+                or "?"
             )
 
             vibes = details.get("vibes") or []
-            vibes_text = details.get("vibes_text") or "Brak danych"
+            vibes_text = details.get("vibes_text") or "?"
 
-            ranking_year = details.get("ranking_year") or "Brak danych"
-            year_ranking = details.get("year_ranking") or "Brak danych"
+            ranking_year = details.get("ranking_year") or "?"
+            year_ranking = details.get("year_ranking") or "?"
             year_ranking_text = (
                 details.get("year_ranking_text")
-                or "Brak danych"
+                or "?"
             )
 
             tracklist = details.get("tracklist") or []
-            tracklist_text = details.get("tracklist_text") or "Brak danych"
+            tracklist_text = details.get("tracklist_text") or "?"
 
             if genres:
                 main_genre = genres[0]
@@ -176,26 +176,26 @@ def setup_last_command(
             pass
 
         embed = discord.Embed(
-                title=f"{score_icon(score)}\uFE0E {artist} • **{album}** ({year})",
+                title=f"\{score_icon(score)} {artist} • **{album}** ({year})",
                 url=url,
                 description=f"{all_genres_text}",
                 color=score_color(score),
         )
 
         embed.add_field(
-                name=f"⭐\uFE0E **{score}**",
+                name=f"\⭐ **{score}**",
                 value=" ",
                 inline=True
         
         )
         embed.add_field(
-                name=f"👥\uFE0E **{aoty_user_score}**/{ratings_count}",
+                name=f"\👥 **{aoty_user_score}**/{ratings_count}",
                 value=" ",
                 inline=True
 
         )
         embed.add_field(
-                name=f"📅\uFE0E **{year_ranking_text}**",
+                name=f"\📅 **{year_ranking_text}**",
                 value=" ",
                 inline=True
         )
