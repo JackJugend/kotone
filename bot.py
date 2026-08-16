@@ -6,7 +6,7 @@ import shutil
 
 
 from datetime import datetime, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import discord
 import requests
@@ -250,12 +250,6 @@ def get_user_avatar(username):
         "html.parser"
     )
 
-    title = soup.title.get_text(" ",
-        strip=True
-    ) if soup.title else ""
-
-    if "Album Ratings - Album of The Year" not in title:
-        raise AOTYUserNotFound()
 
     for img in soup.find_all("img"):
 
@@ -1028,6 +1022,38 @@ def parse_generic(soup):
         results.values()
     )
 
+def is_real_aoty_user_page(soup, username):
+
+    username = username.strip().lower()
+
+    expected_profile = (
+        f"/user/{username}"
+    )
+
+    expected_ratings = (
+        f"/user/{username}/ratings"
+    )
+
+    for link in soup.select("a[href]"):
+
+        href = link.get("href", "")
+
+        try:
+            path = urlparse(
+                urljoin(BASE_URL, href)
+            ).path.rstrip("/").lower()
+
+        except Exception:
+            continue
+
+        if path in (
+            expected_profile,
+            expected_ratings
+        ):
+            return True
+
+    return False
+
 
 # ============================================================
 # POBIERANIE OCEN
@@ -1051,6 +1077,12 @@ def get_ratings(username, max_pages=3):
             html,
             "html.parser"
         )
+
+        if not is_real_aoty_user_page(
+            soup,
+            username
+        ):
+            raise AOTYUserNotFound()
 
         results = {}
 
