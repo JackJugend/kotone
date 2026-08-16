@@ -4845,49 +4845,49 @@ async def send_changed_rating(
 # SPRAWDZANIE PROFILU
 # ============================================================
 
-async def check_user(
-    username
-):
+# async def check_user(
+#     username
+# ):
 
-    print(
-        f"[AOTY] Sprawdzam {username}..."
-    )
+#     print(
+#         f"[AOTY] Sprawdzam {username}..."
+#     )
 
 
-    try:
+#     try:
 
-        ratings = (
-            await asyncio.to_thread(
-                get_ratings,
-                username
-            )
-        )
+#         ratings = (
+#             await asyncio.to_thread(
+#                 get_ratings,
+#                 username
+#             )
+#         )
 
-    except AOTYRateLimit as e:
+#     except AOTYRateLimit as e:
 
-        print(
-            f"[AOTY] {username}: {e}"
-        )
+#         print(
+#             f"[AOTY] {username}: {e}"
+#         )
 
-        return
+#         return
 
-    except requests.RequestException as e:
+#     except requests.RequestException as e:
 
-        print(
-            f"[AOTY] {username}: "
-            f"błąd HTTP: {e}"
-        )
+#         print(
+#             f"[AOTY] {username}: "
+#             f"błąd HTTP: {e}"
+#         )
 
-        return
+#         return
 
-    except Exception as e:
+#     except Exception as e:
 
-        print(
-            f"[AOTY] {username}: "
-            f"{type(e).__name__}: {e}"
-        )
+#         print(
+#             f"[AOTY] {username}: "
+#             f"{type(e).__name__}: {e}"
+#         )
 
-        return
+#         return
 
 
     # Avatar jest dodatkiem wizualnym. Jego brak nie może zatrzymać
