@@ -14,10 +14,10 @@
     "check_interval": 1800,
 
     "rating_fetch_limits": {
-        "lp": 2000,
+        "lp": 1000,
         "ep": 1000,
         "mixtape": 100,
-        "single": 1000,
+        "single": 500,
         "compilation": 100,
         "live": 20,
         "reissue": 100,
@@ -35,5 +35,5 @@
         "audiobook": 0
     },
 
-    "album_lookup_fallback_limit": 300
+    "album_lookup_fallback_limit": 1000
 }
