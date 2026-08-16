@@ -9,6 +9,7 @@ def setup_last_command(
     score_color,
     score_icon,
     AOTYRateLimit,
+    AOTYUserNotFound,
 ):
 
     @tree.command(
@@ -38,6 +39,14 @@ def setup_last_command(
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań."
             )
+            return
+        
+        except AOTYUserNotFound:
+
+            await interaction.followup.send(
+                f"❌ Konto AOTY **{username}** nie istnieje."
+            )
+
             return
 
         except requests.RequestException as e:
