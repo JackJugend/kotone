@@ -250,6 +250,13 @@ def get_user_avatar(username):
         "html.parser"
     )
 
+    title = soup.title.get_text(" ",
+        strip=True
+    ) if soup.title else ""
+
+    if "Album Ratings - Album of The Year" not in title:
+        raise AOTYUserNotFound()
+
     for img in soup.find_all("img"):
 
         src = (
