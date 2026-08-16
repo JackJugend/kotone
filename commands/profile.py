@@ -3,6 +3,18 @@ import asyncio
 import discord
 import requests
 
+import os
+
+BASE_DIR = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+
+AOTY_ICON = os.path.join(
+    BASE_DIR,
+    "assets",
+    "aoty.png"
+)
+
 
 def _favorite_line(item):
 
