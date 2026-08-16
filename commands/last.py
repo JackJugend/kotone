@@ -122,7 +122,7 @@ def setup_last_command(
             pass
 
         embed = discord.Embed(
-                title=f"{score_icon(score)} {artist} - **{album}** ({year})",
+                title=f"\{score_icon(score)} {artist} • **{album}** ({year})",
                 url=url,
                 description=f"{all_genres_text}",
                 color=score_color(score),
@@ -131,7 +131,7 @@ def setup_last_command(
         embed.add_field(
                 name=f"\⭐ **{score}**",
                 value=" ",
-                inline=False
+                inline=True
         )
         
         if avatar:
