@@ -1496,7 +1496,7 @@ def get_album_details(album_url):
     )
 
     secondary_genres_text = (
-        ", ".join(secondary_genres)
+        f"-# {", ".join(secondary_genres)}"
         if secondary_genres
         else None
     )
@@ -1528,7 +1528,7 @@ def get_album_details(album_url):
                 vibes.append(vibe)
 
     vibes_text = (
-        ", ".join(vibes)
+        f"-# {", ".join(vibes)}"
         if vibes
         else None
     )

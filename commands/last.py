@@ -159,7 +159,7 @@ def setup_last_command(
             labels_text = details.get("labels_text") or "?"
 
             genres = details.get("genres") or []
-            genres_text = details.get("*genres_text*") or " "
+            genres_text = details.get("genres_text") or " "
 
             secondary_genres = details.get("secondary_genres") or []
             secondary_genres_text = (
@@ -198,7 +198,7 @@ def setup_last_command(
         embed = discord.Embed(
                 title=f"\{score_icon(score)} {display_artist} — **{display_album}** ({year})",
                 url=url,
-                description=f"{all_genres_text}\n-# {secondary_genres_text}\n-# {vibes_text}\n# \⭐ **{score}**",
+                description=f"{all_genres_text}\n-# {secondary_genres_text}\n-# {vibes_text}\n# \⭐ **{score}** \⭐",
                 color=score_color(score),
         )
         
