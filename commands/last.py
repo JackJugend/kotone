@@ -147,16 +147,16 @@ def setup_last_command(
             labels_text = details.get("labels_text") or "?"
 
             genres = details.get("genres") or []
-            genres_text = details.get("genres_text") or "?"
+            genres_text = details.get("genres_text") or " "
 
             secondary_genres = details.get("secondary_genres") or []
             secondary_genres_text = (
                 details.get("secondary_genres_text")
-                or "?"
+                or " "
             )
 
             vibes = details.get("vibes") or []
-            vibes_text = details.get("vibes_text") or "?"
+            vibes_text = details.get("vibes_text") or " "
 
             ranking_year = details.get("ranking_year") or "?"
             year_ranking = details.get("year_ranking") or "?"
@@ -184,24 +184,30 @@ def setup_last_command(
         embed = discord.Embed(
                 title=f"{score_icon(score)} {display_artist} • **{display_album}** ({year})",
                 url=url,
-                description=f"{all_genres_text}",
+                description=f"## {all_genres_text}\n-# {secondary_genres_text}",
                 color=score_color(score),
         )
 
         embed.add_field(
-                name=f"⭐\uFE0E **{score}**",
+                name=f"\⭐ **{score}**",
                 value=" ",
                 inline=True
         
         )
         embed.add_field(
-                name=f"👥\uFE0E **{aoty_user_score}**/{ratings_count}",
+                name=f"\👥 **{aoty_user_score}**/{ratings_count}",
                 value=" ",
                 inline=True
 
         )
         embed.add_field(
-                name=f"📅\uFE0E **{year_ranking_text}**",
+                name=f"\📅 **{year_ranking_text}**",
+                value=" ",
+                inline=True
+        )
+
+        embed.add_field(
+                name=f"**{album_format}**",
                 value=" ",
                 inline=True
         )
@@ -223,7 +229,7 @@ def setup_last_command(
             )
 
         embed.set_footer(
-            text=f"•  {date}",
+            text=f"{date} • {label}",
             icon_url="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSiJt1MSjldtmrIaTGoE2r3CgsaPB8l1UneW-j9w103bSS5ft45C-OLTCg&s=10"
         )
 
