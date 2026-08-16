@@ -11,5 +11,5 @@
         "enso",
         "kulkien"
     ],
-    "check_interval": 600
+    "check_interval": 1800
 }
