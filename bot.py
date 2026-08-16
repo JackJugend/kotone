@@ -6,7 +6,7 @@ import shutil
 
 
 from datetime import datetime, timedelta
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import discord
 import requests
@@ -238,6 +238,36 @@ def fetch_page(url, expected_url=None):
             raise AOTYUserNotFound()
 
     return response.text
+
+def aoty_user_exists(username):
+
+    username = username.strip()
+
+    if not username:
+        return False
+
+    url = f"{BASE_URL}/user/{username}/"
+
+    html = fetch_page(url)
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    title = (
+        soup.title.get_text(" ", strip=True)
+        if soup.title
+        else ""
+    )
+
+    # Prawdziwe profile AOTY mają tytuł:
+    # "<nazwa> - Profile - Album of The Year".
+    # Dla nieistniejącego konta AOTY zwraca stronę główną.
+    return (
+        " - profile - album of the year"
+        in title.casefold()
+    )
 
 def get_user_avatar(username):
 
@@ -1020,39 +1050,6 @@ def parse_generic(soup):
         results.values()
     )
 
-def is_real_aoty_user_page(soup, username):
-
-    username = username.strip().lower()
-
-    expected_profile = (
-        f"/user/{username}"
-    )
-
-    expected_ratings = (
-        f"/user/{username}/ratings"
-    )
-
-    for link in soup.select("a[href]"):
-
-        href = link.get("href", "")
-
-        try:
-            path = urlparse(
-                urljoin(BASE_URL, href)
-            ).path.rstrip("/").lower()
-
-        except Exception:
-            continue
-
-        if path in (
-            expected_profile,
-            expected_ratings
-        ):
-            return True
-
-    return False
-
-
 # ============================================================
 # POBIERANIE OCEN
 # ============================================================
@@ -1069,18 +1066,12 @@ def get_ratings(username, max_pages=3):
         else:
             url = f"{BASE_URL}/user/{username}/ratings/{page}/"
 
-        html = fetch_page(url, expected_url=url)
+        html = fetch_page(url)
 
         soup = BeautifulSoup(
             html,
             "html.parser"
         )
-
-        if not is_real_aoty_user_page(
-            soup,
-            username
-        ):
-            raise AOTYUserNotFound()
 
         results = {}
 
@@ -1996,10 +1987,10 @@ setup_last_command(
     tree=tree,
     get_ratings=get_ratings,
     get_user_avatar=get_user_avatar,
+    aoty_user_exists=aoty_user_exists,
     score_color=score_color,
     score_icon=score_icon,
     AOTYRateLimit=AOTYRateLimit,
-    AOTYUserNotFound=AOTYUserNotFound,
 )
 
 async def setup_hook():

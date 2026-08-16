@@ -6,10 +6,10 @@ def setup_last_command(
     tree,
     get_ratings,
     get_user_avatar,
+    aoty_user_exists,
     score_color,
     score_icon,
     AOTYRateLimit,
-    AOTYUserNotFound,
 ):
 
     @tree.command(
@@ -30,6 +30,17 @@ def setup_last_command(
         username = username.strip()
 
         try:
+            exists = await asyncio.to_thread(
+                aoty_user_exists,
+                username
+            )
+
+            if not exists:
+                await interaction.followup.send(
+                    f"❌ Konto AOTY **{username}** nie istnieje."
+                )
+                return
+
             ratings = await asyncio.to_thread(
                 get_ratings,
                 username
@@ -39,14 +50,6 @@ def setup_last_command(
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań."
             )
-            return
-        
-        except AOTYUserNotFound:
-
-            await interaction.followup.send(
-                f"❌ Konto AOTY **{username}** nie istnieje."
-            )
-
             return
 
         except requests.RequestException as e:
