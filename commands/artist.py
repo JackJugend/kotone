@@ -6,7 +6,7 @@ import requests
 import aoty
 from display_utils import display_romanized_name
 from settings import RATING_FORMATS
-from shared import build_release_variables
+from shared import load_release_variables
 
 MAX_ARTIST_RELEASES = 18
 
@@ -110,12 +110,9 @@ def setup_artist_command(tree: discord.app_commands.CommandTree):
         lines = []
 
         for release in shown:
-            try:
-                details = await asyncio.to_thread(aoty.get_album_details, release["url"])
-            except Exception:
-                details = {}
-
-            variables = build_release_variables(release, details)
+            variables = await load_release_variables(
+                release,
+            )
             lines.append(
                 f"• **[{variables.display_album}]({release['url']})**"
                 f" — {variables.release_date} · {variables.album_format}"

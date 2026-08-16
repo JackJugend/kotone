@@ -10,6 +10,7 @@ import difflib
 import re
 import time
 import unicodedata
+from html import unescape
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus, urljoin
 
@@ -1401,6 +1402,80 @@ def _element_marker(element) -> str:
     return " ".join(parts).casefold()
 
 
+def _extract_user_release_url_from_element(
+    element,
+    album_id: str,
+) -> str | None:
+    """Extract an AOTY user-release URL from href/data-*/onclick attributes.
+
+    Rating-card action icons are not always normal links.  Depending on the
+    AOTY layout, the exact /user/<name>/album/<id>-<slug>/ target can be kept
+    in data-url, data-href or onclick.  Keeping that URL avoids an expensive
+    ratings-list fallback when Recenzja / Track ratings is clicked.
+    """
+    if not hasattr(element, "get"):
+        return None
+
+    album_id = str(album_id)
+    values = []
+
+    attrs = getattr(element, "attrs", {}) or {}
+
+    for _, raw_value in attrs.items():
+        if isinstance(raw_value, (list, tuple)):
+            raw_value = " ".join(
+                str(part)
+                for part in raw_value
+            )
+
+        value = unescape(
+            str(raw_value or "")
+        ).strip()
+
+        if value:
+            values.append(value)
+
+    href = unescape(
+        str(element.get("href", "") or "")
+    ).strip()
+
+    if href:
+        values.insert(0, href)
+
+    for value in values:
+        # Normal absolute/relative path.
+        match = re.search(
+            rf"(/user/[^/'\"<>\s]+/album/"
+            rf"{re.escape(album_id)}[^'\"<>\s]*)",
+            value,
+            flags=re.IGNORECASE,
+        )
+
+        if not match:
+            # JS-escaped path: \/user\/name\/album\/123-title\/
+            escaped = value.replace("\\/", "/")
+            match = re.search(
+                rf"(/user/[^/'\"<>\s]+/album/"
+                rf"{re.escape(album_id)}[^'\"<>\s]*)",
+                escaped,
+                flags=re.IGNORECASE,
+            )
+
+        if not match:
+            continue
+
+        path = match.group(1).rstrip(
+            "'\");,]}"
+        )
+
+        return urljoin(
+            BASE_URL,
+            path,
+        )
+
+    return None
+
+
 def _extract_rating_markers(block, album_id: str) -> dict:
     """Read review / track-rating / like badges from a rating card.
 
@@ -1416,13 +1491,16 @@ def _extract_rating_markers(block, album_id: str) -> dict:
 
     for element in block.find_all(["a", "button", "i", "span", "div"]):
         marker = _element_marker(element)
-        href = str(element.get("href", "")) if hasattr(element, "get") else ""
 
-        # Keep the user-release URL as a useful target, but do not infer a
-        # review from the link alone — AOTY can expose that target for ratings
-        # without review text as well.
-        if "/user/" in href and "/album/" in href and str(album_id) in href:
-            review_url = urljoin(BASE_URL, href)
+        # Keep the exact user-release URL even when AOTY stores it in data-*
+        # or onclick instead of href.
+        element_user_url = _extract_user_release_url_from_element(
+            element,
+            album_id,
+        )
+
+        if element_user_url:
+            review_url = element_user_url
 
         if any(token in marker for token in (
             "reviewlink",
@@ -2051,10 +2129,18 @@ def _track_title_key(text: str | None) -> str:
 
 
 def _extract_user_track_ratings(soup: BeautifulSoup) -> list[dict]:
-    """Extract every track score that the user actually entered.
+    """Extract every track score entered by the user.
 
-    AOTY may show only the tracks that were rated in the "Track Ratings"
-    section. A partial set is valid and must not be treated as empty.
+    AOTY currently has more than one Track Ratings layout:
+
+        5 | Take Me Thru Dere / 58
+
+    and a compact/card layout where the number can be absent visually:
+
+        DEMONSTRATION        88
+
+    A missing track number is therefore valid.  Numberless rows are matched
+    to the public tracklist later by normalized track title.
     """
     marker = None
 
@@ -2067,42 +2153,113 @@ def _extract_user_track_ratings(soup: BeautifulSoup) -> list[dict]:
         return []
 
     results: list[dict] = []
-    seen: set[tuple[int, str]] = set()
+    seen_numbers: set[int] = set()
+    seen_titles: set[str] = set()
 
-    def add_result(number, title, score):
-        try:
-            number = int(number)
-        except (TypeError, ValueError):
-            return
+    def add_result(
+        number,
+        title,
+        score,
+    ):
+        title = " ".join(
+            str(title or "").split()
+        ).strip(" -–—/|")
 
-        title = " ".join(str(title or "").split()).strip(" -–—/|")
-        score = str(score or "").strip()
+        score = str(
+            score or ""
+        ).strip()
 
         if not title:
             return
 
-        if not re.fullmatch(r"(100|\d{1,2})", score):
+        if not re.fullmatch(
+            r"(100|\d{1,2})",
+            score,
+        ):
             return
 
-        if re.fullmatch(r"\d{1,2}:\d{2}", title):
+        # Section/UI labels are not track titles.
+        if title.casefold() in {
+            "track ratings",
+            "play this on",
+            "amazon",
+            "apple music",
+            "spotify",
+            "bandcamp",
+            "vinyl",
+            "comments",
+        }:
             return
 
-        key = (number, _track_title_key(title))
-
-        if key in seen:
+        if re.fullmatch(
+            r"\d{1,2}:\d{2}",
+            title,
+        ):
             return
 
-        seen.add(key)
+        title_key = _track_title_key(
+            title
+        )
+
+        if not title_key:
+            return
+
+        parsed_number = None
+
+        if number is not None:
+            try:
+                parsed_number = int(number)
+            except (TypeError, ValueError):
+                parsed_number = None
+
+        # Prefer title deduplication because compact AOTY rows may have no
+        # number, while nested parent elements can repeat the same text.
+        if title_key in seen_titles:
+            return
+
+        if (
+            parsed_number is not None
+            and parsed_number in seen_numbers
+        ):
+            # Same numbered track repeated through nested containers.
+            return
+
+        seen_titles.add(
+            title_key
+        )
+
+        if parsed_number is not None:
+            seen_numbers.add(
+                parsed_number
+            )
+
         results.append({
-            "number": number,
+            "number": parsed_number,
             "title": title,
             "score": score,
         })
 
-    # 1) Row-like DOM elements.
+    def section_finished(text: str) -> bool:
+        lower = " ".join(
+            str(text or "").split()
+        ).casefold()
+
+        return lower in {
+            "play this on",
+            "amazon",
+            "apple music",
+            "spotify",
+            "bandcamp",
+            "vinyl",
+            "comments",
+        }
+
+    # ------------------------------------------------------------------
+    # 1. Small row-like containers.
+    # ------------------------------------------------------------------
     for element in marker.find_all_next(
         ["tr", "li", "div", "p"],
-        limit=350,
+        limit=500,
     ):
         row_text = " ".join(
             element.get_text(
@@ -2111,25 +2268,27 @@ def _extract_user_track_ratings(soup: BeautifulSoup) -> list[dict]:
             ).split()
         )
 
-        lower = row_text.casefold()
-
-        if lower in {
-            "play this on",
-            "comments",
-        }:
-            break
-
-        if not row_text or len(row_text) > 500:
+        if not row_text:
             continue
 
-        # Typical flattened AOTY row:
+        if section_finished(
+            row_text
+        ):
+            break
+
+        # Ignore very large parent containers; their children will be checked
+        # individually and are much safer to parse.
+        if len(row_text) > 300:
+            continue
+
+        # Numbered AOTY layout:
         #   5 | Take Me Thru Dere / 58
-        match = re.match(
-            r"^\s*(\d{1,3})\s*"
+        match = re.fullmatch(
+            r"\s*(\d{1,3})\s*"
             r"(?:[.|:)\-–—|]\s*)?"
             r"(.+?)\s*"
             r"(?:/|—|–|\|)\s*"
-            r"(100|\d{1,2})\s*$",
+            r"(100|\d{1,2})\s*",
             row_text,
         )
 
@@ -2141,12 +2300,12 @@ def _extract_user_track_ratings(soup: BeautifulSoup) -> list[dict]:
             )
             continue
 
-        # Some layouts lose separators in get_text():
+        # Numbered but separators flattened:
         #   5 Take Me Thru Dere 58
-        match = re.match(
-            r"^\s*(\d{1,3})\s+"
+        match = re.fullmatch(
+            r"\s*(\d{1,3})\s+"
             r"(.+?)\s+"
-            r"(100|\d{1,2})\s*$",
+            r"(100|\d{1,2})\s*",
             row_text,
         )
 
@@ -2156,107 +2315,179 @@ def _extract_user_track_ratings(soup: BeautifulSoup) -> list[dict]:
                 match.group(2),
                 match.group(3),
             )
+            continue
 
-    # 2) Token fallback for rows split across spans.
+        # Compact/card layout from the supplied screenshot:
+        #   DEMONSTRATION 88
+        #
+        # Require at least one non-digit character in the title so a random
+        # "1 88" UI fragment cannot become a fake track.
+        match = re.fullmatch(
+            r"\s*(.+?\D.*?)\s+"
+            r"(100|\d{1,2})\s*",
+            row_text,
+        )
+
+        if match:
+            candidate_title = match.group(1).strip()
+
+            # Do not reinterpret the numbered form as a numberless title.
+            if not re.match(
+                r"^\d{1,3}\s+[|:.)\-–—]",
+                candidate_title,
+            ):
+                add_result(
+                    None,
+                    candidate_title,
+                    match.group(2),
+                )
+
+    # ------------------------------------------------------------------
+    # 2. Token fallback.
+    #
+    # Covers rows split into spans:
+    # ["5", "|", "Title", "/", "58"]
+    # and the compact form:
+    # ["DEMONSTRATION", "88"].
+    # ------------------------------------------------------------------
     tokens = []
 
-    for string in marker.find_all_next(string=True):
-        token = " ".join(str(string).split())
+    for string in marker.find_all_next(
+        string=True
+    ):
+        token = " ".join(
+            str(string).split()
+        )
 
         if not token:
             continue
 
-        lower = token.casefold()
-
-        if lower in {
-            "play this on",
-            "comments",
-            "amazon",
-            "apple music",
-            "spotify",
-        }:
+        if section_finished(
+            token
+        ):
             break
 
-        tokens.append(token)
+        tokens.append(
+            token
+        )
 
-        if len(tokens) >= 1200:
+        if len(tokens) >= 1400:
             break
 
     i = 0
 
     while i < len(tokens):
+        token = tokens[i]
+
+        # -----------------------------
+        # Numbered token layout
+        # -----------------------------
         number_match = re.fullmatch(
             r"(\d{1,3})",
-            tokens[i],
+            token,
         )
 
-        if not number_match:
-            i += 1
-            continue
+        if number_match:
+            slash_index = None
 
-        number = number_match.group(1)
-        slash_index = None
-
-        for j in range(
-            i + 1,
-            min(len(tokens), i + 18),
-        ):
-            if tokens[j] in {"/", "—", "–"}:
-                slash_index = j
-                break
-
-        if slash_index is None:
-            i += 1
-            continue
-
-        score_index = None
-
-        for j in range(
-            slash_index + 1,
-            min(len(tokens), slash_index + 5),
-        ):
-            if re.fullmatch(
-                r"(100|\d{1,2})",
-                tokens[j],
+            for j in range(
+                i + 1,
+                min(len(tokens), i + 18),
             ):
-                score_index = j
-                break
+                if tokens[j] in {
+                    "/",
+                    "—",
+                    "–",
+                }:
+                    slash_index = j
+                    break
 
-        if score_index is None:
-            i += 1
-            continue
+            if slash_index is not None:
+                score_index = None
 
-        title_parts = [
-            token
-            for token in tokens[
-                i + 1:slash_index
-            ]
-            if token not in {
-                "|",
-                "•",
-                "-",
-                "–",
-                "—",
-            }
-        ]
+                for j in range(
+                    slash_index + 1,
+                    min(
+                        len(tokens),
+                        slash_index + 5,
+                    ),
+                ):
+                    if re.fullmatch(
+                        r"(100|\d{1,2})",
+                        tokens[j],
+                    ):
+                        score_index = j
+                        break
 
-        title = " ".join(
-            title_parts
-        ).strip()
+                if score_index is not None:
+                    title_parts = [
+                        part
+                        for part in tokens[
+                            i + 1:slash_index
+                        ]
+                        if part not in {
+                            "|",
+                            "•",
+                            "-",
+                            "–",
+                            "—",
+                        }
+                    ]
 
-        if title:
+                    title = " ".join(
+                        title_parts
+                    ).strip()
+
+                    if title:
+                        add_result(
+                            number_match.group(1),
+                            title,
+                            tokens[score_index],
+                        )
+
+                    i = score_index + 1
+                    continue
+
+        # -----------------------------
+        # Numberless compact layout
+        # -----------------------------
+        if (
+            i + 1 < len(tokens)
+            and not re.fullmatch(
+                r"(100|\d{1,2})",
+                token,
+            )
+            and re.search(
+                r"[^\W\d_]",
+                token,
+                flags=re.UNICODE,
+            )
+            and re.fullmatch(
+                r"(100|\d{1,2})",
+                tokens[i + 1],
+            )
+        ):
             add_result(
-                number,
-                title,
-                tokens[score_index],
+                None,
+                token,
+                tokens[i + 1],
             )
 
-        i = score_index + 1
+            i += 2
+            continue
+
+        i += 1
 
     results.sort(
         key=lambda item: (
-            int(item.get("number") or 9999),
-            _track_title_key(item.get("title")),
+            (
+                int(item["number"])
+                if item.get("number") is not None
+                else 9999
+            ),
+            _track_title_key(
+                item.get("title")
+            ),
         )
     )
 
@@ -2269,8 +2500,13 @@ def _merge_partial_track_ratings(
 ) -> list[dict]:
     """Overlay partial user scores on the complete release tracklist.
 
-    Unrated tracks remain in the returned list with score=None.
-    The Discord view already renders score=None as NR.
+    A user may rate only one song.  AOTY's compact Track Ratings layout can
+    also omit the visible track number.  We therefore match by:
+      1. normalized title when available;
+      2. track number as a fallback.
+
+    Every public-tracklist item remains present.  Missing user scores are
+    returned as score=None and rendered by Discord as NR.
     """
     album_tracklist = list(
         album_tracklist
@@ -2289,22 +2525,32 @@ def _merge_partial_track_ratings(
     by_title: dict[str, dict] = {}
 
     for rating in user_track_ratings:
-        number = rating.get("number")
-
-        try:
-            number = int(number)
-        except (TypeError, ValueError):
-            number = None
-
-        if number is not None:
-            by_number[number] = rating
-
         title_key = _track_title_key(
             rating.get("title")
         )
 
         if title_key:
-            by_title[title_key] = rating
+            by_title[
+                title_key
+            ] = rating
+
+        number = rating.get(
+            "number"
+        )
+
+        try:
+            number = (
+                int(number)
+                if number is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            number = None
+
+        if number is not None:
+            by_number[
+                number
+            ] = rating
 
     merged = []
     used_rating_ids = set()
@@ -2313,10 +2559,14 @@ def _merge_partial_track_ratings(
         album_tracklist,
         start=1,
     ):
-        number = track.get("number")
+        number = track.get(
+            "number"
+        )
 
         try:
-            number = int(number)
+            number = int(
+                number
+            )
         except (TypeError, ValueError):
             number = fallback_index
 
@@ -2329,15 +2579,18 @@ def _merge_partial_track_ratings(
             title
         )
 
-        rating = by_number.get(
-            number
+        # Title first: it is the safest route for the compact AOTY layout.
+        rating = (
+            by_title.get(
+                title_key
+            )
+            if title_key
+            else None
         )
 
-        # Number is normally enough. Title fallback protects odd AOTY
-        # numbering on multi-disc / bonus-track releases.
-        if rating is None and title_key:
-            rating = by_title.get(
-                title_key
+        if rating is None:
+            rating = by_number.get(
+                number
             )
 
         if rating is not None:
@@ -2353,21 +2606,34 @@ def _merge_partial_track_ratings(
                 if rating
                 else None
             ),
-            "duration": track.get("duration"),
-            "disc": track.get("disc"),
-            "url": track.get("url"),
+            "duration": track.get(
+                "duration"
+            ),
+            "disc": track.get(
+                "disc"
+            ),
+            "url": track.get(
+                "url"
+            ),
         })
 
-    # Keep unusual rated bonus/hidden tracks even if the public tracklist
-    # omitted them.
+    # Preserve a rated hidden/bonus track that is genuinely absent from the
+    # public tracklist.
     for rating in user_track_ratings:
         if id(rating) in used_rating_ids:
             continue
 
         merged.append({
-            "number": rating.get("number"),
-            "title": rating.get("title") or "Nieznany utwór",
-            "score": rating.get("score"),
+            "number": rating.get(
+                "number"
+            ),
+            "title": (
+                rating.get("title")
+                or "Nieznany utwór"
+            ),
+            "score": rating.get(
+                "score"
+            ),
             "duration": None,
             "disc": None,
             "url": None,
