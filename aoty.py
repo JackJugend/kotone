@@ -771,49 +771,282 @@ def _extract_aoty_user_score(soup: BeautifulSoup) -> str | None:
 
 
 def _normalize_count(value: str | None) -> str | None:
+    """Normalize a displayed ratings count without changing its meaning."""
     if not value:
         return None
-    return re.sub(r"\s+", "", value.replace("\xa0", " "))
+
+    value = str(value).replace("\xa0", " ")
+    value = re.sub(r"\s+", "", value)
+
+    return value or None
+
+
+def _count_from_text(
+    text: str | None,
+    *,
+    allow_generic: bool = True,
+) -> str | None:
+    """Extract a count from text that explicitly refers to user ratings."""
+    if not text:
+        return None
+
+    normalized = " ".join(
+        str(text)
+        .replace("\xa0", " ")
+        .split()
+    )
+
+    patterns = [
+        r"\bBased\s+on\s+([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b",
+        r"\bUser\s*Score\s*\(\s*([\d][\d,.]*(?:\s*[KM])?)\s*\)",
+    ]
+
+    if allow_generic:
+        # Negative lookahead prevents a yearly rank such as
+        # "2024 Ratings: #96" from being mistaken for a count.
+        patterns.append(
+            r"\b([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b(?!\s*:)"
+        )
+
+    for pattern in patterns:
+        match = re.search(
+            pattern,
+            normalized,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+            return _normalize_count(
+                match.group(1)
+            )
+
+    return None
 
 
 def _extract_ratings_count(soup: BeautifulSoup) -> str | None:
-    """Extract current AOTY user rating count with several page variants."""
-    page_text = " ".join(soup.get_text(" ", strip=True).split())
+    """Extract the current number of AOTY user ratings for a release.
 
-    patterns = [
-        # Current overview page: "Based on 2,094 ratings"
-        r"\bBased\s+on\s+([\d,.]+(?:\s*[KM])?)\s+ratings\b",
-        # User-review header variant: "User Score (2,091)"
-        r"\bUser\s*Score\s*\(\s*([\d,.]+(?:\s*[KM])?)\s*\)",
-        # Generic nearby fallback.
-        r"\bUser\s*Score\b.{0,80}?([\d,.]+(?:\s*[KM])?)\s+ratings\b",
-    ]
+    Current AOTY overview pages visually show e.g.:
 
-    for pattern in patterns:
-        match = re.search(pattern, page_text, flags=re.IGNORECASE)
-        if match:
-            return _normalize_count(match.group(1))
+        User Score
+        79
+        Based on 2,096 ratings
 
-    # DOM fallback around any "User Score" marker. Useful when number/count
-    # are split into separate spans and flatten differently.
+    Depending on the page/layout, those words may be split across several
+    tags. We therefore inspect the User Score neighborhood first.
+    """
+
+    # ------------------------------------------------------------------
+    # 1. Strings immediately following the "User Score" label.
+    # ------------------------------------------------------------------
+    for string in soup.find_all(string=True):
+        marker_text = " ".join(
+            str(string).split()
+        ).casefold()
+
+        if marker_text != "user score":
+            continue
+
+        nearby_parts = []
+        checked = 0
+
+        for next_string in string.parent.find_all_next(
+            string=True
+        ):
+            part = " ".join(
+                str(next_string)
+                .replace("\xa0", " ")
+                .split()
+            )
+
+            if not part:
+                continue
+
+            nearby_parts.append(
+                part
+            )
+
+            # Complete fragment, e.g. "2,096 ratings".
+            count = _count_from_text(
+                part,
+                allow_generic=True,
+            )
+
+            if count:
+                return count
+
+            # When siblings are split, require the strong wording
+            # "Based on ... ratings" to avoid treating the User Score
+            # itself as a rating count.
+            neighborhood = " ".join(
+                nearby_parts[-12:]
+            )
+
+            count = _count_from_text(
+                neighborhood,
+                allow_generic=False,
+            )
+
+            if count:
+                return count
+
+            checked += 1
+
+            # The count is close to User Score. Do not wander into reviews.
+            if checked >= 35:
+                break
+
+    # ------------------------------------------------------------------
+    # 2. Parent/ancestor area around User Score.
+    # ------------------------------------------------------------------
     for string in soup.find_all(string=True):
         if " ".join(str(string).split()).casefold() != "user score":
             continue
 
         node = string.parent
-        for _ in range(4):
+
+        for _ in range(7):
             if not node:
                 break
 
-            text = " ".join(node.get_text(" ", strip=True).split())
-            for pattern in (
-                r"\(([\d,.]+(?:\s*[KM])?)\)",
-                r"([\d,.]+(?:\s*[KM])?)\s+ratings\b",
-            ):
-                match = re.search(pattern, text, flags=re.IGNORECASE)
-                if match:
-                    return _normalize_count(match.group(1))
+            node_text = " ".join(
+                node.get_text(
+                    " ",
+                    strip=True,
+                )
+                .replace("\xa0", " ")
+                .split()
+            )
+
+            count = _count_from_text(
+                node_text,
+                allow_generic=False,
+            )
+
+            if count:
+                return count
+
+            try:
+                descendants = node.find_all(
+                    True,
+                    limit=100,
+                )
+            except Exception:
+                descendants = []
+
+            for element in descendants:
+                attrs = getattr(
+                    element,
+                    "attrs",
+                    {},
+                ) or {}
+
+                for attr_name in (
+                    "aria-label",
+                    "title",
+                    "data-title",
+                    "data-label",
+                ):
+                    count = _count_from_text(
+                        attrs.get(attr_name),
+                        allow_generic=True,
+                    )
+
+                    if count:
+                        return count
+
             node = node.parent
+
+    # ------------------------------------------------------------------
+    # 3. Direct scan for an element that itself says "2,096 ratings".
+    # ------------------------------------------------------------------
+    for element in soup.find_all(
+        ["a", "span", "div", "p", "small"]
+    ):
+        element_text = " ".join(
+            element.get_text(
+                " ",
+                strip=True,
+            )
+            .replace("\xa0", " ")
+            .split()
+        )
+
+        if "rating" not in element_text.casefold():
+            continue
+
+        count = _count_from_text(
+            element_text,
+            allow_generic=True,
+        )
+
+        if count:
+            return count
+
+    # ------------------------------------------------------------------
+    # 4. Whole-page strong fallbacks.
+    # ------------------------------------------------------------------
+    page_text = " ".join(
+        soup.get_text(
+            " ",
+            strip=True,
+        )
+        .replace("\xa0", " ")
+        .split()
+    )
+
+    patterns = (
+        r"\bUser\s*Score\b.{0,160}?\bBased\s+on\s+"
+        r"([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b",
+
+        r"\bBased\s+on\s+"
+        r"([\d][\d,.]*(?:\s*[KM])?)\s+ratings\b",
+
+        r"\bUser\s*Score\s*\(\s*"
+        r"([\d][\d,.]*(?:\s*[KM])?)\s*\)",
+    )
+
+    for pattern in patterns:
+        match = re.search(
+            pattern,
+            page_text,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+            return _normalize_count(
+                match.group(1)
+            )
+
+    # ------------------------------------------------------------------
+    # 5. Last-resort HTML/attribute scan.
+    # ------------------------------------------------------------------
+    source = str(soup).replace(
+        "\xa0",
+        " ",
+    )
+
+    patterns = (
+        r"Based\s+on[^<]{0,80}"
+        r"([\d][\d,.]*(?:\s*[KM])?)"
+        r"(?:&nbsp;|\s)*ratings",
+
+        r"""(?:aria-label|title)=["'][^"']*?"""
+        r"([\d][\d,.]*(?:\s*[KM])?)"
+        r"\s+ratings(?!\s*:)[^\"']*[\"']",
+    )
+
+    for pattern in patterns:
+        match = re.search(
+            pattern,
+            source,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+            return _normalize_count(
+                match.group(1)
+            )
 
     return None
 
@@ -1784,7 +2017,26 @@ def _extract_review_text(soup: BeautifulSoup) -> str | None:
     return text if len(text) >= 12 else None
 
 
+def _track_title_key(text: str | None) -> str:
+    """Normalize a track title only for matching user ratings to the tracklist."""
+    if not text:
+        return ""
+
+    value = str(text).casefold()
+
+    return "".join(
+        char
+        for char in value
+        if char.isalnum()
+    )
+
+
 def _extract_user_track_ratings(soup: BeautifulSoup) -> list[dict]:
+    """Extract every track score that the user actually entered.
+
+    AOTY may show only the tracks that were rated in the "Track Ratings"
+    section. A partial set is valid and must not be treated as empty.
+    """
     marker = None
 
     for string in soup.find_all(string=True):
@@ -1795,64 +2047,346 @@ def _extract_user_track_ratings(soup: BeautifulSoup) -> list[dict]:
     if marker is None:
         return []
 
-    results = []
-    seen = set()
+    results: list[dict] = []
+    seen: set[tuple[int, str]] = set()
 
-    # Prefer row-like elements after the heading.
-    for element in marker.find_all_next(["tr", "li", "div"], limit=250):
-        text = " ".join(element.get_text(" ", strip=True).split())
-        lower = text.casefold()
+    def add_result(number, title, score):
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            return
 
-        if lower in {"play this on", "comments"}:
-            break
-        if not text or len(text) > 400:
-            continue
+        title = " ".join(str(title or "").split()).strip(" -–—/|")
+        score = str(score or "").strip()
 
-        match = re.match(
-            r"^\s*(\d{1,3})\s*[.|:-]?\s*(.+?)\s*(?:/|—|-)?\s*(100|\d{1,2})\s*$",
-            text,
-        )
+        if not title:
+            return
 
-        if not match:
-            continue
+        if not re.fullmatch(r"(100|\d{1,2})", score):
+            return
 
-        number = int(match.group(1))
-        title = match.group(2).strip(" -–—/|")
-        score = match.group(3)
+        if re.fullmatch(r"\d{1,2}:\d{2}", title):
+            return
 
-        # Avoid misreading a duration like 3:31 as a track score row.
-        if not title or re.fullmatch(r"\d{1,2}:\d{2}", title):
-            continue
+        key = (number, _track_title_key(title))
 
-        key = (number, title.casefold())
         if key in seen:
-            continue
+            return
 
         seen.add(key)
-        results.append({"number": number, "title": title, "score": score})
+        results.append({
+            "number": number,
+            "title": title,
+            "score": score,
+        })
 
-    # Text fallback for pages where rows aren't semantic elements.
-    if not results:
-        page_text = "\n".join(soup.stripped_strings)
-        index = page_text.casefold().find("track ratings")
-        if index >= 0:
-            chunk = page_text[index + len("track ratings"):]
-            for stop in ("Play This On", "Comments"):
-                stop_index = chunk.find(stop)
-                if stop_index >= 0:
-                    chunk = chunk[:stop_index]
+    # 1) Row-like DOM elements.
+    for element in marker.find_all_next(
+        ["tr", "li", "div", "p"],
+        limit=350,
+    ):
+        row_text = " ".join(
+            element.get_text(
+                " ",
+                strip=True,
+            ).split()
+        )
 
-            for match in re.finditer(
-                r"(?m)^\s*(\d{1,3})\s+(.+?)\s*/\s*(100|\d{1,2})\s*$",
-                chunk,
+        lower = row_text.casefold()
+
+        if lower in {
+            "play this on",
+            "comments",
+        }:
+            break
+
+        if not row_text or len(row_text) > 500:
+            continue
+
+        # Typical flattened AOTY row:
+        #   5 | Take Me Thru Dere / 58
+        match = re.match(
+            r"^\s*(\d{1,3})\s*"
+            r"(?:[.|:)\-–—|]\s*)?"
+            r"(.+?)\s*"
+            r"(?:/|—|–|\|)\s*"
+            r"(100|\d{1,2})\s*$",
+            row_text,
+        )
+
+        if match:
+            add_result(
+                match.group(1),
+                match.group(2),
+                match.group(3),
+            )
+            continue
+
+        # Some layouts lose separators in get_text():
+        #   5 Take Me Thru Dere 58
+        match = re.match(
+            r"^\s*(\d{1,3})\s+"
+            r"(.+?)\s+"
+            r"(100|\d{1,2})\s*$",
+            row_text,
+        )
+
+        if match:
+            add_result(
+                match.group(1),
+                match.group(2),
+                match.group(3),
+            )
+
+    # 2) Token fallback for rows split across spans.
+    tokens = []
+
+    for string in marker.find_all_next(string=True):
+        token = " ".join(str(string).split())
+
+        if not token:
+            continue
+
+        lower = token.casefold()
+
+        if lower in {
+            "play this on",
+            "comments",
+            "amazon",
+            "apple music",
+            "spotify",
+        }:
+            break
+
+        tokens.append(token)
+
+        if len(tokens) >= 1200:
+            break
+
+    i = 0
+
+    while i < len(tokens):
+        number_match = re.fullmatch(
+            r"(\d{1,3})",
+            tokens[i],
+        )
+
+        if not number_match:
+            i += 1
+            continue
+
+        number = number_match.group(1)
+        slash_index = None
+
+        for j in range(
+            i + 1,
+            min(len(tokens), i + 18),
+        ):
+            if tokens[j] in {"/", "—", "–"}:
+                slash_index = j
+                break
+
+        if slash_index is None:
+            i += 1
+            continue
+
+        score_index = None
+
+        for j in range(
+            slash_index + 1,
+            min(len(tokens), slash_index + 5),
+        ):
+            if re.fullmatch(
+                r"(100|\d{1,2})",
+                tokens[j],
             ):
-                results.append({
-                    "number": int(match.group(1)),
-                    "title": match.group(2).strip(),
-                    "score": match.group(3),
-                })
+                score_index = j
+                break
+
+        if score_index is None:
+            i += 1
+            continue
+
+        title_parts = [
+            token
+            for token in tokens[
+                i + 1:slash_index
+            ]
+            if token not in {
+                "|",
+                "•",
+                "-",
+                "–",
+                "—",
+            }
+        ]
+
+        title = " ".join(
+            title_parts
+        ).strip()
+
+        if title:
+            add_result(
+                number,
+                title,
+                tokens[score_index],
+            )
+
+        i = score_index + 1
+
+    results.sort(
+        key=lambda item: (
+            int(item.get("number") or 9999),
+            _track_title_key(item.get("title")),
+        )
+    )
 
     return results
+
+
+def _merge_partial_track_ratings(
+    album_tracklist: list[dict],
+    user_track_ratings: list[dict],
+) -> list[dict]:
+    """Overlay partial user scores on the complete release tracklist.
+
+    Unrated tracks remain in the returned list with score=None.
+    The Discord view already renders score=None as NR.
+    """
+    album_tracklist = list(
+        album_tracklist
+        or []
+    )
+
+    user_track_ratings = list(
+        user_track_ratings
+        or []
+    )
+
+    if not album_tracklist:
+        return user_track_ratings
+
+    by_number: dict[int, dict] = {}
+    by_title: dict[str, dict] = {}
+
+    for rating in user_track_ratings:
+        number = rating.get("number")
+
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            number = None
+
+        if number is not None:
+            by_number[number] = rating
+
+        title_key = _track_title_key(
+            rating.get("title")
+        )
+
+        if title_key:
+            by_title[title_key] = rating
+
+    merged = []
+    used_rating_ids = set()
+
+    for fallback_index, track in enumerate(
+        album_tracklist,
+        start=1,
+    ):
+        number = track.get("number")
+
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            number = fallback_index
+
+        title = (
+            track.get("title")
+            or f"Track {number}"
+        )
+
+        title_key = _track_title_key(
+            title
+        )
+
+        rating = by_number.get(
+            number
+        )
+
+        # Number is normally enough. Title fallback protects odd AOTY
+        # numbering on multi-disc / bonus-track releases.
+        if rating is None and title_key:
+            rating = by_title.get(
+                title_key
+            )
+
+        if rating is not None:
+            used_rating_ids.add(
+                id(rating)
+            )
+
+        merged.append({
+            "number": number,
+            "title": title,
+            "score": (
+                rating.get("score")
+                if rating
+                else None
+            ),
+            "duration": track.get("duration"),
+            "disc": track.get("disc"),
+            "url": track.get("url"),
+        })
+
+    # Keep unusual rated bonus/hidden tracks even if the public tracklist
+    # omitted them.
+    for rating in user_track_ratings:
+        if id(rating) in used_rating_ids:
+            continue
+
+        merged.append({
+            "number": rating.get("number"),
+            "title": rating.get("title") or "Nieznany utwór",
+            "score": rating.get("score"),
+            "duration": None,
+            "disc": None,
+            "url": None,
+        })
+
+    return merged
+
+
+def _complete_user_track_ratings(
+    album_url: str | None,
+    user_track_ratings: list[dict],
+) -> list[dict]:
+    """Return the full tracklist with the user's partial scores overlaid."""
+    if not album_url:
+        return list(
+            user_track_ratings
+            or []
+        )
+
+    try:
+        details = get_album_details(
+            album_url
+        )
+
+        return _merge_partial_track_ratings(
+            details.get("tracklist") or [],
+            user_track_ratings,
+        )
+
+    except AOTYRateLimit:
+        raise
+
+    except Exception:
+        # A failed second request must not hide ratings already parsed.
+        return list(
+            user_track_ratings
+            or []
+        )
 
 
 def _detect_user_like(soup: BeautifulSoup) -> bool:
@@ -1912,7 +2446,16 @@ def get_user_rating_for_album(
         if soup is not None:
             score = _extract_user_score_from_user_release_page(soup, username)
             review_text = _extract_review_text(soup)
-            track_ratings = _extract_user_track_ratings(soup)
+            partial_track_ratings = _extract_user_track_ratings(
+                soup
+            )
+
+            # Expand a partial set of scores against the full tracklist.
+            # Missing user scores remain None and are shown as NR.
+            track_ratings = _complete_user_track_ratings(
+                album_url,
+                partial_track_ratings,
+            )
 
             return {
                 "score": str(score) if score is not None else None,
@@ -1922,7 +2465,12 @@ def get_user_rating_for_album(
                 "review_text": review_text,
                 "has_review": bool(review_text),
                 "track_ratings": track_ratings,
-                "has_track_ratings": bool(track_ratings),
+
+                # This means: user rated at least one track.
+                "has_track_ratings": bool(
+                    partial_track_ratings
+                ),
+
                 "liked": _detect_user_like(soup),
             }
 

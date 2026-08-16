@@ -140,7 +140,7 @@ class SingleRatingView(discord.ui.View, RatingDetailsMixin):
         await interaction.response.defer()
         extra = await self._load_extra()
 
-        if not extra.get("track_ratings"):
+        if not extra.get("has_track_ratings"):
             await interaction.followup.send("Ta ocena nie ma ocen tracklisty.", ephemeral=True)
             return
 
@@ -241,7 +241,7 @@ class MultiRatingView(discord.ui.View):
         await interaction.response.defer()
         extra = await self._extra()
 
-        if not extra.get("track_ratings"):
+        if not extra.get("has_track_ratings"):
             await interaction.followup.send("Wybrana ocena nie ma ocen tracklisty.", ephemeral=True)
             return
 
@@ -355,7 +355,7 @@ class AlbumRatingView(discord.ui.View):
         await interaction.response.defer()
         extra = await self._extra_for_selected()
 
-        if not extra.get("track_ratings"):
+        if not extra.get("has_track_ratings"):
             await interaction.followup.send("Ten użytkownik nie ma ocen tracklisty.", ephemeral=True)
             return
 
@@ -537,7 +537,7 @@ class ProfilePagerView(discord.ui.View):
         await interaction.response.defer()
         extra = await self._extra(item)
 
-        if not extra.get("track_ratings"):
+        if not extra.get("has_track_ratings"):
             await interaction.followup.send("Wybrana ocena nie ma ocen tracklisty.", ephemeral=True)
             return
 
