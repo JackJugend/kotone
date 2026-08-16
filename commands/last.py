@@ -231,7 +231,7 @@ def setup_last_command(
             )
 
         embed.set_footer(
-            text=f"{album_format}  •  {release_date}  •  {label}",
+            text=f"{album_format}  •  {release_date}  •  {labels_text}",
             icon_url="attachment://aoty.jpg"
         )
 

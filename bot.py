@@ -1528,7 +1528,7 @@ def get_album_details(album_url):
                 vibes.append(vibe)
 
     vibes_text = (
-        f"-# {", ".join(vibes)}"
+        f"-# *{", ".join(vibes)}*"
         if vibes
         else None
     )
