@@ -11,15 +11,15 @@ def _favorite_line(item):
 
     if item_type == "artist":
         name = item.get("name") or "Nieznany artysta"
-        return f"• 🎤 **[{name}]({url})**"
+        return f"\🎤 **[{name}]({url})**"
 
     album = item.get("album") or item.get("name") or "Nieznane wydanie"
     artist = item.get("artist")
 
     if artist:
-        return f"• 💿 **[{artist} — {album}]({url})**"
+        return f"\💿 **[{artist} — {album}]({url})**"
 
-    return f"• 💿 **[{album}]({url})**"
+    return f"\💿 **[{album}]({url})**"
 
 
 def _recent_line(item, score_icon):
@@ -31,7 +31,7 @@ def _recent_line(item, score_icon):
     release_format = item.get("release_format") or "?"
 
     return (
-        f"• {score_icon(score)} **{score}** "
+        f"\{score_icon(score)} **{score}** "
         f"[{artist} — {album}]({url}) · {release_format}"
     )
 
@@ -130,7 +130,7 @@ def setup_profile_command(
             )
 
         file = discord.File(AOTY_ICON, filename="aoty.png")
-        
+
         embed = discord.Embed(
             title=display_username,
             url=profile_url,
