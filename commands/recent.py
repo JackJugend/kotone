@@ -3,89 +3,44 @@ import asyncio
 import discord
 import requests
 
-from display_utils import display_romanized_name
-
-
-def _rating_embed(
-    username,
-    item,
-    avatar,
-    details,
+import aoty
+from shared import (
+    build_release_variables,
+    rating_flags_text,
     score_color,
     score_icon,
-):
-    score = item["score"]
-    artist = item["artist"]
-    album = item["album"]
+    username_autocomplete,
+)
+from views import MultiRatingView
 
-    display_artist = display_romanized_name(artist)
-    display_album = display_romanized_name(album)
 
-    date = item["date"]
-    url = item["url"]
-    cover = item["cover"]
-
-    year = details.get("year") or "Brak danych"
-    genres = details.get("genres") or []
-
-    if genres:
-        main_genre = genres[0]
-        other_genres_text = ", ".join(genres[1:])
-
-        if other_genres_text:
-            all_genres_text = f"**{main_genre}**, {other_genres_text}"
-        else:
-            all_genres_text = f"**{main_genre}**"
-    else:
-        main_genre = "Brak danych"
-        other_genres_text = "Brak danych"
-        all_genres_text = "Brak danych"
-
-    # Te same zmienne szczegółów co w /last.
-    user_score = details.get("user_score") or "Brak danych"
-    aoty_user_score = user_score
-    ratings_count = details.get("ratings_count") or "Brak danych"
-    release_date = details.get("release_date") or "Brak danych"
-    album_format = (
-        details.get("album_format")
-        or item.get("release_format")
-        or "Brak danych"
-    )
-    label = details.get("label") or "Brak danych"
-    labels = details.get("labels") or []
-    labels_text = details.get("labels_text") or "Brak danych"
-    genres_text = details.get("genres_text") or "Brak danych"
-    secondary_genres = details.get("secondary_genres") or []
-    secondary_genres_text = details.get("secondary_genres_text") or "Brak danych"
-    vibes = details.get("vibes") or []
-    vibes_text = details.get("vibes_text") or "Brak danych"
-    ranking_year = details.get("ranking_year") or "Brak danych"
-    year_ranking = details.get("year_ranking") or "Brak danych"
-    year_ranking_text = details.get("year_ranking_text") or "Brak danych"
-    tracklist = details.get("tracklist") or []
-    tracklist_text = details.get("tracklist_text") or "Brak danych"
+def _rating_embed(username, item, avatar, details):
+    variables = build_release_variables(item, details)
+    flags = rating_flags_text(item)
+    footer_flags = f"  •  {flags}" if flags else ""
 
     embed = discord.Embed(
-        title=f"{score_icon(score)} {display_artist} • **{display_album}** ({year})",
-        url=url,
-        description=all_genres_text,
-        color=score_color(score),
+        title=(
+            f"{score_icon(variables.score)} {variables.display_artist} • "
+            f"**{variables.display_album}** ({variables.year})"
+        ),
+        url=variables.url,
+        description=variables.all_genres_text,
+        color=score_color(variables.score),
     )
 
     embed.add_field(
-        name=f"⭐ **{score}**",
+        name=f"⭐ **{variables.score}**",
         value=" ",
         inline=True,
     )
-
     embed.add_field(
-        name=f"👥 **{aoty_user_score}**/{ratings_count}",
+        name=f"👥 **{variables.aoty_user_score}**/{variables.ratings_count}",
         value=" ",
         inline=True,
     )
-
     embed.add_field(
-        name=f"📅 **{year_ranking_text}**",
+        name=f"📅 **{variables.year_ranking_text}**",
         value=" ",
         inline=True,
     )
@@ -102,35 +57,26 @@ def _rating_embed(
             url=f"https://www.albumoftheyear.org/user/{username}",
         )
 
-    if cover:
-        embed.set_thumbnail(url=cover)
+    if variables.cover:
+        embed.set_thumbnail(url=variables.cover)
 
     embed.set_footer(
-        text=f"•  {date}  •  {album_format}",
+        text=f"•  {variables.date}  •  {variables.album_format}{footer_flags}"
     )
-
     return embed
 
 
-def setup_recent_command(
-    tree,
-    get_ratings,
-    get_user_avatar,
-    get_album_details,
-    aoty_user_exists,
-    score_color,
-    score_icon,
-    AOTYRateLimit,
-):
+def setup_recent_command(tree: discord.app_commands.CommandTree):
     @tree.command(
         name="recent",
         description="Pokazuje od 1 do 20 ostatnich ocen użytkownika AOTY",
     )
     @discord.app_commands.describe(
-        username="Nazwa użytkownika na AOTY",
+        username="Użytkownik AOTY",
         amount="Ile ostatnich ocen pokazać (1-20)",
     )
-    async def recent(
+    @discord.app_commands.autocomplete(username=username_autocomplete)
+    async def recent_command(
         interaction: discord.Interaction,
         username: str,
         amount: discord.app_commands.Range[int, 1, 20] = 5,
@@ -139,38 +85,30 @@ def setup_recent_command(
         username = username.strip()
 
         try:
-            exists = await asyncio.to_thread(
-                aoty_user_exists,
-                username,
-            )
-
-            if not exists:
+            if not await asyncio.to_thread(aoty.aoty_user_exists, username):
                 await interaction.followup.send(
                     f"❌ Konto AOTY **{username}** nie istnieje."
                 )
                 return
 
             ratings = await asyncio.to_thread(
-                get_ratings,
+                aoty.get_recent_ratings,
                 username,
                 int(amount),
             )
-
-        except AOTYRateLimit:
+        except aoty.AOTYRateLimit:
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań."
             )
             return
-
-        except requests.RequestException as e:
+        except requests.RequestException as exc:
             await interaction.followup.send(
-                f"❌ Błąd połączenia z AOTY: `{e}`"
+                f"❌ Błąd połączenia z AOTY: `{exc}`"
             )
             return
-
-        except Exception as e:
+        except Exception as exc:
             await interaction.followup.send(
-                f"❌ Błąd: `{type(e).__name__}: {e}`"
+                f"❌ Błąd: `{type(exc).__name__}: {exc}`"
             )
             return
 
@@ -180,51 +118,34 @@ def setup_recent_command(
             )
             return
 
-        avatar = None
-
         try:
-            avatar = await asyncio.to_thread(
-                get_user_avatar,
-                username,
-            )
+            avatar = await asyncio.to_thread(aoty.get_user_avatar, username)
         except Exception:
-            pass
+            avatar = None
 
-        recent_ratings = ratings[:int(amount)]
+        ratings = ratings[:int(amount)]
         embeds = []
 
-        for item in recent_ratings:
-            details = {}
-
+        for item in ratings:
             try:
-                details = await asyncio.to_thread(
-                    get_album_details,
-                    item["url"],
-                )
-            except AOTYRateLimit:
-                # Nie przerywamy całego /recent tylko dlatego, że AOTY
-                # zablokowało dodatkowy request po szczegóły.
-                details = {}
+                details = await asyncio.to_thread(aoty.get_album_details, item["url"])
             except Exception:
                 details = {}
 
-            embeds.append(
-                _rating_embed(
-                    username=username,
-                    item=item,
-                    avatar=avatar,
-                    details=details,
-                    score_color=score_color,
-                    score_icon=score_icon,
-                )
-            )
-
-            # Lekki odstęp przy większej liczbie pozycji.
+            embeds.append(_rating_embed(username, item, avatar, details))
             await asyncio.sleep(0.12)
 
-        # Discord przyjmuje maksymalnie 10 embedów w jednej wiadomości.
-        # Dla 11-20 pozycji wysyłamy więc drugą wiadomość.
+        # Discord: max 10 embeds na wiadomość. Każda partia ma własny select
+        # do wyboru oceny, której recenzję/track ratings chcemy zobaczyć.
         for start in range(0, len(embeds), 10):
+            batch_embeds = embeds[start:start + 10]
+            batch_items = ratings[start:start + 10]
+            view = MultiRatingView(
+                username=username,
+                items=batch_items,
+                main_embeds=batch_embeds,
+            )
             await interaction.followup.send(
-                embeds=embeds[start:start + 10],
+                embeds=batch_embeds,
+                view=view,
             )

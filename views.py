@@ -1,0 +1,547 @@
+"""Reusable Discord components for reviews, track ratings and profile paging."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+
+import discord
+
+import aoty
+from display_utils import display_romanized_name
+from shared import rating_flags_text, score_color, score_icon
+
+
+def _trim_description(text: str, limit: int = 4000) -> str:
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
+    artist = display_romanized_name(item.get("artist") or "Nieznany artysta")
+    album = display_romanized_name(item.get("album") or item.get("title") or "Nieznane wydanie")
+    score = extra.get("score") or item.get("score")
+    review_text = extra.get("review_text") or "Brak recenzji."
+
+    embed = discord.Embed(
+        title=f"✎ {artist} — {album}",
+        url=extra.get("review_url") or item.get("url"),
+        description=_trim_description(review_text),
+        color=score_color(score),
+    )
+
+    embed.set_author(
+        name=f"{username}  •  {extra.get('date') or item.get('date') or '?'}",
+        url=f"https://www.albumoftheyear.org/user/{username}/",
+    )
+
+    cover = item.get("cover")
+    if cover:
+        embed.set_thumbnail(url=cover)
+
+    embed.set_footer(text=f"AOTY • {score_icon(score)} {score or 'NR'}")
+    return embed
+
+
+def build_track_ratings_embed(username: str, item: dict, extra: dict) -> discord.Embed:
+    artist = display_romanized_name(item.get("artist") or "Nieznany artysta")
+    album = display_romanized_name(item.get("album") or item.get("title") or "Nieznane wydanie")
+    score = extra.get("score") or item.get("score")
+    track_ratings = list(extra.get("track_ratings") or [])
+
+    lines = []
+    for track in track_ratings:
+        number = track.get("number") or "?"
+        title = track.get("title") or "Nieznany utwór"
+        track_score = track.get("score") or "NR"
+        lines.append(f"**{number}.** {title} — **{track_score}**")
+
+    description = "\n".join(lines) if lines else "Brak ocen tracklisty."
+
+    embed = discord.Embed(
+        title=f"☷ {artist} — {album}",
+        url=extra.get("review_url") or item.get("url"),
+        description=_trim_description(description),
+        color=score_color(score),
+    )
+
+    embed.set_author(
+        name=f"{username}  •  {extra.get('date') or item.get('date') or '?'}",
+        url=f"https://www.albumoftheyear.org/user/{username}/",
+    )
+
+    cover = item.get("cover")
+    if cover:
+        embed.set_thumbnail(url=cover)
+
+    embed.set_footer(text=f"AOTY • {score_icon(score)} {score or 'NR'}")
+    return embed
+
+
+class RatingDetailsMixin:
+    username: str
+    item: dict
+    _extra_cache: dict | None
+
+    async def _load_extra(self) -> dict:
+        if self._extra_cache is not None:
+            return self._extra_cache
+
+        self._extra_cache = await asyncio.to_thread(
+            aoty.get_user_rating_for_album,
+            self.username,
+            self.item.get("album_id"),
+            self.item.get("url"),
+            self.item.get("release_format") or self.item.get("album_format"),
+        )
+        return self._extra_cache
+
+
+class SingleRatingView(discord.ui.View, RatingDetailsMixin):
+    """Main/review/track-ratings switcher for one user rating."""
+
+    def __init__(
+        self,
+        *,
+        username: str,
+        item: dict,
+        main_embed: discord.Embed,
+        extra: dict | None = None,
+        timeout: float = 600,
+    ):
+        super().__init__(timeout=timeout)
+        self.username = username
+        self.item = dict(item)
+        self.main_embed = main_embed
+        self._extra_cache = extra
+
+    @discord.ui.button(label="Główne", style=discord.ButtonStyle.secondary)
+    async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=self.main_embed, view=self)
+
+    @discord.ui.button(label="Recenzja", style=discord.ButtonStyle.secondary)
+    async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        extra = await self._load_extra()
+
+        if not extra.get("review_text"):
+            await interaction.followup.send("Ta ocena nie ma recenzji.", ephemeral=True)
+            return
+
+        await interaction.message.edit(
+            embed=build_review_embed(self.username, self.item, extra),
+            view=self,
+        )
+
+    @discord.ui.button(label="Track ratings", style=discord.ButtonStyle.secondary)
+    async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        extra = await self._load_extra()
+
+        if not extra.get("track_ratings"):
+            await interaction.followup.send("Ta ocena nie ma ocen tracklisty.", ephemeral=True)
+            return
+
+        await interaction.message.edit(
+            embed=build_track_ratings_embed(self.username, self.item, extra),
+            view=self,
+        )
+
+
+class RatingSelect(discord.ui.Select):
+    def __init__(self, owner, items: list[dict]):
+        self.owner = owner
+        options = []
+
+        for index, item in enumerate(items):
+            artist = display_romanized_name(item.get("artist") or "?")
+            album = display_romanized_name(item.get("album") or item.get("title") or "?")
+            score = item.get("score") or "NR"
+            flags = rating_flags_text(item)
+            description = f"{score} {flags}".strip()
+            options.append(
+                discord.SelectOption(
+                    label=f"{artist} — {album}"[:100],
+                    value=str(index),
+                    description=description[:100] if description else None,
+                )
+            )
+
+        super().__init__(
+            placeholder="Wybierz ocenę dla Recenzji / Track ratings",
+            options=options or [discord.SelectOption(label="Brak ocen", value="0")],
+            min_values=1,
+            max_values=1,
+            disabled=not bool(items),
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.owner.selected_index = int(self.values[0])
+        self.owner._selected_extra = None
+        await interaction.response.defer()
+
+
+class MultiRatingView(discord.ui.View):
+    """Details controls for a message containing several rating embeds."""
+
+    def __init__(
+        self,
+        *,
+        username: str,
+        items: list[dict],
+        main_embeds: list[discord.Embed],
+        timeout: float = 600,
+    ):
+        super().__init__(timeout=timeout)
+        self.username = username
+        self.items = [dict(item) for item in items]
+        self.main_embeds = main_embeds
+        self.selected_index = 0
+        self._selected_extra = None
+        self.add_item(RatingSelect(self, self.items))
+
+    async def _extra(self):
+        if self._selected_extra is not None:
+            return self._selected_extra
+
+        item = self.items[self.selected_index]
+        self._selected_extra = await asyncio.to_thread(
+            aoty.get_user_rating_for_album,
+            self.username,
+            item.get("album_id"),
+            item.get("url"),
+            item.get("release_format"),
+        )
+        return self._selected_extra
+
+    @discord.ui.button(label="Główne", style=discord.ButtonStyle.secondary, row=0)
+    async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embeds=self.main_embeds, view=self)
+
+    @discord.ui.button(label="Recenzja", style=discord.ButtonStyle.secondary, row=0)
+    async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        extra = await self._extra()
+
+        if not extra.get("review_text"):
+            await interaction.followup.send("Wybrana ocena nie ma recenzji.", ephemeral=True)
+            return
+
+        item = self.items[self.selected_index]
+        await interaction.message.edit(
+            embeds=[build_review_embed(self.username, item, extra)],
+            view=self,
+        )
+
+    @discord.ui.button(label="Track ratings", style=discord.ButtonStyle.secondary, row=0)
+    async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        extra = await self._extra()
+
+        if not extra.get("track_ratings"):
+            await interaction.followup.send("Wybrana ocena nie ma ocen tracklisty.", ephemeral=True)
+            return
+
+        item = self.items[self.selected_index]
+        await interaction.message.edit(
+            embeds=[build_track_ratings_embed(self.username, item, extra)],
+            view=self,
+        )
+
+
+class UserRatingSelect(discord.ui.Select):
+    def __init__(self, owner, usernames: list[str], rating_infos: dict[str, dict]):
+        self.owner = owner
+        options = []
+
+        for username in usernames[:25]:
+            info = rating_infos.get(username, {})
+            score = info.get("score") or "NR"
+            flags = rating_flags_text(info)
+            options.append(
+                discord.SelectOption(
+                    label=username[:100],
+                    value=username[:100],
+                    description=f"{score} {flags}".strip()[:100],
+                )
+            )
+
+        super().__init__(
+            placeholder="Wybierz użytkownika",
+            options=options,
+            min_values=1,
+            max_values=1,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.owner.selected_username = self.values[0]
+        await interaction.response.defer()
+
+
+class AlbumRatingView(discord.ui.View):
+    """Review/track detail switcher for /album and config users."""
+
+    def __init__(
+        self,
+        *,
+        main_embed: discord.Embed,
+        release_item: dict,
+        usernames: list[str],
+        rating_infos: dict[str, dict],
+        timeout: float = 600,
+    ):
+        super().__init__(timeout=timeout)
+        self.main_embed = main_embed
+        self.release_item = dict(release_item)
+        self.usernames = usernames
+        self.rating_infos = rating_infos
+        self.selected_username = usernames[0] if usernames else ""
+
+        if usernames:
+            self.add_item(UserRatingSelect(self, usernames, rating_infos))
+
+    async def _extra_for_selected(self) -> dict:
+        username = self.selected_username
+        cached = self.rating_infos.get(username, {})
+
+        if cached.get("review_text") is not None or cached.get("track_ratings"):
+            return cached
+
+        extra = await asyncio.to_thread(
+            aoty.get_user_rating_for_album,
+            username,
+            self.release_item.get("album_id"),
+            self.release_item.get("url"),
+            self.release_item.get("release_format") or self.release_item.get("album_format"),
+        )
+        self.rating_infos[username] = extra
+        return extra
+
+    @discord.ui.button(label="Główne", style=discord.ButtonStyle.secondary, row=0)
+    async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=self.main_embed, view=self)
+
+    @discord.ui.button(label="Recenzja", style=discord.ButtonStyle.secondary, row=0)
+    async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_username:
+            await interaction.response.send_message("Brak użytkowników w configu.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        extra = await self._extra_for_selected()
+
+        if not extra.get("review_text"):
+            await interaction.followup.send("Ten użytkownik nie ma recenzji tego wydania.", ephemeral=True)
+            return
+
+        item = dict(self.release_item)
+        item["score"] = extra.get("score")
+        item["date"] = extra.get("date")
+        await interaction.message.edit(
+            embed=build_review_embed(self.selected_username, item, extra),
+            view=self,
+        )
+
+    @discord.ui.button(label="Track ratings", style=discord.ButtonStyle.secondary, row=0)
+    async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_username:
+            await interaction.response.send_message("Brak użytkowników w configu.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        extra = await self._extra_for_selected()
+
+        if not extra.get("track_ratings"):
+            await interaction.followup.send("Ten użytkownik nie ma ocen tracklisty.", ephemeral=True)
+            return
+
+        item = dict(self.release_item)
+        item["score"] = extra.get("score")
+        item["date"] = extra.get("date")
+        await interaction.message.edit(
+            embed=build_track_ratings_embed(self.selected_username, item, extra),
+            view=self,
+        )
+
+
+class ProfileRatingSelect(discord.ui.Select):
+    def __init__(self, owner, page_items: list[dict]):
+        self.owner = owner
+        options = []
+
+        for index, item in enumerate(page_items):
+            artist = display_romanized_name(item.get("artist") or "?")
+            album = display_romanized_name(item.get("album") or "?")
+            options.append(
+                discord.SelectOption(
+                    label=f"{artist} — {album}"[:100],
+                    value=str(index),
+                    description=f"{item.get('score') or 'NR'} {rating_flags_text(item)}".strip()[:100],
+                )
+            )
+
+        super().__init__(
+            placeholder="Wybierz ocenę dla Recenzji / Track ratings",
+            options=options or [discord.SelectOption(label="Brak ocen", value="0")],
+            min_values=1,
+            max_values=1,
+            disabled=not bool(page_items),
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.owner.selected_index = int(self.values[0])
+        self.owner._selected_extra = None
+        await interaction.response.defer()
+
+
+class ProfilePagerView(discord.ui.View):
+    """Up to 10 pages of five profile ratings, with dynamic arrows."""
+
+    def __init__(
+        self,
+        *,
+        username: str,
+        ratings: list[dict],
+        build_page_embed: Callable[[int], discord.Embed],
+        timeout: float = 900,
+    ):
+        super().__init__(timeout=timeout)
+        self.username = username
+        self.ratings = ratings[:50]
+        self.build_page_embed = build_page_embed
+        self.page_index = 0
+        self.selected_index = 0
+        self._selected_extra = None
+        self._rebuild_components()
+
+    @property
+    def total_pages(self) -> int:
+        if not self.ratings:
+            return 1
+        return min(10, (len(self.ratings) + 4) // 5)
+
+    def page_items(self) -> list[dict]:
+        start = self.page_index * 5
+        return self.ratings[start:start + 5]
+
+    def _rebuild_components(self):
+        self.clear_items()
+
+        if self.page_index > 0:
+            previous = discord.ui.Button(label="←", style=discord.ButtonStyle.secondary, row=0)
+            previous.callback = self._previous
+            self.add_item(previous)
+
+        if self.page_index < self.total_pages - 1:
+            next_button = discord.ui.Button(label="→", style=discord.ButtonStyle.secondary, row=0)
+            next_button.callback = self._next
+            self.add_item(next_button)
+
+        self.add_item(ProfileRatingSelect(self, self.page_items()))
+
+        main = discord.ui.Button(label="Główne", style=discord.ButtonStyle.secondary, row=2)
+        main.callback = self._main
+        self.add_item(main)
+
+        review = discord.ui.Button(label="Recenzja", style=discord.ButtonStyle.secondary, row=2)
+        review.callback = self._review
+        self.add_item(review)
+
+        tracks = discord.ui.Button(label="Track ratings", style=discord.ButtonStyle.secondary, row=2)
+        tracks.callback = self._tracks
+        self.add_item(tracks)
+
+    async def _previous(self, interaction: discord.Interaction):
+        if self.page_index <= 0:
+            await interaction.response.defer()
+            return
+
+        self.page_index -= 1
+        self.selected_index = 0
+        self._selected_extra = None
+        self._rebuild_components()
+        await interaction.response.edit_message(
+            embed=self.build_page_embed(self.page_index),
+            view=self,
+        )
+
+    async def _next(self, interaction: discord.Interaction):
+        if self.page_index >= self.total_pages - 1:
+            await interaction.response.defer()
+            return
+
+        self.page_index += 1
+        self.selected_index = 0
+        self._selected_extra = None
+        self._rebuild_components()
+        await interaction.response.edit_message(
+            embed=self.build_page_embed(self.page_index),
+            view=self,
+        )
+
+    async def _main(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            embed=self.build_page_embed(self.page_index),
+            view=self,
+        )
+
+    def _selected_item(self) -> dict | None:
+        items = self.page_items()
+        if not items:
+            return None
+        index = min(self.selected_index, len(items) - 1)
+        return items[index]
+
+    async def _extra(self, item: dict) -> dict:
+        if self._selected_extra is not None:
+            return self._selected_extra
+
+        self._selected_extra = await asyncio.to_thread(
+            aoty.get_user_rating_for_album,
+            self.username,
+            item.get("album_id"),
+            item.get("url"),
+            item.get("release_format"),
+        )
+        return self._selected_extra
+
+    async def _review(self, interaction: discord.Interaction):
+        item = self._selected_item()
+        if not item:
+            await interaction.response.send_message("Brak oceny na tej stronie.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        extra = await self._extra(item)
+
+        if not extra.get("review_text"):
+            await interaction.followup.send("Wybrana ocena nie ma recenzji.", ephemeral=True)
+            return
+
+        await interaction.message.edit(
+            embed=build_review_embed(self.username, item, extra),
+            view=self,
+        )
+
+    async def _tracks(self, interaction: discord.Interaction):
+        item = self._selected_item()
+        if not item:
+            await interaction.response.send_message("Brak oceny na tej stronie.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        extra = await self._extra(item)
+
+        if not extra.get("track_ratings"):
+            await interaction.followup.send("Wybrana ocena nie ma ocen tracklisty.", ephemeral=True)
+            return
+
+        await interaction.message.edit(
+            embed=build_track_ratings_embed(self.username, item, extra),
+            view=self,
+        )

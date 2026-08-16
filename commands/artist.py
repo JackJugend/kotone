@@ -3,49 +3,28 @@ import asyncio
 import discord
 import requests
 
+import aoty
 from display_utils import display_romanized_name
-
+from settings import RATING_FORMATS
+from shared import build_release_variables
 
 MAX_ARTIST_RELEASES = 18
 
 
-def setup_artist_command(
-    tree,
-    rating_formats,
-    search_aoty_artists,
-    resolve_artist,
-    get_artist_releases,
-    get_album_details,
-    AOTYRateLimit,
-):
+def setup_artist_command(tree: discord.app_commands.CommandTree):
     format_choices = [
-        discord.app_commands.Choice(
-            name="Wszystkie formaty",
-            value="all",
-        )
+        discord.app_commands.Choice(name="Wszystkie formaty", value="all")
+    ] + [
+        discord.app_commands.Choice(name=info["label"], value=key)
+        for key, info in RATING_FORMATS.items()
     ]
 
-    for key, info in rating_formats.items():
-        format_choices.append(
-            discord.app_commands.Choice(
-                name=info["label"],
-                value=key,
-            )
-        )
-
-    async def artist_autocomplete(
-        interaction: discord.Interaction,
-        current: str,
-    ):
+    async def artist_autocomplete(interaction: discord.Interaction, current: str):
         if not current or len(current.strip()) < 2:
             return []
 
         try:
-            results = await asyncio.to_thread(
-                search_aoty_artists,
-                current,
-                10,
-            )
+            results = await asyncio.to_thread(aoty.search_aoty_artists, current, 10)
         except Exception:
             return []
 
@@ -65,12 +44,8 @@ def setup_artist_command(
         artist="Nazwa artysty na AOTY",
         format="Format wydań, które chcesz zobaczyć",
     )
-    @discord.app_commands.autocomplete(
-        artist=artist_autocomplete,
-    )
-    @discord.app_commands.choices(
-        format=format_choices,
-    )
+    @discord.app_commands.autocomplete(artist=artist_autocomplete)
+    @discord.app_commands.choices(format=format_choices)
     async def artist_command(
         interaction: discord.Interaction,
         artist: str,
@@ -79,10 +54,7 @@ def setup_artist_command(
         await interaction.response.defer()
 
         try:
-            artist_info = await asyncio.to_thread(
-                resolve_artist,
-                artist,
-            )
+            artist_info = await asyncio.to_thread(aoty.resolve_artist, artist)
 
             if not artist_info:
                 await interaction.followup.send(
@@ -91,56 +63,40 @@ def setup_artist_command(
                 return
 
             discography = await asyncio.to_thread(
-                get_artist_releases,
+                aoty.get_artist_releases,
                 artist_info["url"],
             )
-
-        except AOTYRateLimit:
+        except aoty.AOTYRateLimit:
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań."
             )
             return
-
-        except requests.RequestException as e:
+        except requests.RequestException as exc:
             await interaction.followup.send(
-                f"❌ Błąd połączenia z AOTY: `{e}`"
+                f"❌ Błąd połączenia z AOTY: `{exc}`"
+            )
+            return
+        except Exception as exc:
+            await interaction.followup.send(
+                f"❌ Błąd: `{type(exc).__name__}: {exc}`"
             )
             return
 
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Błąd: `{type(e).__name__}: {e}`"
-            )
-            return
-
-        releases = list(
-            discography.get(
-                "releases",
-                []
-            )
-        )
-
+        releases = list(discography.get("releases", []))
         selected_label = "Wszystkie formaty"
 
         if format != "all":
-            format_info = rating_formats.get(format)
-
-            if not format_info:
-                await interaction.followup.send(
-                    "❌ Nieznany format."
-                )
+            info = RATING_FORMATS.get(format)
+            if not info:
+                await interaction.followup.send("❌ Nieznany format.")
                 return
 
-            selected_label = format_info["label"]
+            selected_label = info["label"]
             wanted = selected_label.casefold()
-
             releases = [
                 item
                 for item in releases
-                if (
-                    item.get("album_format")
-                    or ""
-                ).casefold() == wanted
+                if (item.get("album_format") or "").casefold() == wanted
             ]
 
         if not releases:
@@ -154,46 +110,17 @@ def setup_artist_command(
         lines = []
 
         for release in shown:
-            release_date = release.get("year") or "Brak daty"
-            user_score = release.get("user_score") or "NR"
-
-            # Dokładną datę i aktualny User Score bierzemy ze strony wydania.
             try:
-                details = await asyncio.to_thread(
-                    get_album_details,
-                    release["url"],
-                )
-
-                release_date = (
-                    details.get("release_date")
-                    or release_date
-                )
-
-                user_score = (
-                    details.get("user_score")
-                    or user_score
-                )
-
-            except AOTYRateLimit:
-                # Zostają dane z dyskografii; nie kasujemy całej komendy.
-                pass
+                details = await asyncio.to_thread(aoty.get_album_details, release["url"])
             except Exception:
-                pass
+                details = {}
 
-            release_format = (
-                release.get("album_format")
-                or "?"
-            )
-
-            display_title = display_romanized_name(
-                release["title"]
-            )
-
+            variables = build_release_variables(release, details)
             lines.append(
-                f"• **[{display_title}]({release['url']})**"
-                f" — {release_date} · {release_format} — ⭐ **{user_score}**"
+                f"• **[{variables.display_album}]({release['url']})**"
+                f" — {variables.release_date} · {variables.album_format}"
+                f" — ⭐ **{variables.aoty_user_score}**"
             )
-
             await asyncio.sleep(0.12)
 
         embed = discord.Embed(
@@ -203,25 +130,12 @@ def setup_artist_command(
         )
 
         if discography.get("image"):
-            embed.set_thumbnail(
-                url=discography["image"],
-            )
+            embed.set_thumbnail(url=discography["image"])
 
         if len(releases) > len(shown):
-            footer = (
-                f"{selected_label} • pokazano {len(shown)} "
-                f"z {len(releases)} wydań."
-            )
+            footer = f"{selected_label} • pokazano {len(shown)} z {len(releases)} wydań."
         else:
-            footer = (
-                f"{selected_label} • {len(shown)} wydań."
-            )
+            footer = f"{selected_label} • {len(shown)} wydań."
 
-        embed.set_footer(
-            text=footer
-        )
-
-        await interaction.followup.send(
-            embed=embed,
-            file=file
-        )
+        embed.set_footer(text=footer)
+        await interaction.followup.send(embed=embed)

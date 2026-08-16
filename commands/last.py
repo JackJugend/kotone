@@ -1,241 +1,177 @@
 import asyncio
+
 import discord
 import requests
 
-from display_utils import display_romanized_name
-
-import os
-
-BASE_DIR = os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))
-)
-
-AOTY_ICON = os.path.join(
-    BASE_DIR,
-    "assets",
-    "aoty.jpg"
-)
-
-def setup_last_command(
-    tree,
-    get_ratings,
-    get_user_avatar,
-    get_album_details,
-    aoty_user_exists,
+import aoty
+from settings import AOTY_ICON_ATTACHMENT, RATING_FORMATS
+from shared import (
+    build_release_variables,
+    make_aoty_file,
+    rating_flags_text,
     score_color,
     score_icon,
-    AOTYRateLimit,
-):
+    username_autocomplete,
+)
+from views import SingleRatingView
+
+
+def setup_last_command(tree: discord.app_commands.CommandTree):
+    format_choices = [
+        discord.app_commands.Choice(name="Wszystkie formaty", value="all")
+    ] + [
+        discord.app_commands.Choice(name=info["label"], value=key)
+        for key, info in RATING_FORMATS.items()
+    ]
 
     @tree.command(
         name="last",
-        description="Pokazuje ostatnią ocenę użytkownika AOTY"
+        description="Pokazuje ostatnią ocenę użytkownika AOTY",
     )
     @discord.app_commands.describe(
-        username="Nazwa użytkownika na AOTY"
+        username="Użytkownik AOTY",
+        format="Opcjonalnie: tylko konkretny format wydania",
     )
-
-    async def ostatnia(
+    @discord.app_commands.autocomplete(username=username_autocomplete)
+    @discord.app_commands.choices(format=format_choices)
+    async def last_command(
         interaction: discord.Interaction,
-        username: str
+        username: str,
+        format: str = "all",
     ):
-
         await interaction.response.defer()
-
         username = username.strip()
 
         try:
-            exists = await asyncio.to_thread(
-                aoty_user_exists,
-                username
-            )
-
-            if not exists:
+            if not await asyncio.to_thread(aoty.aoty_user_exists, username):
                 await interaction.followup.send(
                     f"❌ Konto AOTY **{username}** nie istnieje."
                 )
                 return
 
             ratings = await asyncio.to_thread(
-                get_ratings,
-                username
+                aoty.get_recent_ratings,
+                username,
+                1,
+                format,
             )
 
-        except AOTYRateLimit:
+        except aoty.AOTYRateLimit:
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań."
             )
             return
-
-        except requests.RequestException as e:
+        except requests.RequestException as exc:
             await interaction.followup.send(
-                f"❌ Błąd połączenia z AOTY: `{e}`"
+                f"❌ Błąd połączenia z AOTY: `{exc}`"
             )
             return
-
-        except Exception as e:
+        except Exception as exc:
             await interaction.followup.send(
-                f"❌ Błąd: `{type(e).__name__}: {e}`"
+                f"❌ Błąd: `{type(exc).__name__}: {exc}`"
             )
             return
 
         if not ratings:
+            selected = (
+                RATING_FORMATS.get(format, {}).get("label")
+                if format != "all"
+                else None
+            )
+            suffix = f" w formacie **{selected}**" if selected else ""
             await interaction.followup.send(
-                f"❌ Nie znaleziono ocen użytkownika **{username}**."
+                f"❌ Nie znaleziono ocen użytkownika **{username}**{suffix}."
             )
             return
 
-        avatar = None
-        try:
-            avatar = await asyncio.to_thread(
-                get_user_avatar,
-                username
-            )
-        except Exception:
-            pass
-
         latest = ratings[0]
-
-        score = latest["score"]
-        artist = latest["artist"]
-        album = latest["album"]
-
-        display_artist = display_romanized_name(artist)
-        display_album = display_romanized_name(album)
-
-        date = latest["date"]
-        url = latest["url"]
-        cover = latest["cover"]
-
-        # Dodatkowe dane albumu do użycia w embedzie.
-        user_score = "?"
-        aoty_user_score = "?"
-        ratings_count = "?"
-
-        release_date = "?"
-        year = "?"
-        album_format = "?"
-
-        label = "?"
-        labels = []
-        labels_text = "?"
-
-        genres = []
-        genres_text = "?"
-        main_genre = "?"
-        other_genres = "?"
-        other_genres_text = "?"
-        all_genres_text = "?"
-
-        secondary_genres = []
-        secondary_genres_text = "?"
-
-        vibes = []
-        vibes_text = "?"
-
-        ranking_year = "?"
-        year_ranking = "?"
-        year_ranking_text = "?"
-
-        tracklist = []
-        tracklist_text = "?"
 
         try:
             details = await asyncio.to_thread(
-                get_album_details,
-                url
+                aoty.get_album_details,
+                latest["url"],
             )
-
-            user_score = details.get("user_score") or "?"
-            aoty_user_score = user_score
-            ratings_count = details.get("ratings_count") or "?"
-
-            release_date = details.get("release_date") or "?"
-            year = details.get("year") or "?"
-            album_format = details.get("album_format") or "?"
-
-            label = details.get("label") or "?"
-            labels = details.get("labels") or []
-            labels_text = details.get("labels_text") or "?"
-
-            genres = details.get("genres") or []
-            genres_text = details.get("genres_text") or " "
-
-            secondary_genres = details.get("secondary_genres") or []
-            secondary_genres_text = (
-                details.get("secondary_genres_text")
-                or " "
-            )
-
-            vibes = details.get("vibes") or []
-            vibes_text = details.get("vibes_text") or " "
-
-            ranking_year = details.get("ranking_year") or "?"
-            year_ranking = details.get("year_ranking") or "?"
-            year_ranking_text = (
-                details.get("year_ranking_text")
-                or "?"
-            )
-
-            tracklist = details.get("tracklist") or []
-            tracklist_text = details.get("tracklist_text") or "?"
-
-            if genres:
-                main_genre = genres[0]
-
-                if len(genres) > 1:
-                    other_genres = ", ".join(genres[1:])
-                    other_genres_text = other_genres
-                    all_genres_text = f"**{main_genre}**, {other_genres_text}"
-                else:
-                    all_genres_text = f"**{main_genre}**"
-
         except Exception:
-            pass
+            details = {}
 
-        file = discord.File(AOTY_ICON, filename="aoty.jpg")
+        variables = build_release_variables(latest, details, missing="?")
 
+        try:
+            avatar = await asyncio.to_thread(aoty.get_user_avatar, username)
+        except Exception:
+            avatar = None
+
+        flags = rating_flags_text(latest)
+        footer_flags = f"  •  {flags}" if flags else ""
+
+        # W aktualnym wyglądzie brak secondary genres / vibes daje pustą
+        # linię, nie znak zapytania. Zachowujemy to 1:1.
+        secondary_genres_display = (
+            variables.secondary_genres_text
+            if variables.secondary_genres
+            else " "
+        )
+        vibes_display = variables.vibes_text if variables.vibes else " "
+
+        # Wygląd zachowany z obecnej wersji /last.
         embed = discord.Embed(
-                title=f"\{score_icon(score)} {display_artist} — **{display_album}** ({year})",
-                url=url,
-                description=f"# — \⭐ **{score}** \⭐ — \n{all_genres_text}\n{secondary_genres_text}\n{vibes_text}",
-                color=score_color(score),
+            title=(
+                f"\\{score_icon(variables.score)} "
+                f"{variables.display_artist} — **{variables.display_album}** "
+                f"({variables.year})"
+            ),
+            url=variables.url,
+            description=(
+                f"# — \\⭐ **{variables.score}** \\⭐ — \n"
+                f"{variables.all_genres_text}\n"
+                f"{secondary_genres_display}\n"
+                f"{vibes_display}"
+            ),
+            color=score_color(variables.score),
         )
-        
-        embed.add_field(
-                name=f"\👥 **{aoty_user_score}**/{ratings_count}",
-                value=" ",
-                inline=True
 
+        embed.add_field(
+            name=(
+                f"\\👥 **{variables.aoty_user_score}**/"
+                f"{variables.ratings_count}"
+            ),
+            value=" ",
+            inline=True,
         )
         embed.add_field(
-                name=f"\📅 **{year_ranking_text}**",
-                value=" ",
-                inline=True
+            name=f"\\📅 **{variables.year_ranking_text}**",
+            value=" ",
+            inline=True,
         )
-        
+
         if avatar:
             embed.set_author(
-                name=f"{username}  •  {date}",
+                name=f"{username}  •  {variables.date}",
                 url=f"https://www.albumoftheyear.org/user/{username}",
-                icon_url=avatar
+                icon_url=avatar,
             )
         else:
-            embed.set_author(
-                name=f"{username}  •  {date}",
-            )
+            embed.set_author(name=f"{username}  •  {variables.date}")
 
-        if cover:
-            embed.set_thumbnail(
-                url=cover
-            )
+        if variables.cover:
+            embed.set_thumbnail(url=variables.cover)
 
         embed.set_footer(
-            text=f"{album_format}  •  {release_date}  •  {labels_text}",
-            icon_url="attachment://aoty.jpg"
+            text=(
+                f"{variables.album_format}  •  {variables.release_date}  •  "
+                f"{variables.labels_text}{footer_flags}"
+            ),
+            icon_url=AOTY_ICON_ATTACHMENT,
+        )
+
+        view = SingleRatingView(
+            username=username,
+            item=latest,
+            main_embed=embed,
         )
 
         await interaction.followup.send(
             embed=embed,
-            file=file
+            file=make_aoty_file(),
+            view=view,
         )
