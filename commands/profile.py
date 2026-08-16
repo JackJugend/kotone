@@ -23,7 +23,7 @@ def _favorite_line(item):
 
     if item_type == "artist":
         name = item.get("name") or "Nieznany artysta"
-        return f"\🎤 **[{name}]({url})**"
+        return f"\⭐ **[{name}]({url})**"
 
     album = item.get("album") or item.get("name") or "Nieznane wydanie"
     artist = item.get("artist")
@@ -43,7 +43,7 @@ def _recent_line(item, score_icon):
     release_format = item.get("release_format") or "?"
 
     return (
-        f"\{score_icon(score)} **{score}** "
+        f"\{score_icon(score)} **{score}** · "
         f"[{artist} — {album}]({url}) · {release_format}"
     )
 
