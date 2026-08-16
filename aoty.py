@@ -1799,11 +1799,48 @@ def get_recent_ratings(
 # Per-user release page: review, track ratings, like
 # ---------------------------------------------------------------------------
 
+def _aoty_user_album_slug(title: str | None) -> str:
+    """Build the slug used by AOTY user-release URLs from the release title.
+
+    Public release URL:
+        /album/1225702-kiiikiii-uncut-gem.php
+
+    User release URL:
+        /user/<name>/album/1225702-uncut-gem/
+
+    The artist portion is intentionally NOT included.
+    """
+    if not title:
+        return ""
+
+    value = unicodedata.normalize(
+        "NFKD",
+        str(title),
+    )
+
+    value = "".join(
+        char
+        for char in value
+        if not unicodedata.combining(char)
+    )
+
+    value = value.casefold()
+    value = value.replace("&", " and ")
+    value = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        value,
+    ).strip("-")
+
+    return value
+
+
 def _fetch_user_release_page(
     username: str,
     album_id: str,
     album_url: str | None,
     user_release_url: str | None = None,
+    album_title: str | None = None,
 ):
     """Fetch the canonical /user/<name>/album/<release>/ page.
 
@@ -1832,6 +1869,18 @@ def _fetch_user_release_page(
 
     # Best source: exact /user/.../album/... href from AOTY itself.
     add_candidate(user_release_url)
+
+    # AOTY user-release pages use the ALBUM TITLE slug, without the artist.
+    # This avoids the expensive ratings-list fallback in most button clicks.
+    title_slug = _aoty_user_album_slug(
+        album_title
+    )
+
+    if title_slug:
+        add_candidate(
+            f"{BASE_URL}/user/{username}/album/"
+            f"{album_id}-{title_slug}/"
+        )
 
     # AOTY may redirect this short ID-only route to its canonical user URL.
     add_candidate(
@@ -2398,6 +2447,7 @@ def get_user_rating_for_album(
     release_format: str | None = None,
     fallback_limit: int | None = None,
     user_release_url: str | None = None,
+    album_title: str | None = None,
 ) -> dict:
     """Fetch one user's live score + review + track ratings + like state.
 
@@ -2462,6 +2512,7 @@ def get_user_rating_for_album(
             album_id,
             album_url,
             user_release_url=user_release_url,
+            album_title=album_title,
         )
 
         if soup is not None:
@@ -2517,6 +2568,10 @@ def get_user_rating_for_album(
                     album_id,
                     album_url,
                     user_release_url=exact_user_url,
+                    album_title=(
+                        item.get("album")
+                        or album_title
+                    ),
                 )
 
                 if soup is not None:

@@ -115,6 +115,48 @@ class TimedDisableView(discord.ui.View):
             pass
 
 
+async def _load_live_extra(
+    username: str,
+    item: dict,
+    *,
+    fallback_limit: int | None = 60,
+) -> dict:
+    """Load review / track ratings without letting AOTY 429 crash a View.
+
+    For /last, /recent and /profile the selected rating is recent, so a small
+    fallback limit is enough if the direct user-release URL cannot be used.
+    """
+    try:
+        return await asyncio.to_thread(
+            aoty.get_user_rating_for_album,
+            username,
+            item.get("album_id"),
+            item.get("url"),
+            item.get("release_format") or item.get("album_format"),
+            fallback_limit,
+            item.get("review_url"),
+            item.get("album") or item.get("title"),
+        )
+
+    except aoty.AOTYRateLimit as exc:
+        return {
+            "score": item.get("score"),
+            "date": item.get("date"),
+            "review_url": item.get("review_url"),
+            "review_text": None,
+            "has_review": bool(item.get("has_review")),
+            "track_ratings": [],
+            "has_track_ratings": bool(
+                item.get("has_track_ratings")
+            ),
+            "liked": bool(item.get("liked")),
+            "rate_limited": True,
+            "rate_limit_error": str(exc),
+        }
+
+
+
+
 class RatingDetailsMixin:
     username: str
     item: dict
@@ -124,16 +166,17 @@ class RatingDetailsMixin:
         if self._extra_cache is not None:
             return self._extra_cache
 
-        self._extra_cache = await asyncio.to_thread(
-            aoty.get_user_rating_for_album,
+        extra = await _load_live_extra(
             self.username,
-            self.item.get("album_id"),
-            self.item.get("url"),
-            self.item.get("release_format") or self.item.get("album_format"),
-            None,
-            self.item.get("review_url"),
+            self.item,
+            fallback_limit=60,
         )
-        return self._extra_cache
+
+        # Do not cache a temporary 429 response; the user may retry later.
+        if not extra.get("rate_limited"):
+            self._extra_cache = extra
+
+        return extra
 
 
 class SingleRatingView(TimedDisableView, RatingDetailsMixin):
@@ -163,6 +206,13 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         await interaction.response.defer()
         extra = await self._load_extra()
 
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
+
         if not extra.get("review_text"):
             await interaction.followup.send("Ta ocena nie ma recenzji.", ephemeral=True)
             return
@@ -176,6 +226,13 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
     async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         extra = await self._load_extra()
+
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
 
         if not extra.get("has_track_ratings"):
             await interaction.followup.send("Ta ocena nie ma ocen tracklisty.", ephemeral=True)
@@ -245,16 +302,16 @@ class MultiRatingView(TimedDisableView):
             return self._selected_extra
 
         item = self.items[self.selected_index]
-        self._selected_extra = await asyncio.to_thread(
-            aoty.get_user_rating_for_album,
+        extra = await _load_live_extra(
             self.username,
-            item.get("album_id"),
-            item.get("url"),
-            item.get("release_format"),
-            None,
-            item.get("review_url"),
+            item,
+            fallback_limit=60,
         )
-        return self._selected_extra
+
+        if not extra.get("rate_limited"):
+            self._selected_extra = extra
+
+        return extra
 
     @discord.ui.button(label="Główne", style=discord.ButtonStyle.secondary, row=0)
     async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -264,6 +321,13 @@ class MultiRatingView(TimedDisableView):
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         extra = await self._extra()
+
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
 
         if not extra.get("review_text"):
             await interaction.followup.send("Wybrana ocena nie ma recenzji.", ephemeral=True)
@@ -279,6 +343,13 @@ class MultiRatingView(TimedDisableView):
     async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         extra = await self._extra()
+
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
 
         if not extra.get("has_track_ratings"):
             await interaction.followup.send("Wybrana ocena nie ma ocen tracklisty.", ephemeral=True)
@@ -353,16 +424,15 @@ class AlbumRatingView(TimedDisableView):
         ):
             return cached
 
-        extra = await asyncio.to_thread(
-            aoty.get_user_rating_for_album,
+        extra = await _load_live_extra(
             username,
-            self.release_item.get("album_id"),
-            self.release_item.get("url"),
-            self.release_item.get("release_format") or self.release_item.get("album_format"),
-            None,
-            self.release_item.get("review_url"),
+            self.release_item,
+            fallback_limit=None,
         )
-        self.rating_infos[username] = extra
+
+        if not extra.get("rate_limited"):
+            self.rating_infos[username] = extra
+
         return extra
 
     @discord.ui.button(label="Główne", style=discord.ButtonStyle.secondary, row=0)
@@ -377,6 +447,13 @@ class AlbumRatingView(TimedDisableView):
 
         await interaction.response.defer()
         extra = await self._extra_for_selected()
+
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
 
         if not extra.get("review_text"):
             await interaction.followup.send("Ten użytkownik nie ma recenzji tego wydania.", ephemeral=True)
@@ -398,6 +475,13 @@ class AlbumRatingView(TimedDisableView):
 
         await interaction.response.defer()
         extra = await self._extra_for_selected()
+
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
 
         if not extra.get("has_track_ratings"):
             await interaction.followup.send("Ten użytkownik nie ma ocen tracklisty.", ephemeral=True)
@@ -545,16 +629,16 @@ class ProfilePagerView(TimedDisableView):
         if self._selected_extra is not None:
             return self._selected_extra
 
-        self._selected_extra = await asyncio.to_thread(
-            aoty.get_user_rating_for_album,
+        extra = await _load_live_extra(
             self.username,
-            item.get("album_id"),
-            item.get("url"),
-            item.get("release_format"),
-            None,
-            item.get("review_url"),
+            item,
+            fallback_limit=60,
         )
-        return self._selected_extra
+
+        if not extra.get("rate_limited"):
+            self._selected_extra = extra
+
+        return extra
 
     async def _review(self, interaction: discord.Interaction):
         item = self._selected_item()
@@ -564,6 +648,13 @@ class ProfilePagerView(TimedDisableView):
 
         await interaction.response.defer()
         extra = await self._extra(item)
+
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
 
         if not extra.get("review_text"):
             await interaction.followup.send("Wybrana ocena nie ma recenzji.", ephemeral=True)
@@ -582,6 +673,13 @@ class ProfilePagerView(TimedDisableView):
 
         await interaction.response.defer()
         extra = await self._extra(item)
+
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
 
         if not extra.get("has_track_ratings"):
             await interaction.followup.send("Wybrana ocena nie ma ocen tracklisty.", ephemeral=True)
