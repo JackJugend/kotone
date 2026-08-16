@@ -129,7 +129,7 @@ def setup_last_command(
         )
 
         embed.add_field(
-                name=f"⭐ **{score}** {score_icon(score)}",
+                name=f"\⭐ **{score}** {score_icon(score)}",
                 value=" ",
                 inline=False
         )
