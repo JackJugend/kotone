@@ -129,7 +129,7 @@ def setup_last_command(
         )
 
         embed.add_field(
-                name=f"**{score}**  {score_icon(score)}",
+                name=f"⭐ **{score}** {score_icon(score)}",
                 value=" ",
                 inline=False
         )
@@ -151,7 +151,7 @@ def setup_last_command(
             )
 
         embed.set_footer(
-            text=f"{date}  🔥",
+            text=f"• {date}",
             icon_url="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSiJt1MSjldtmrIaTGoE2r3CgsaPB8l1UneW-j9w103bSS5ft45C-OLTCg&s=10"
         )
 
