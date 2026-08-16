@@ -14,10 +14,10 @@
     "check_interval": 1800,
 
     "rating_fetch_limits": {
-        "lp": 1000,
-        "ep": 1000,
+        "lp": 500,
+        "ep": 500,
         "mixtape": 100,
-        "single": 500,
+        "single": 100,
         "compilation": 100,
         "live": 20,
         "reissue": 100,
