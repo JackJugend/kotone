@@ -8,7 +8,7 @@ import aoty
 from display_utils import display_romanized_name
 from settings import USERS
 from shared import (
-    build_release_variables,
+    load_release_variables,
     rating_flags_text,
     score_color,
     score_icon,
@@ -154,8 +154,6 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 )
                 return
 
-            details = await asyncio.to_thread(aoty.get_album_details, release["url"])
-
         except aoty.AOTYRateLimit:
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań."
@@ -176,12 +174,15 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         release_item = dict(release)
         release_item["artist"] = artist_name
         release_item["album"] = release.get("title")
-        release_item["release_format"] = (
-            details.get("album_format")
-            or release.get("album_format")
+        release_item["release_format"] = release.get(
+            "album_format"
         )
 
-        variables = build_release_variables(release_item, details)
+        variables = await load_release_variables(
+            release_item,
+        )
+
+        release_item["release_format"] = variables.album_format
 
         embed = discord.Embed(
             title=(

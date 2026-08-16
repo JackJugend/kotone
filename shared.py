@@ -14,7 +14,6 @@ from typing import Any
 import discord
 
 from display_utils import display_romanized_name
-from settings import AOTY_ICON, AOTY_ICON_FILENAME
 
 
 def score_color(score: Any) -> discord.Color:
@@ -73,11 +72,6 @@ def score_icon(score: Any) -> str:
     if value >= 10:
         return "❓"
     return "⚫"
-
-
-def make_aoty_file() -> discord.File:
-    # discord.File jest jednorazowy — tworzymy nowy obiekt przy każdej wysyłce.
-    return discord.File(AOTY_ICON, filename=AOTY_ICON_FILENAME)
 
 
 @dataclass(slots=True)
@@ -291,6 +285,42 @@ def build_release_variables(
         review_url=item.get("review_url"),
         review_text=item.get("review_text"),
         track_ratings=list(item.get("track_ratings") or []),
+    )
+
+
+
+async def load_release_variables(
+    item: dict | None,
+    *,
+    missing: str = "Brak danych",
+) -> ReleaseVariables:
+    """The single public-release details path used across the whole bot.
+
+    This prevents /last, /recent, /album and monitor notifications from
+    silently using different ratings_count/default logic.
+    """
+    item = item or {}
+    details = {}
+
+    url = item.get("url")
+
+    if url:
+        import aoty
+
+        try:
+            details = await asyncio.to_thread(
+                aoty.get_album_details,
+                url,
+            )
+        except aoty.AOTYRateLimit:
+            details = {}
+        except Exception:
+            details = {}
+
+    return build_release_variables(
+        item,
+        details,
+        missing=missing,
     )
 
 

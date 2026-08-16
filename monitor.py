@@ -22,7 +22,7 @@ from settings import (
     USERS,
 )
 from shared import (
-    build_release_variables,
+    load_release_variables,
     rating_flags_text,
     score_color,
     score_icon,
@@ -92,22 +92,6 @@ class RatingMonitor:
             )
             return None
 
-    async def _album_details(self, item: dict) -> dict:
-        url = item.get("url")
-        if not url:
-            return {}
-
-        try:
-            return await asyncio.to_thread(aoty.get_album_details, url)
-        except aoty.AOTYRateLimit:
-            # Szczegóły są dodatkiem. Sama ocena nadal może zostać wysłana.
-            return {}
-        except Exception as exc:
-            print(
-                f"[AOTY] Szczegóły {item.get('artist')} — "
-                f"{item.get('album')}: {type(exc).__name__}: {exc}"
-            )
-            return {}
 
     async def send_new_rating(
         self,
@@ -119,8 +103,9 @@ class RatingMonitor:
         if channel is None:
             return False
 
-        details = await self._album_details(item)
-        variables = build_release_variables(item, details)
+        variables = await load_release_variables(
+            item,
+        )
         flags = rating_flags_text(item)
         flags_text = f"  •  {flags}" if flags else ""
 
@@ -183,8 +168,9 @@ class RatingMonitor:
         if channel is None:
             return False
 
-        details = await self._album_details(item)
-        variables = build_release_variables(item, details)
+        variables = await load_release_variables(
+            item,
+        )
         flags = rating_flags_text(item)
         flags_text = f"  •  {flags}" if flags else ""
 

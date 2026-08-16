@@ -6,7 +6,7 @@ import requests
 import aoty
 from settings import AOTY_ICON_ATTACHMENT, RATING_FORMATS
 from shared import (
-    build_release_variables,
+    load_release_variables,
     rating_flags_text,
     score_color,
     score_icon,
@@ -85,15 +85,10 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         latest = ratings[0]
 
-        try:
-            details = await asyncio.to_thread(
-                aoty.get_album_details,
-                latest["url"],
-            )
-        except Exception:
-            details = {}
-
-        variables = build_release_variables(latest, details, missing="?")
+        variables = await load_release_variables(
+            latest,
+            missing="?",
+        )
 
         try:
             avatar = await asyncio.to_thread(aoty.get_user_avatar, username)

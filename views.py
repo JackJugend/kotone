@@ -173,7 +173,10 @@ class RatingDetailsMixin:
         )
 
         # Do not cache a temporary 429 response; the user may retry later.
-        if not extra.get("rate_limited"):
+        if (
+            not extra.get("rate_limited")
+            and not extra.get("detail_incomplete")
+        ):
             self._extra_cache = extra
 
         return extra
@@ -230,6 +233,19 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         if extra.get("rate_limited"):
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
+
+        if (
+            extra.get("detail_incomplete")
+            and extra.get("has_track_ratings")
+            and not extra.get("track_ratings")
+        ):
+            await interaction.followup.send(
+                "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
+                "ale szczegóły nie zostały teraz pobrane. "
+                "Spróbuj ponownie za chwilę.",
                 ephemeral=True,
             )
             return
@@ -308,7 +324,10 @@ class MultiRatingView(TimedDisableView):
             fallback_limit=60,
         )
 
-        if not extra.get("rate_limited"):
+        if (
+            not extra.get("rate_limited")
+            and not extra.get("detail_incomplete")
+        ):
             self._selected_extra = extra
 
         return extra
@@ -347,6 +366,19 @@ class MultiRatingView(TimedDisableView):
         if extra.get("rate_limited"):
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
+
+        if (
+            extra.get("detail_incomplete")
+            and extra.get("has_track_ratings")
+            and not extra.get("track_ratings")
+        ):
+            await interaction.followup.send(
+                "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
+                "ale szczegóły nie zostały teraz pobrane. "
+                "Spróbuj ponownie za chwilę.",
                 ephemeral=True,
             )
             return
@@ -424,13 +456,38 @@ class AlbumRatingView(TimedDisableView):
         ):
             return cached
 
-        extra = await _load_live_extra(
-            username,
-            self.release_item,
-            fallback_limit=None,
+        selected_item = dict(
+            self.release_item
         )
 
-        if not extra.get("rate_limited"):
+        # Reuse the exact /user/<username>/album/... URL already found during
+        # /album's first live lookup. This keeps /album on the same code path
+        # as /last /recent /profile and avoids unnecessary ratings-page scans.
+        if cached.get("review_url"):
+            selected_item["review_url"] = cached.get(
+                "review_url"
+            )
+
+        if cached.get("score") is not None:
+            selected_item["score"] = cached.get(
+                "score"
+            )
+
+        if cached.get("date"):
+            selected_item["date"] = cached.get(
+                "date"
+            )
+
+        extra = await _load_live_extra(
+            username,
+            selected_item,
+            fallback_limit=60,
+        )
+
+        if (
+            not extra.get("rate_limited")
+            and not extra.get("detail_incomplete")
+        ):
             self.rating_infos[username] = extra
 
         return extra
@@ -479,6 +536,19 @@ class AlbumRatingView(TimedDisableView):
         if extra.get("rate_limited"):
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
+
+        if (
+            extra.get("detail_incomplete")
+            and extra.get("has_track_ratings")
+            and not extra.get("track_ratings")
+        ):
+            await interaction.followup.send(
+                "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
+                "ale szczegóły nie zostały teraz pobrane. "
+                "Spróbuj ponownie za chwilę.",
                 ephemeral=True,
             )
             return
@@ -635,7 +705,10 @@ class ProfilePagerView(TimedDisableView):
             fallback_limit=60,
         )
 
-        if not extra.get("rate_limited"):
+        if (
+            not extra.get("rate_limited")
+            and not extra.get("detail_incomplete")
+        ):
             self._selected_extra = extra
 
         return extra

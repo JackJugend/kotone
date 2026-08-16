@@ -5,7 +5,7 @@ import requests
 
 import aoty
 from shared import (
-    build_release_variables,
+    load_release_variables,
     rating_flags_text,
     score_color,
     score_icon,
@@ -14,8 +14,7 @@ from shared import (
 from views import MultiRatingView
 
 
-def _rating_embed(username, item, avatar, details):
-    variables = build_release_variables(item, details)
+def _rating_embed(username, item, avatar, variables):
     flags = rating_flags_text(item)
     footer_flags = f"  •  {flags}" if flags else ""
 
@@ -127,12 +126,18 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
         embeds = []
 
         for item in ratings:
-            try:
-                details = await asyncio.to_thread(aoty.get_album_details, item["url"])
-            except Exception:
-                details = {}
+            variables = await load_release_variables(
+                item,
+            )
 
-            embeds.append(_rating_embed(username, item, avatar, details))
+            embeds.append(
+                _rating_embed(
+                    username,
+                    item,
+                    avatar,
+                    variables,
+                )
+            )
             await asyncio.sleep(0.12)
 
         # Discord: max 10 embeds na wiadomość. Każda partia ma własny select
