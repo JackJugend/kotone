@@ -15,10 +15,10 @@
 
     "rating_fetch_limits": {
         "lp": 500,
-        "ep": 500,
-        "mixtape": 100,
+        "ep": 300,
+        "mixtape": 50,
         "single": 100,
-        "compilation": 100,
+        "compilation": 20,
         "live": 20,
         "reissue": 100,
         "soundtrack": 20,
