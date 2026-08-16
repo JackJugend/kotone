@@ -196,7 +196,7 @@ def setup_last_command(
         file = discord.File(AOTY_ICON, filename="aoty.jpg")
 
         embed = discord.Embed(
-                title=f"{score_icon(score)} {display_artist} • **{display_album}** ({year})",
+                title=f"# {score_icon(score)} {display_artist} • **{display_album}** ({year})",
                 url=url,
                 description=f"## {all_genres_text}\n-# {secondary_genres_text}",
                 color=score_color(score),
@@ -222,7 +222,7 @@ def setup_last_command(
         
         if avatar:
             embed.set_author(
-                name=f"{album_format}{username} • {date}",
+                name=f"{username} — {date}",
                 url=f"https://www.albumoftheyear.org/user/{username}",
                 icon_url=avatar
             )
@@ -237,8 +237,8 @@ def setup_last_command(
             )
 
         embed.set_footer(
-            text=f"{release_date} • {label}",
-            icon_url="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSiJt1MSjldtmrIaTGoE2r3CgsaPB8l1UneW-j9w103bSS5ft45C-OLTCg&s=10"
+            text=f"{album_format} • {release_date} • {label}",
+            icon_url="attachment://aoty.jpg"
         )
 
         await interaction.followup.send(
