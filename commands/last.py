@@ -116,7 +116,7 @@ def setup_last_command(
                     other_genres_text = other_genres
                     all_genres_text = f"**{main_genre}**, {other_genres_text}"
                 else:
-                    all_genres_text = f"{**main_genre}"
+                    all_genres_text = f"**{main_genre}**"
 
         except Exception:
             pass
