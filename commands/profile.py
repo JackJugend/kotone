@@ -23,7 +23,7 @@ def _favorite_line(item: dict) -> str:
 
     if item_type == "artist":
         name = display_romanized_name(item.get("name") or "Nieznany artysta")
-        return f"\\⭐ **[{name}]({url})**"
+        return f"\⭐ **[{name}]({url})**"
 
     album = display_romanized_name(
         item.get("album") or item.get("name") or "Nieznane wydanie"
@@ -32,9 +32,9 @@ def _favorite_line(item: dict) -> str:
     display_artist = display_romanized_name(artist) if artist else None
 
     if display_artist:
-        return f"\\💿 **[{display_artist} — {album}]({url})**"
+        return f"\💿 **[{display_artist} — {album}]({url})**"
 
-    return f"\\💿 **[{album}]({url})**"
+    return f"\💿 **[{album}]({url})**"
 
 
 def _recent_line(item: dict) -> str:
@@ -47,7 +47,7 @@ def _recent_line(item: dict) -> str:
     flags_text = f" · {flags}" if flags else ""
 
     return (
-        f"\\{score_icon(score)} **{score}** · "
+        f"{score_icon(score)} **{score}** · "
         f"[{artist} — {album}]({url}) · {release_format}{flags_text}"
     )
 

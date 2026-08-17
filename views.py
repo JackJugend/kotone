@@ -67,7 +67,7 @@ def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
     if cover:
         embed.set_thumbnail(url=cover)
 
-    embed.set_footer(text=f"AOTY • {score_icon(score)} {score or 'NR'}")
+    embed.set_footer(text=f"AOTY • {score_icon(score)[1:]} {score or 'NR'}")
     return embed
 
 
@@ -179,7 +179,7 @@ async def build_release_details_embed(
         )
     set_aoty_footer(
         embed,
-        f"AOTY • {score_icon(variables.score)} {variables.score or 'NR'}",
+        f"AOTY • {score_icon(variables.score)[1:]} {variables.score or 'NR'}",
     )
     return embed
 
