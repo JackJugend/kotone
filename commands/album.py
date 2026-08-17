@@ -244,8 +244,10 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 f"({variables.year})"
             ),
             url=variables.url,
-            description=f"{variables.all_genres_text}\n"
-                        f"{secondary_genres_display}"
+            description=(
+                f"{variables.all_genres_text}\n"
+                f"{secondary_genres_display}"
+            ),
             color=score_color(variables.aoty_user_score),
         )
 
