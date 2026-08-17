@@ -22,6 +22,7 @@ from database import DB
 from http_client import (
     PRIORITY_BACKGROUND,
     PRIORITY_INTERACTIVE,
+    PRIORITY_MAINTENANCE,
     PRIORITY_NORMAL,
     call_with_priority,
 )
@@ -53,6 +54,13 @@ async def _thread_call(priority: int, func, /, *args, **kwargs):
 
 
 class DataService:
+    def __init__(self):
+        # A single malformed release/user-detail page must not permanently
+        # block enrichment of every later album. Failed items get a temporary
+        # in-memory cooldown; a process restart safely clears it.
+        self._detail_retry_after: dict[tuple[str, str], float] = {}
+        self._release_retry_after: dict[str, float] = {}
+
     def is_monitored(self, username: str) -> bool:
         return DB.is_monitored(username)
 
@@ -442,24 +450,30 @@ class DataService:
         username: str,
         *,
         formats_per_cycle: int | None = None,
+        priority: int = PRIORITY_MAINTENANCE,
     ) -> dict:
-        """Slowly archive *all* AOTY rating formats for config users.
+        """Archive all AOTY rating formats for a configured user.
 
-        Notification settings and archive coverage are intentionally separate:
-        ``rating_fetch_limits.foo = 0`` means "do not monitor/notify this
-        format", not "throw that part of the user's profile away". The archive
-        eventually visits every format, but for notification-enabled formats it
-        preserves existing score/active state so it cannot swallow a monitor
-        notification.
+        First-time bootstrap is driven by a dedicated worker, not by the
+        20-minute notification monitor. The worker asks for one format at a
+        time and immediately continues after a short rest, so SQLite fills
+        steadily while all HTTP requests still pass through the global
+        low-priority rate limiter.
 
-        Only a small number of due formats is fetched per monitor cycle. A
-        successful format is not fetched again until the archive interval has
-        elapsed, which spreads comprehensive profile storage over many hours
-        instead of creating an AOTY request burst.
+        ``profile_rating_archive_limit_per_format = 0`` means unlimited.
+        Notification-enabled formats preserve already-known scores so this
+        background job cannot consume a score change before the monitor sends
+        its Discord notification. Older/missing rows are still added.
         """
         canonical = DB.canonical_username(username)
         if canonical is None:
-            return {"formats": 0, "ratings": 0, "errors": 0}
+            return {
+                "formats_due": 0,
+                "formats_attempted": 0,
+                "formats_ok": 0,
+                "ratings": 0,
+                "errors": 0,
+            }
 
         if formats_per_cycle is None:
             formats_per_cycle = PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE
@@ -473,26 +487,53 @@ class DataService:
 
         saved = 0
         errors = 0
+        attempted = 0
+        succeeded = 0
+        last_format = None
+        last_error = None
 
         for format_key in due:
+            attempted += 1
+            last_format = format_key
             info = RATING_FORMATS[format_key]
+
             try:
-                ratings = await _thread_call(
-                    PRIORITY_BACKGROUND,
-                    aoty.get_ratings_for_format,
-                    canonical,
-                    format_key,
-                    PROFILE_RATING_ARCHIVE_LIMIT_PER_FORMAT,
-                )
+                if PROFILE_RATING_ARCHIVE_LIMIT_PER_FORMAT <= 0:
+                    ratings = await _thread_call(
+                        priority,
+                        aoty.get_all_ratings_for_format,
+                        canonical,
+                        format_key,
+                    )
+                else:
+                    ratings = await _thread_call(
+                        priority,
+                        aoty.get_ratings_for_format,
+                        canonical,
+                        format_key,
+                        PROFILE_RATING_ARCHIVE_LIMIT_PER_FORMAT,
+                    )
+
                 notification_enabled = int(
                     RATING_FETCH_LIMITS.get(format_key, 0) or 0
                 ) > 0
+                previous_archive = DB.archive_status(canonical).get(
+                    format_key,
+                    {},
+                )
+                was_bootstrapped = bool(
+                    previous_archive.get("last_success_at")
+                )
+
                 DB.upsert_format_snapshot(
                     canonical,
                     info["label"],
                     ratings,
                     preserve_existing_state=notification_enabled,
                     deactivate_missing=not notification_enabled,
+                    mark_new_pending=(
+                        notification_enabled and was_bootstrapped
+                    ),
                 )
                 DB.mark_format_sync(
                     canonical,
@@ -500,23 +541,38 @@ class DataService:
                     success=True,
                     item_count=len(ratings),
                 )
+
                 saved += len(ratings)
+                succeeded += 1
+                print(
+                    f"[ARCHIVE] {canonical}/{info['label']}: "
+                    f"{len(ratings)} ratings zapisanych."
+                )
+
             except Exception as exc:
                 errors += 1
+                last_error = f"{type(exc).__name__}: {exc}"
                 DB.mark_format_sync(
                     canonical,
                     format_key,
                     success=False,
-                    error=f"{type(exc).__name__}: {exc}",
+                    error=last_error,
                 )
-                # A rate limit/outage is shared by all routes. Continuing to
-                # the next format would only add pressure, so stop this cycle.
+                print(
+                    f"[ARCHIVE] {canonical}/{info['label']}: {last_error}"
+                )
+                # 429/outage usually affects every route. Even a parser error
+                # is safer to retry later than to immediately hammer onward.
                 break
 
         return {
-            "formats": len(due),
+            "formats_due": len(due),
+            "formats_attempted": attempted,
+            "formats_ok": succeeded,
             "ratings": saved,
             "errors": errors,
+            "last_format": last_format,
+            "last_error": last_error,
         }
 
     # ------------------------------------------------------------------
@@ -529,29 +585,74 @@ class DataService:
         *,
         detail_limit: int,
         release_limit: int,
-    ) -> None:
-        if not DB.is_monitored(username):
-            return
+        priority: int = PRIORITY_MAINTENANCE,
+    ) -> dict:
+        """Gradually persist release metadata, reviews and Track Ratings.
 
-        for item in DB.release_enrichment_candidates(username, release_limit):
+        Network/rate-limit failures stop the pass because they are global. A
+        parser failure for one specific album receives a one-hour cooldown and
+        the worker may continue with another candidate on a later pass.
+        """
+        if not DB.is_monitored(username):
+            return {"releases": 0, "details": 0, "errors": 0}
+
+        now = time.time()
+        release_done = 0
+        detail_done = 0
+        errors = 0
+
+        # Pull a few extra candidates so one temporarily broken album does not
+        # monopolize position #1 forever.
+        release_candidates = DB.release_enrichment_candidates(
+            username,
+            max(int(release_limit) * 5, int(release_limit)),
+        )
+
+        for item in release_candidates:
+            if release_done >= max(0, int(release_limit)):
+                break
+
+            album_id = str(item.get("album_id") or "")
+            if self._release_retry_after.get(album_id, 0.0) > now:
+                continue
+
             try:
                 details = await _thread_call(
-                    PRIORITY_BACKGROUND,
+                    priority,
                     aoty.get_album_details,
                     item.get("url"),
                 )
-                DB.save_release_details(item["album_id"], details)
+                DB.save_release_details(album_id, details)
+                self._release_retry_after.pop(album_id, None)
+                release_done += 1
+            except (aoty.AOTYRateLimit, requests.RequestException):
+                errors += 1
+                break
             except Exception as exc:
+                errors += 1
+                self._release_retry_after[album_id] = time.time() + 60 * 60
                 print(
-                    f"[CACHE] release {item.get('album_id')}: "
+                    f"[CACHE] release {album_id}: "
                     f"{type(exc).__name__}: {exc}"
                 )
+
+        detail_candidates = DB.detail_enrichment_candidates(
+            username,
+            max(int(detail_limit) * 5, int(detail_limit)),
+        )
+
+        for item in detail_candidates:
+            if detail_done >= max(0, int(detail_limit)):
                 break
 
-        for item in DB.detail_enrichment_candidates(username, detail_limit):
+            album_id = str(item.get("album_id") or "")
+            key = (str(username).casefold(), album_id)
+            if self._detail_retry_after.get(key, 0.0) > now:
+                continue
+
             try:
                 detail = await _thread_call(
-                    PRIORITY_BACKGROUND,
+                    priority,
                     aoty.get_user_rating_for_album,
                     username,
                     item.get("album_id"),
@@ -561,13 +662,25 @@ class DataService:
                     item.get("review_url"),
                     item.get("album"),
                 )
-                DB.save_rating_detail(username, item["album_id"], detail)
+                DB.save_rating_detail(username, album_id, detail)
+                self._detail_retry_after.pop(key, None)
+                detail_done += 1
+            except (aoty.AOTYRateLimit, requests.RequestException):
+                errors += 1
+                break
             except Exception as exc:
+                errors += 1
+                self._detail_retry_after[key] = time.time() + 60 * 60
                 print(
-                    f"[CACHE] user detail {username}/{item.get('album_id')}: "
+                    f"[CACHE] user detail {username}/{album_id}: "
                     f"{type(exc).__name__}: {exc}"
                 )
-                break
+
+        return {
+            "releases": release_done,
+            "details": detail_done,
+            "errors": errors,
+        }
 
 
 DATA = DataService()

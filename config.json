@@ -51,7 +51,14 @@
         "release_detail_ttl": 43200,
         "local_database_backup_interval": 86400,
         "profile_rating_archive_interval": 86400,
-        "profile_rating_archive_formats_per_cycle": 3,
-        "profile_rating_archive_limit_per_format": 2000
+        "profile_rating_archive_formats_per_cycle": 1,
+        "profile_rating_archive_limit_per_format": 0,
+        "archive_worker_start_delay": 15,
+        "archive_worker_rest_seconds": 4,
+        "archive_worker_error_sleep": 300,
+        "archive_worker_idle_seconds": 300,
+        "aoty_archive_max_pages": 500,
+        "aoty_maintenance_min_request_interval": 2.0,
+        "enrich_worker_rest_seconds": 12
     }
 }

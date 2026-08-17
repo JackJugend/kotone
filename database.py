@@ -36,7 +36,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def _json_dump(value) -> str:
@@ -261,6 +261,10 @@ class Database:
                 "first_seen_at": "REAL",
                 "last_seen_at": "REAL",
                 "active": "INTEGER NOT NULL DEFAULT 1",
+                # Set only by a completed background archive after that format
+                # has already been bootstrapped once. The monitor treats such
+                # rows as new until a Discord notification is successfully sent.
+                "notify_pending": "INTEGER NOT NULL DEFAULT 0",
             }
             for column, definition in rating_columns.items():
                 self._ensure_column("ratings", column, definition)
@@ -723,6 +727,7 @@ class Database:
             "detail_complete": bool(row["detail_complete"]),
             "detail_synced_at": row["detail_synced_at"],
             "active": bool(row["active"]),
+            "notify_pending": bool(row["notify_pending"]),
         }
 
     def get_ratings_map(self, username: str, *, include_inactive: bool = False) -> dict[str, dict]:
@@ -913,6 +918,11 @@ class Database:
                 active=active,
             )
             self.connection.execute(
+                "UPDATE ratings SET notify_pending = 0 "
+                "WHERE username = ? AND album_id = ?",
+                (username, str(item.get("album_id") or "")),
+            )
+            self.connection.execute(
                 "UPDATE users SET updated_at = ? WHERE username = ?",
                 (_now(), username),
             )
@@ -941,6 +951,11 @@ class Database:
                     item,
                     record_history=record_history,
                     active=True,
+                )
+                self.connection.execute(
+                    "UPDATE ratings SET notify_pending = 0 "
+                    "WHERE username = ? AND album_id = ?",
+                    (username, album_id),
                 )
 
             if mark_missing_inactive:
@@ -1468,6 +1483,7 @@ class Database:
         *,
         preserve_existing_state: bool = False,
         deactivate_missing: bool = True,
+        mark_new_pending: bool = False,
     ) -> None:
         """Persist one comprehensive AOTY format snapshot silently.
 
@@ -1479,6 +1495,11 @@ class Database:
         Missing rows are deactivated only for snapshots that own that format
         and only when at least one row was parsed. An unexpected empty parser
         result can therefore never wipe a previously healthy cache.
+
+        ``mark_new_pending`` is enabled only after a notification-enabled format
+        has completed its first archive. A newly discovered row is then cached
+        immediately but flagged for the monitor, preventing the background
+        crawler from silently consuming a new-rating notification.
         """
         canonical = self._require_monitored(username)
         ratings = list(ratings)
@@ -1506,12 +1527,22 @@ class Database:
                         item["score"] = existing["score"]
                         active = bool(existing["active"])
 
-                self._upsert_rating_locked(
+                is_new, _ = self._upsert_rating_locked(
                     canonical,
                     item,
                     record_history=False,
                     active=active,
                 )
+
+                if is_new and mark_new_pending:
+                    self.connection.execute(
+                        """
+                        UPDATE ratings
+                        SET notify_pending = 1
+                        WHERE username = ? AND album_id = ?
+                        """,
+                        (canonical, album_id),
+                    )
 
             if deactivate_missing and seen_ids:
                 rows = self.connection.execute(
@@ -1802,6 +1833,9 @@ class Database:
                 "history": scalar(
                     "SELECT COUNT(*) FROM rating_history"
                 ),
+                "notify_pending": scalar(
+                    "SELECT COUNT(*) FROM ratings WHERE notify_pending = 1"
+                ),
                 "releases": scalar(
                     "SELECT COUNT(*) FROM releases"
                 ),
@@ -1872,6 +1906,15 @@ class Database:
                         """,
                         (username,),
                     ),
+                    "notify_pending": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM ratings
+                        WHERE username = ?
+                          AND notify_pending = 1
+                        """,
+                        (username,),
+                    ),
                     "reviews": scalar(
                         """
                         SELECT COUNT(*)
@@ -1937,7 +1980,67 @@ class Database:
                         """,
                         (username,),
                     ),
+                    "archive_last_success_at": (
+                        lambda archive_row: (
+                            archive_row[0]
+                            if archive_row is not None
+                            else None
+                        )
+                    )(
+                        self.connection.execute(
+                            """
+                            SELECT MAX(last_success_at)
+                            FROM rating_format_sync
+                            WHERE username = ?
+                            """,
+                            (username,),
+                        ).fetchone()
+                    ),
+                    "archive_last_attempt_at": (
+                        lambda archive_row: (
+                            archive_row[0]
+                            if archive_row is not None
+                            else None
+                        )
+                    )(
+                        self.connection.execute(
+                            """
+                            SELECT MAX(last_attempt_at)
+                            FROM rating_format_sync
+                            WHERE username = ?
+                            """,
+                            (username,),
+                        ).fetchone()
+                    ),
                 }
+
+                archive_error = self.connection.execute(
+                    """
+                    SELECT format_key, last_attempt_at, last_error
+                    FROM rating_format_sync
+                    WHERE username = ?
+                      AND last_error IS NOT NULL
+                    ORDER BY COALESCE(last_attempt_at, 0) DESC
+                    LIMIT 1
+                    """,
+                    (username,),
+                ).fetchone()
+
+                user_stats["archive_error_format"] = (
+                    archive_error["format_key"]
+                    if archive_error is not None
+                    else None
+                )
+                user_stats["archive_error_at"] = (
+                    archive_error["last_attempt_at"]
+                    if archive_error is not None
+                    else None
+                )
+                user_stats["archive_error"] = (
+                    archive_error["last_error"]
+                    if archive_error is not None
+                    else None
+                )
 
                 users.append(
                     user_stats

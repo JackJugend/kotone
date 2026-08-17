@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup
 from http_client import HTTP, ExternalRateLimit, ExternalUnavailable
 from settings import (
     ALBUM_LOOKUP_FALLBACK_LIMIT,
+    AOTY_ARCHIVE_MAX_PAGES,
     BASE_URL,
     RATING_FETCH_LIMITS,
     RATING_FORMATS,
@@ -47,6 +48,12 @@ class AOTYRateLimit(Exception):
 
 class AOTYUserNotFound(Exception):
     pass
+
+
+class AOTYArchiveIncomplete(Exception):
+    """Safety stop: paginacja nie zakończyła się w rozsądnym limicie stron."""
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -2805,22 +2812,41 @@ def _ratings_route_url(username: str, slug: str | None = None, page: int = 1) ->
 def _get_ratings_from_route(
     username: str,
     slug: str | None = None,
-    limit: int = 60,
+    limit: int | None = 60,
     forced_format: str | None = None,
+    *,
+    max_pages: int = 100,
 ) -> list[dict]:
-    try:
-        limit = int(limit)
-    except (TypeError, ValueError):
-        limit = 60
+    """Read a ratings route page-by-page.
 
-    if limit <= 0:
-        return []
+    ``limit=None`` means *no rating-count cap* and is reserved for the durable
+    profile archive. ``max_pages`` is only a corruption/infinite-pagination
+    guard: hitting it while AOTY still returns new rows raises instead of
+    pretending the archive is complete.
+    """
+    unlimited = limit is None
 
+    if not unlimited:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 60
+
+        if limit <= 0:
+            return []
+
+    max_pages = max(1, int(max_pages))
     all_ratings = []
     seen = set()
     page = 1
 
-    while len(all_ratings) < limit and page <= 100:
+    while unlimited or len(all_ratings) < int(limit):
+        if page > max_pages:
+            raise AOTYArchiveIncomplete(
+                f"Przerwano paginację {username}/{slug or 'all'} po "
+                f"{max_pages} stronach; format nie zostanie oznaczony jako pełny."
+            )
+
         url = _ratings_route_url(username, slug=slug, page=page)
         soup = BeautifulSoup(fetch_page(url), "html.parser")
         page_ratings = _parse_ratings_soup(soup, forced_format=forced_format)
@@ -2837,14 +2863,20 @@ def _get_ratings_from_route(
             seen.add(album_id)
             all_ratings.append(item)
             new_on_page += 1
-            if len(all_ratings) >= limit:
+
+            if not unlimited and len(all_ratings) >= int(limit):
                 break
 
+        # Repeated page/canonical redirect: stop instead of looping forever.
         if new_on_page == 0:
             break
+
         page += 1
 
-    return all_ratings[:limit]
+    if unlimited:
+        return all_ratings
+
+    return all_ratings[: int(limit)]
 
 
 def get_ratings_for_format(username: str, format_key: str, limit: int | None = None) -> list[dict]:
@@ -2861,6 +2893,26 @@ def get_ratings_for_format(username: str, format_key: str, limit: int | None = N
         slug=info["slug"],
         limit=limit,
         forced_format=info["label"],
+    )
+
+
+def get_all_ratings_for_format(username: str, format_key: str) -> list[dict]:
+    """Fetch an entire rating format for the persistent configured-user archive.
+
+    There is intentionally no rating-count limit. A high page guard protects
+    Kotone if AOTY starts returning the same/invalid pagination forever.
+    """
+    info = RATING_FORMATS.get(str(format_key))
+
+    if not info:
+        return []
+
+    return _get_ratings_from_route(
+        username=username,
+        slug=info["slug"],
+        limit=None,
+        forced_format=info["label"],
+        max_pages=AOTY_ARCHIVE_MAX_PAGES,
     )
 
 

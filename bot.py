@@ -12,6 +12,7 @@ import signal
 
 import discord
 
+from background import BackgroundWorker
 from commands.album import setup_album_command
 from commands.artist import setup_artist_command
 from commands.check import setup_check_command
@@ -42,6 +43,7 @@ client = discord.Client(
 
 tree = discord.app_commands.CommandTree(client)
 monitor = RatingMonitor(client)
+background = BackgroundWorker(client)
 health = HealthServer(client, monitor)
 
 setup_last_command(tree)
@@ -76,11 +78,12 @@ async def setup_hook() -> None:
 
 client.setup_hook = setup_hook
 monitor_task: asyncio.Task | None = None
+background_task: asyncio.Task | None = None
 
 
 @client.event
 async def on_ready() -> None:
-    global monitor_task
+    global monitor_task, background_task
 
     print(f"Zalogowano jako {client.user}")
 
@@ -90,11 +93,18 @@ async def on_ready() -> None:
             name="kotone-aoty-monitor",
         )
 
+    if background_task is None or background_task.done():
+        background_task = asyncio.create_task(
+            background.run(),
+            name="kotone-background-cache",
+        )
+
 
 async def _request_shutdown() -> None:
     """Graceful SIGTERM path used by Railway draining."""
 
     monitor.stop()
+    background.stop()
     if not client.is_closed():
         await client.close()
 
@@ -121,12 +131,19 @@ async def main() -> None:
             await client.start(TOKEN)
     finally:
         monitor.stop()
+        background.stop()
 
         if monitor_task is not None and not monitor_task.done():
             try:
                 await asyncio.wait_for(monitor_task, timeout=8)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 monitor_task.cancel()
+
+        if background_task is not None and not background_task.done():
+            try:
+                await asyncio.wait_for(background_task, timeout=8)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                background_task.cancel()
 
         await health.stop()
 

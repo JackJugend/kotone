@@ -34,6 +34,7 @@ from settings import (
     AOTY_CIRCUIT_COOLDOWN,
     AOTY_CIRCUIT_FAILURES,
     AOTY_MAX_RETRIES,
+    AOTY_MAINTENANCE_MIN_REQUEST_INTERVAL,
     AOTY_MIN_REQUEST_INTERVAL,
     AOTY_REQUEST_TIMEOUT_CONNECT,
     AOTY_REQUEST_TIMEOUT_READ,
@@ -43,6 +44,9 @@ from settings import (
 PRIORITY_INTERACTIVE = 0
 PRIORITY_NORMAL = 10
 PRIORITY_BACKGROUND = 20
+# Najniższy priorytet: pełne archiwum i enrichment. Interaktywne komendy oraz
+# regularny monitor mogą wejść przed następny request wielostronicowego joba.
+PRIORITY_MAINTENANCE = 30
 
 
 class ExternalRateLimit(RuntimeError):
@@ -106,10 +110,19 @@ def call_with_priority(priority: int, func, /, *args, **kwargs):
 
 
 class _PriorityGate:
-    """Thread-safe one-at-a-time request gate with a priority queue."""
+    """Thread-safe one-at-a-time request gate with a priority queue.
 
-    def __init__(self, min_interval: float):
+    Maintenance crawling has a larger spacing than normal traffic. This keeps
+    a full-profile bootstrap polite without making Discord interactions wait
+    for that same conservative delay.
+    """
+
+    def __init__(self, min_interval: float, maintenance_interval: float):
         self.min_interval = max(0.0, float(min_interval))
+        self.maintenance_interval = max(
+            self.min_interval,
+            float(maintenance_interval),
+        )
         self._condition = threading.Condition()
         self._queue: list[tuple[int, int, object]] = []
         self._sequence = 0
@@ -164,7 +177,12 @@ class _PriorityGate:
         finally:
             with self._condition:
                 self._in_flight = False
-                self._next_allowed = time.monotonic() + self.min_interval
+                interval = (
+                    self.maintenance_interval
+                    if int(priority) >= PRIORITY_MAINTENANCE
+                    else self.min_interval
+                )
+                self._next_allowed = time.monotonic() + interval
                 self._condition.notify_all()
 
 
@@ -173,7 +191,10 @@ class ResilientHTTPClient:
 
     def __init__(self):
         self.session = requests.Session()
-        self._gate = _PriorityGate(AOTY_MIN_REQUEST_INTERVAL)
+        self._gate = _PriorityGate(
+            AOTY_MIN_REQUEST_INTERVAL,
+            AOTY_MAINTENANCE_MIN_REQUEST_INTERVAL,
+        )
         self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._cache_lock = threading.RLock()
         self._circuit_lock = threading.RLock()

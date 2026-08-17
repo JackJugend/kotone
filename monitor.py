@@ -28,11 +28,8 @@ from services import DATA
 from settings import (
     CHANNEL_ID,
     CHECK_INTERVAL,
-    DETAIL_ENRICH_PER_CYCLE,
     FULL_SYNC_INTERVAL,
     PROFILE_SYNC_INTERVAL,
-    PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
-    RELEASE_ENRICH_PER_CYCLE,
     USER_CHANNELS,
     USERS,
 )
@@ -232,15 +229,24 @@ class RatingMonitor:
             await self._refresh_profile_if_due(username, manual=manual)
 
             stamps = DB.sync_timestamps(username)
+            first_sync = not stamps.get("ratings_synced_at")
+            monitor_version = DB.get_monitor_version(username)
+            needs_seed = first_sync or monitor_version != MONITOR_STATE_VERSION
+
             full_due = (
                 not stamps.get("full_ratings_synced_at")
                 or time.time() - float(stamps.get("full_ratings_synced_at") or 0)
                 >= FULL_SYNC_INTERVAL
             )
-            # Expensive full scans are staggered: the background loop allows
-            # only one configured user to perform a full scan per cycle. A
-            # manual /check may still perform it immediately when due.
-            full = bool(full_due and (manual or allow_full))
+            # New DB/schema deployments seed from the cheap recent routes.
+            # The dedicated archive worker owns comprehensive first-time
+            # coverage, so startup no longer duplicates hundreds of requests
+            # before that worker can even begin.
+            full = bool(
+                not needs_seed
+                and full_due
+                and (manual or allow_full)
+            )
 
             try:
                 ratings = await DATA.fetch_ratings_live(
@@ -272,15 +278,6 @@ class RatingMonitor:
                 # disabled formats below.
                 DB.set_monitor_version(username, MONITOR_STATE_VERSION)
                 DB.mark_sync_success(username, full=full)
-                await DATA.archive_profile_ratings(
-                    username,
-                    formats_per_cycle=PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
-                )
-                await DATA.enrich_user(
-                    username,
-                    detail_limit=DETAIL_ENRICH_PER_CYCLE,
-                    release_limit=RELEASE_ENRICH_PER_CYCLE,
-                )
                 DB.backup_if_due()
                 print(
                     f"[AOTY] {username}: 0 ocen w formatach monitorowanych; "
@@ -294,8 +291,6 @@ class RatingMonitor:
                 }
 
             existing = DB.get_ratings_map(username, include_inactive=True)
-            first_sync = not stamps.get("ratings_synced_at")
-            monitor_version = DB.get_monitor_version(username)
 
             # First deploy / coverage migration: seed silently. This avoids a
             # flood of historical notifications after a schema/config upgrade.
@@ -311,15 +306,6 @@ class RatingMonitor:
                 # per-format archive owns format-specific removal handling.
                 DB.set_monitor_version(username, MONITOR_STATE_VERSION)
                 DB.mark_sync_success(username, full=full)
-                await DATA.archive_profile_ratings(
-                    username,
-                    formats_per_cycle=PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
-                )
-                await DATA.enrich_user(
-                    username,
-                    detail_limit=DETAIL_ENRICH_PER_CYCLE,
-                    release_limit=RELEASE_ENRICH_PER_CYCLE,
-                )
                 DB.backup_if_due()
                 print(
                     f"[AOTY] {username}: seed/migracja — zapisano "
@@ -340,7 +326,11 @@ class RatingMonitor:
             for item in ratings:
                 album_id = str(item["album_id"])
                 previous = existing.get(album_id)
-                if previous is None or not previous.get("active", True):
+                if (
+                    previous is None
+                    or not previous.get("active", True)
+                    or previous.get("notify_pending", False)
+                ):
                     new_items.append(item)
                     continue
 
@@ -399,17 +389,9 @@ class RatingMonitor:
             DB.set_monitor_version(username, MONITOR_STATE_VERSION)
             DB.mark_sync_success(username, full=full)
 
-            # Fill durable cache slowly, *after* notification work. If AOTY is
-            # unhappy, enrichment stops without harming the monitor result.
-            await DATA.archive_profile_ratings(
-                username,
-                formats_per_cycle=PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
-            )
-            await DATA.enrich_user(
-                username,
-                detail_limit=DETAIL_ENRICH_PER_CYCLE,
-                release_limit=RELEASE_ENRICH_PER_CYCLE,
-            )
+            # Pełne archiwum i enrichment mają osobnego workera. Monitor
+            # kończy szybko, więc wielostronicowy bootstrap nie przesuwa
+            # kolejnych sprawdzeń i powiadomień.
             DB.backup_if_due()
 
             return {

@@ -182,6 +182,13 @@ class DatabaseTests(unittest.TestCase):
                 ).fetchall()
             },
         )
+        rating_columns = {
+            row[1]
+            for row in db.connection.execute(
+                "PRAGMA table_info(ratings)"
+            ).fetchall()
+        }
+        self.assertIn("notify_pending", rating_columns)
         db.close()
 
     def test_corrupt_database_restores_local_backup(self):
@@ -369,6 +376,76 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(due_after, ["holiday"])
         db.close()
 
+    def test_background_archive_new_row_can_remain_pending_for_monitor(self):
+        db = self.make_db(("enso",))
+
+        # First bootstrap is historical seeding and must not create a flood.
+        db.upsert_format_snapshot(
+            "enso",
+            "LP",
+            [
+                {
+                    "album_id": "old-1",
+                    "score": "70",
+                    "artist": "A",
+                    "album": "Old",
+                    "release_format": "LP",
+                }
+            ],
+            preserve_existing_state=True,
+            deactivate_missing=False,
+            mark_new_pending=False,
+        )
+        self.assertFalse(
+            db.get_ratings_map("enso", include_inactive=True)["old-1"][
+                "notify_pending"
+            ]
+        )
+
+        # Later maintenance may discover a genuinely new row before the next
+        # monitor poll. Cache it, but do not let that hide the notification.
+        db.upsert_format_snapshot(
+            "enso",
+            "LP",
+            [
+                {
+                    "album_id": "new-1",
+                    "score": "91",
+                    "artist": "A",
+                    "album": "New",
+                    "release_format": "LP",
+                }
+            ],
+            preserve_existing_state=True,
+            deactivate_missing=False,
+            mark_new_pending=True,
+        )
+        pending = db.get_ratings_map(
+            "enso",
+            include_inactive=True,
+        )["new-1"]
+        self.assertTrue(pending["notify_pending"])
+
+        # A monitor-authoritative save after successful Discord delivery clears
+        # the pending flag.
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "new-1",
+                "score": "91",
+                "artist": "A",
+                "album": "New",
+                "release_format": "LP",
+            },
+            record_history=True,
+        )
+        self.assertFalse(
+            db.get_ratings_map("enso", include_inactive=True)["new-1"][
+                "notify_pending"
+            ]
+        )
+        db.close()
+
     def test_release_cache_requires_monitored_rating(self):
         db = self.make_db(("enso",))
         details = {
@@ -393,6 +470,21 @@ class DatabaseTests(unittest.TestCase):
         )
         self.assertTrue(db.save_release_details("99", details))
         self.assertEqual(db.get_release_details("99")["ratings_count"], "123")
+        db.close()
+
+
+    def test_archive_diagnostics_exposes_last_success(self):
+        db = self.make_db(("enso",))
+        db.mark_format_sync(
+            "enso",
+            "lp",
+            success=True,
+            item_count=42,
+        )
+        stats = db.diagnostics()
+        user = stats["users"][0]
+        self.assertEqual(user["archive_items"], 42)
+        self.assertIsNotNone(user["archive_last_success_at"])
         db.close()
 
 
@@ -423,6 +515,81 @@ class HTTPClientTests(unittest.TestCase):
         self.assertTrue(second.from_cache)
         self.assertEqual(len(calls), 1)
 
+
+
+class RatingsArchiveTests(unittest.TestCase):
+    def test_unlimited_route_reads_until_first_empty_page(self):
+        original_fetch = aoty.fetch_page
+        original_parse = aoty._parse_ratings_soup
+        fetched = []
+
+        try:
+            def fake_fetch(url, expected_url=None):
+                fetched.append(url)
+                page = url.rstrip("/").split("/")[-1]
+                if not page.isdigit():
+                    page = "1"
+                return f"<html><body>{page}</body></html>"
+
+            def fake_parse(soup, forced_format=None):
+                page = int(soup.get_text(strip=True))
+                if page >= 4:
+                    return []
+                return [
+                    {
+                        "album_id": f"album-{page}",
+                        "score": "80",
+                        "release_format": forced_format,
+                    }
+                ]
+
+            aoty.fetch_page = fake_fetch
+            aoty._parse_ratings_soup = fake_parse
+
+            items = aoty._get_ratings_from_route(
+                "enso",
+                slug="lp",
+                limit=None,
+                forced_format="LP",
+                max_pages=10,
+            )
+
+            self.assertEqual(
+                [item["album_id"] for item in items],
+                ["album-1", "album-2", "album-3"],
+            )
+            self.assertEqual(len(fetched), 4)
+        finally:
+            aoty.fetch_page = original_fetch
+            aoty._parse_ratings_soup = original_parse
+
+    def test_unlimited_route_refuses_to_mark_endless_pagination_complete(self):
+        original_fetch = aoty.fetch_page
+        original_parse = aoty._parse_ratings_soup
+        counter = {"page": 0}
+
+        try:
+            def fake_fetch(url, expected_url=None):
+                counter["page"] += 1
+                return "<html></html>"
+
+            def fake_parse(soup, forced_format=None):
+                page = counter["page"]
+                return [{"album_id": f"album-{page}", "score": "80"}]
+
+            aoty.fetch_page = fake_fetch
+            aoty._parse_ratings_soup = fake_parse
+
+            with self.assertRaises(aoty.AOTYArchiveIncomplete):
+                aoty._get_ratings_from_route(
+                    "enso",
+                    slug="lp",
+                    limit=None,
+                    max_pages=3,
+                )
+        finally:
+            aoty.fetch_page = original_fetch
+            aoty._parse_ratings_soup = original_parse
 
 
 class ParserTests(unittest.TestCase):

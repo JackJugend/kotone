@@ -127,15 +127,57 @@ PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE = _runtime_int(
     1,
     0,
 )
+# 0 = bez limitu liczby ocen w jednym formacie. Archiwizator nadal ma
+# techniczny limit stron (ochrona przed zapętloną paginacją AOTY), ale nie
+# ucina profilu po arbitralnej liczbie ratings.
 PROFILE_RATING_ARCHIVE_LIMIT_PER_FORMAT = _runtime_int(
     "profile_rating_archive_limit_per_format",
-    2000,
+    0,
+    0,
+)
+
+# Osobny worker archiwum działa niezależnie od 20-minutowego monitora.
+# Dzięki temu pierwszy pełny zapis profili nie czeka jednego cyklu na każdy
+# format, a zwykły monitor nie jest blokowany wielostronicowym scrapowaniem.
+ARCHIVE_WORKER_START_DELAY = _runtime_float(
+    "archive_worker_start_delay",
+    15.0,
+    0.0,
+)
+ARCHIVE_WORKER_REST_SECONDS = _runtime_float(
+    "archive_worker_rest_seconds",
+    4.0,
+    1.0,
+)
+ENRICH_WORKER_REST_SECONDS = _runtime_float(
+    "enrich_worker_rest_seconds",
+    12.0,
+    2.0,
+)
+ARCHIVE_WORKER_ERROR_SLEEP = _runtime_float(
+    "archive_worker_error_sleep",
+    5 * 60.0,
+    30.0,
+)
+ARCHIVE_WORKER_IDLE_SECONDS = _runtime_float(
+    "archive_worker_idle_seconds",
+    5 * 60.0,
+    30.0,
+)
+AOTY_ARCHIVE_MAX_PAGES = _runtime_int(
+    "aoty_archive_max_pages",
+    500,
     20,
 )
 
 # Centralny transport AOTY. Jeden request naraz + minimalny odstęp to
 # najważniejsza ochrona przed 429.
 AOTY_MIN_REQUEST_INTERVAL = _runtime_float("aoty_min_request_interval", 1.25, 0.2)
+AOTY_MAINTENANCE_MIN_REQUEST_INTERVAL = _runtime_float(
+    "aoty_maintenance_min_request_interval",
+    2.0,
+    AOTY_MIN_REQUEST_INTERVAL,
+)
 AOTY_MAX_RETRIES = _runtime_int("aoty_max_retries", 2, 0)
 AOTY_CIRCUIT_FAILURES = _runtime_int("aoty_circuit_failures", 4, 2)
 AOTY_CIRCUIT_COOLDOWN = _runtime_float("aoty_circuit_cooldown", 90.0, 10.0)

@@ -169,7 +169,8 @@ def setup_dbstats_command(
                 f"☷ Albums z Track Ratings: **{counts['track_rating_albums']}**\n"
                 f"↳ zapisane oceny utworów: **{counts['user_track_ratings']}**\n"
                 f"♥ Favorites: **{counts['favorites']}**\n"
-                f"↕ Historia zmian: **{counts['history']}**"
+                f"↕ Historia zmian: **{counts['history']}**\n"
+                f"⏳ Pending monitor: **{counts['notify_pending']}**"
             ),
             inline=True,
         )
@@ -211,8 +212,14 @@ def setup_dbstats_command(
             # archive_ok/total_formats tells us how far the slow background
             # archival process has progressed. archive_seen can be useful
             # while a format currently has an error instead of a success.
+            archive_percent = (
+                round((archive_ok / total_formats) * 100)
+                if total_formats
+                else 100
+            )
             archive_line = (
-                f"Archive: **{archive_ok}/{total_formats} formatów OK**"
+                f"Archive: **{archive_ok}/{total_formats} formatów OK** "
+                f"(**{archive_percent}%**)"
             )
 
             if archive_seen > archive_ok:
@@ -223,6 +230,7 @@ def setup_dbstats_command(
             value = (
                 f"Ratings SQLite: **{user['ratings_active']}** aktywnych"
                 f" / **{user['ratings_total']}** zapisanych\n"
+                f"Pending monitor: **{user['notify_pending']}**\n"
                 f"AOTY profile ratings: **"
                 f"{_safe_text(user.get('profile_ratings_count'))}**\n"
                 f"Reviews: **{user['reviews']}**"
@@ -231,9 +239,27 @@ def setup_dbstats_command(
                 f" • Favorites: **{user['favorites']}**\n"
                 f"{archive_line}\n"
                 f"Archive items: **{user['archive_items']}**\n"
+                f"Archive sync: **{_discord_time(user.get('archive_last_success_at'))}**\n"
                 f"Profile sync: **{_discord_time(user.get('profile_synced_at'))}**\n"
                 f"Ratings sync: **{_discord_time(user.get('ratings_synced_at'))}**"
             )
+
+            archive_error = user.get(
+                "archive_error"
+            )
+
+            if archive_error:
+                clipped_archive = str(
+                    archive_error
+                ).replace(
+                    "\n",
+                    " ",
+                )[:240]
+                value += (
+                    f"\n⚠️ Archive {user.get('archive_error_format') or '?'}: "
+                    f"`{clipped_archive}` "
+                    f"({_discord_time(user.get('archive_error_at'))})"
+                )
 
             last_error = user.get(
                 "last_error"
