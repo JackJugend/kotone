@@ -212,6 +212,14 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         )
 
         release_item["release_format"] = variables.album_format
+        artist_url = (
+            variables.artist_url
+            or discography.get("url")
+            or artist_info.get("url")
+        )
+        icon_url = discography.get("image")
+        if artist_url:
+            release_item["artist_url"] = artist_url
 
         embed = discord.Embed(
             title=(
@@ -250,7 +258,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             flags_text = f"  {flags}" if flags else ""
 
             if rating is not None:
-                rating_value = f"\{score_icon(rating)} **{rating}**{flags_text}"
+                rating_value = f"\\{score_icon(rating)} **{rating}**{flags_text}"
             else:
                 rating_value = f"— **NR**{flags_text}"
 
@@ -261,14 +269,12 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             )
             await asyncio.sleep(0.15)
 
+        author = {"name": artist_name}
+        if artist_url:
+            author["url"] = artist_url
         if icon_url:
-            embed.set_author(
-                name=artist_name,
-                url=artist_url,
-                icon_url=artist_url,
-            )
-        else:
-            embed.set_author(name=artist_name)
+            author["icon_url"] = icon_url
+        embed.set_author(**author)
 
         if variables.cover:
             embed.set_thumbnail(url=variables.cover)
