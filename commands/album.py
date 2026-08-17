@@ -5,7 +5,6 @@ import discord
 import requests
 
 import aoty
-from http_client import PRIORITY_INTERACTIVE, call_with_priority
 from services import DATA
 from display_utils import display_romanized_name
 from settings import USERS
@@ -23,40 +22,39 @@ DISCOGRAPHY_CACHE_TTL = 900
 def setup_album_command(tree: discord.app_commands.CommandTree):
     discography_cache = {}
 
-    async def _discography_for(artist_value):
+    async def _discography_for(artist_value, *, prefer_cached=False):
         key = str(artist_value or "").strip().casefold()
         now = time.monotonic()
         cached = discography_cache.get(key)
 
-        if cached and now - cached[0] < DISCOGRAPHY_CACHE_TTL:
+        if (
+            not prefer_cached
+            and cached
+            and now - cached[0] < DISCOGRAPHY_CACHE_TTL
+        ):
             return cached[1], cached[2]
 
-        artist_info = await asyncio.to_thread(
-            call_with_priority,
-            PRIORITY_INTERACTIVE,
-            aoty.resolve_artist,
+        artist_info, discography = await DATA.get_artist_discography(
             artist_value,
+            prefer_cached=prefer_cached,
         )
-        if not artist_info:
+        if not artist_info or not discography:
             return None, None
 
-        discography = await asyncio.to_thread(
-            call_with_priority,
-            PRIORITY_INTERACTIVE,
-            aoty.get_artist_releases,
-            artist_info["url"],
-        )
+        # Only memoize a live discography. SQLite is already fast and durable;
+        # caching its partial artist view here could prevent a later live
+        # supplement when the AOTY challenge ends.
+        if discography.get("source") != "SQLite cache":
+            payload = (now, artist_info, discography)
+            discography_cache[key] = payload
 
-        payload = (now, artist_info, discography)
-        discography_cache[key] = payload
+            choice_value = artist_info.get("value")
+            if choice_value:
+                discography_cache[choice_value.casefold()] = payload
 
-        choice_value = artist_info.get("value")
-        if choice_value:
-            discography_cache[choice_value.casefold()] = payload
-
-        artist_name = artist_info.get("name")
-        if artist_name:
-            discography_cache[artist_name.casefold()] = payload
+            artist_name = artist_info.get("name")
+            if artist_name:
+                discography_cache[artist_name.casefold()] = payload
 
         return artist_info, discography
 
@@ -64,16 +62,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         if not current or len(current.strip()) < 2:
             return []
 
-        try:
-            results = await asyncio.to_thread(
-                call_with_priority,
-                PRIORITY_INTERACTIVE,
-                aoty.search_aoty_artists,
-                current,
-                10,
-            )
-        except Exception:
-            return []
+        results = await DATA.search_artists(current, limit=10)
 
         return [
             discord.app_commands.Choice(
@@ -89,7 +78,13 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             return []
 
         try:
-            artist_info, discography = await _discography_for(artist_value)
+            # Known artists/releases come straight from SQLite. Only artists
+            # absent from the configured-user cache need a live lookup.
+            artist_info, discography = DATA.cached_artist_discography(
+                artist_value
+            )
+            if not artist_info or not discography:
+                artist_info, discography = await _discography_for(artist_value)
             if not artist_info or not discography:
                 return []
 
@@ -141,7 +136,25 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         await interaction.response.defer()
 
         try:
-            artist_info, discography = await _discography_for(artist)
+            # A cached match is authoritative enough to select the requested
+            # release. If it cannot match, live AOTY may supplement it.
+            artist_info, discography = DATA.cached_artist_discography(artist)
+            ranked = (
+                aoty.rank_artist_releases(
+                    discography.get("releases", []),
+                    album,
+                )
+                if discography
+                else []
+            )
+            direct_choice = str(album).startswith("aoty_album:")
+            cached_match = bool(
+                ranked
+                and (direct_choice or ranked[0][0] >= 0.28)
+            )
+
+            if not cached_match:
+                artist_info, discography = await _discography_for(artist)
 
             if not artist_info or not discography:
                 await interaction.followup.send(
@@ -161,7 +174,6 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 return
 
             match_score, release = ranked[0]
-            direct_choice = str(album).startswith("aoty_album:")
 
             if not direct_choice and match_score < 0.28:
                 await interaction.followup.send(

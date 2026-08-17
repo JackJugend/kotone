@@ -1,11 +1,9 @@
-import asyncio
-
 import discord
 import requests
 
 import aoty
-from http_client import PRIORITY_INTERACTIVE, call_with_priority
 from display_utils import display_romanized_name
+from services import DATA
 from settings import RATING_FORMATS
 from shared import build_release_variables
 from views import TimedDisableView, VIEW_TIMEOUT_SECONDS
@@ -184,6 +182,22 @@ def _artist_relation_text(items):
 
 def _artist_header_text(discography):
     """Metadata block displayed above the releases in /artist."""
+    if discography.get("source") == "SQLite cache":
+        artist_name = display_romanized_name(
+            discography.get("artist") or "Nieznany artysta"
+        )
+        artist_url = discography.get("url")
+        artist_link = (
+            f"[{artist_name}]({artist_url})"
+            if artist_url
+            else artist_name
+        )
+        release_count = len(discography.get("releases") or [])
+        return (
+            f"**{artist_link}**\n"
+            f"💾 **SQLite cache: {release_count} zapisanych wydań**"
+        )
+
     score = (
         discography.get(
             "artist_user_score"
@@ -883,16 +897,7 @@ def setup_artist_command(
         if not current or len(current.strip()) < 2:
             return []
 
-        try:
-            results = await asyncio.to_thread(
-                call_with_priority,
-                PRIORITY_INTERACTIVE,
-                aoty.search_aoty_artists,
-                current,
-                10,
-            )
-        except Exception:
-            return []
+        results = await DATA.search_artists(current, limit=10)
 
         choices = []
 
@@ -943,25 +948,15 @@ def setup_artist_command(
         await interaction.response.defer()
 
         try:
-            artist_info = await asyncio.to_thread(
-                call_with_priority,
-                PRIORITY_INTERACTIVE,
-                aoty.resolve_artist,
-                artist,
-            )
+            # The service loads SQLite first, attempts a live supplement, and
+            # falls back to the durable discography during AOTY outages.
+            artist_info, discography = await DATA.get_artist_discography(artist)
 
-            if not artist_info:
+            if not artist_info or not discography:
                 await interaction.followup.send(
-                    f"❌ Nie znaleziono artysty **{artist}** na AOTY."
+                    f"❌ Nie znaleziono artysty **{artist}** na AOTY ani w SQLite."
                 )
                 return
-
-            discography = await asyncio.to_thread(
-                call_with_priority,
-                PRIORITY_INTERACTIVE,
-                aoty.get_artist_releases,
-                artist_info["url"],
-            )
 
         except aoty.AOTYRateLimit:
             await interaction.followup.send(

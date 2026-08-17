@@ -67,6 +67,61 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         finally:
             aoty.get_recent_ratings = original
 
+    async def test_artist_autocomplete_uses_exact_sqlite_match_without_live_call(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "783921",
+                "score": "91",
+                "artist": "ARTMS",
+                "album": "Dall",
+                "url": "https://www.albumoftheyear.org/album/783921-artms-dall.php",
+                "release_format": "LP",
+            },
+        )
+        original = aoty.search_aoty_artists
+        aoty.search_aoty_artists = lambda *_args, **_kwargs: self.fail(
+            "exact SQLite autocomplete must not call AOTY"
+        )
+        try:
+            results = await self.service.search_artists("artms", limit=10)
+        finally:
+            aoty.search_aoty_artists = original
+
+        self.assertEqual(results[0]["name"], "ARTMS")
+        self.assertEqual(results[0]["value"], "ARTMS")
+        self.assertEqual(results[0]["source"], "SQLite cache")
+
+    async def test_artist_discography_falls_back_to_sqlite_on_live_failure(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "783921",
+                "score": "91",
+                "artist": "ARTMS",
+                "artist_url": "https://www.albumoftheyear.org/artist/999-artms/",
+                "album": "Dall",
+                "url": "https://www.albumoftheyear.org/album/783921-artms-dall.php",
+                "release_format": "LP",
+            },
+        )
+        original = aoty.resolve_artist
+
+        def fail_live(*_args, **_kwargs):
+            raise RuntimeError("challenge")
+
+        aoty.resolve_artist = fail_live
+        try:
+            artist, discography = await self.service.get_artist_discography(
+                "ARTMS"
+            )
+        finally:
+            aoty.resolve_artist = original
+
+        self.assertEqual(artist["name"], "ARTMS")
+        self.assertEqual(discography["source"], "SQLite cache")
+        self.assertEqual(discography["releases"][0]["title"], "Dall")
+
     async def test_interactive_enabled_refresh_preserves_score_and_pending(self):
         self.db.upsert_rating(
             "enso",

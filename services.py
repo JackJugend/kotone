@@ -65,6 +65,139 @@ class DataService:
     def is_monitored(self, username: str) -> bool:
         return DB.is_monitored(username)
 
+    def search_cached_artists(self, query: str, limit: int = 10) -> list[dict]:
+        """Rank configured-user artists already stored in SQLite."""
+
+        query = str(query or "").strip()
+        if not query:
+            return []
+
+        ranked = []
+        for item in DB.cached_artists():
+            score = aoty.fuzzy_match_score(query, item.get("name") or "")
+            if score < 0.28:
+                continue
+            ranked.append(
+                {
+                    **item,
+                    "value": str(item.get("name") or ""),
+                    "score": score,
+                    "source": "SQLite cache",
+                }
+            )
+
+        ranked.sort(
+            key=lambda item: (
+                -float(item.get("score") or 0),
+                str(item.get("name") or "").casefold(),
+            )
+        )
+        return ranked[: max(1, int(limit))]
+
+    async def search_artists(self, query: str, limit: int = 10) -> list[dict]:
+        """SQLite-first artist autocomplete with an optional live supplement."""
+
+        query = str(query or "").strip()
+        limit = max(1, min(25, int(limit)))
+        local = self.search_cached_artists(query, limit=limit)
+
+        # A strong cached match fully answers autocomplete and avoids spending
+        # an AOTY request for data Kotone already owns.
+        if local and float(local[0].get("score") or 0) >= 0.78:
+            return local
+
+        try:
+            live = await _thread_call(
+                PRIORITY_INTERACTIVE,
+                aoty.search_aoty_artists,
+                query,
+                limit,
+            )
+        except Exception:
+            return local
+
+        combined = list(local)
+        seen = {
+            aoty.normalize_match_text(item.get("name") or "")
+            for item in combined
+        }
+        for item in live:
+            normalized = aoty.normalize_match_text(item.get("name") or "")
+            if not normalized or normalized in seen:
+                continue
+            combined.append(dict(item))
+            seen.add(normalized)
+
+        combined.sort(
+            key=lambda item: (
+                -float(item.get("score") or 0),
+                str(item.get("name") or "").casefold(),
+            )
+        )
+        return combined[:limit]
+
+    def cached_artist_discography(
+        self,
+        artist_query: str,
+    ) -> tuple[dict | None, dict | None]:
+        """Resolve an artist and their known releases entirely from SQLite."""
+
+        candidates = self.search_cached_artists(artist_query, limit=1)
+        if not candidates:
+            return None, None
+
+        artist_info = dict(candidates[0])
+        releases = DB.cached_artist_releases(artist_info["name"])
+        if not releases:
+            return None, None
+
+        artist_url = artist_info.get("url") or releases[0].get("artist_url")
+        artist_info["url"] = artist_url
+        return artist_info, {
+            "artist": artist_info["name"],
+            "url": artist_url,
+            "image": None,
+            "releases": releases,
+            "source": "SQLite cache",
+        }
+
+    async def get_artist_discography(
+        self,
+        artist_query: str,
+        *,
+        prefer_cached: bool = False,
+    ) -> tuple[dict | None, dict | None]:
+        """Load SQLite first, then enrich live, with durable outage fallback."""
+
+        cached_info, cached_discography = self.cached_artist_discography(
+            artist_query
+        )
+        if prefer_cached and cached_discography is not None:
+            return cached_info, cached_discography
+
+        try:
+            artist_info = await _thread_call(
+                PRIORITY_INTERACTIVE,
+                aoty.resolve_artist,
+                artist_query,
+            )
+            if not artist_info:
+                return cached_info, cached_discography
+
+            discography = await _thread_call(
+                PRIORITY_INTERACTIVE,
+                aoty.get_artist_releases,
+                artist_info["url"],
+            )
+            if discography and discography.get("releases"):
+                return artist_info, discography
+        except Exception:
+            if cached_discography is not None:
+                return cached_info, cached_discography
+            raise
+
+        return cached_info, cached_discography
+
     @staticmethod
     def _age(timestamp: float | None) -> float:
         if not timestamp:

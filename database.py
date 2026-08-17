@@ -1421,6 +1421,123 @@ class Database:
 
         return [self._row_to_rating(row) for row in rows]
 
+    def cached_artists(self) -> list[dict]:
+        """Artists already present in configured users' durable ratings.
+
+        The database is intentionally the first autocomplete source.  This
+        keeps artist lookup usable while AOTY is rate-limited or presenting a
+        challenge page, without expanding the config-only persistence scope.
+        """
+
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT
+                    artist,
+                    MAX(NULLIF(TRIM(COALESCE(artist_url, '')), '')) AS artist_url,
+                    COUNT(DISTINCT album_id) AS release_count
+                FROM ratings
+                WHERE active = 1
+                  AND NULLIF(TRIM(COALESCE(artist, '')), '') IS NOT NULL
+                GROUP BY artist COLLATE NOCASE
+                ORDER BY artist COLLATE NOCASE
+                """
+            ).fetchall()
+
+        return [
+            {
+                "name": row["artist"],
+                "url": row["artist_url"],
+                "release_count": int(row["release_count"] or 0),
+            }
+            for row in rows
+        ]
+
+    def cached_artist_releases(self, artist: str) -> list[dict]:
+        """Distinct cached releases for an artist, enriched when possible."""
+
+        artist = str(artist or "").strip()
+        if not artist:
+            return []
+
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT *
+                FROM (
+                SELECT
+                    r.album_id AS album_id,
+                    COALESCE(
+                        MAX(NULLIF(TRIM(COALESCE(rel.artist, '')), '')),
+                        MAX(NULLIF(TRIM(COALESCE(r.artist, '')), ''))
+                    ) AS artist,
+                    COALESCE(
+                        MAX(NULLIF(TRIM(COALESCE(rel.artist_url, '')), '')),
+                        MAX(NULLIF(TRIM(COALESCE(r.artist_url, '')), ''))
+                    ) AS artist_url,
+                    COALESCE(
+                        MAX(NULLIF(TRIM(COALESCE(rel.album, '')), '')),
+                        MAX(NULLIF(TRIM(COALESCE(r.album, '')), ''))
+                    ) AS album,
+                    COALESCE(
+                        MAX(NULLIF(TRIM(COALESCE(rel.url, '')), '')),
+                        MAX(NULLIF(TRIM(COALESCE(r.album_url, '')), ''))
+                    ) AS url,
+                    COALESCE(
+                        MAX(NULLIF(TRIM(COALESCE(rel.cover_url, '')), '')),
+                        MAX(NULLIF(TRIM(COALESCE(r.cover_url, '')), ''))
+                    ) AS cover,
+                    MAX(rel.user_score) AS user_score,
+                    MAX(rel.ratings_count) AS ratings_count,
+                    MAX(rel.release_date) AS release_date,
+                    MAX(rel.year) AS year,
+                    COALESCE(
+                        MAX(NULLIF(TRIM(COALESCE(rel.album_format, '')), '')),
+                        MAX(NULLIF(TRIM(COALESCE(r.release_format, '')), ''))
+                    ) AS album_format,
+                    MAX(COALESCE(r.sort_timestamp, r.last_seen_at, r.first_seen_at, 0))
+                        AS cache_order
+                FROM ratings r
+                LEFT JOIN releases rel ON rel.album_id = r.album_id
+                WHERE r.active = 1
+                  AND r.artist = ? COLLATE NOCASE
+                GROUP BY r.album_id
+                ) AS cached_release
+                WHERE NULLIF(TRIM(COALESCE(cached_release.album, '')), '')
+                    IS NOT NULL
+                ORDER BY
+                    CASE WHEN cached_release.year IS NULL THEN 1 ELSE 0 END,
+                    cached_release.year DESC,
+                    cached_release.cache_order DESC,
+                    cached_release.album COLLATE NOCASE
+                """,
+                (artist,),
+            ).fetchall()
+
+        return [
+            {
+                "album_id": str(row["album_id"]),
+                "title": row["album"],
+                "album": row["album"],
+                "artist": row["artist"],
+                "artist_url": row["artist_url"],
+                "url": (
+                    row["url"]
+                    or "https://www.albumoftheyear.org/album/"
+                    f"{row['album_id']}/"
+                ),
+                "cover": row["cover"],
+                "user_score": row["user_score"],
+                "ratings_count": row["ratings_count"],
+                "release_date": row["release_date"],
+                "year": row["year"],
+                "album_format": row["album_format"],
+                "release_format": row["album_format"],
+                "source": "SQLite cache",
+            }
+            for row in rows
+        ]
+
     def get_rating(self, username: str, album_id: str) -> dict | None:
         canonical = self.canonical_username(username)
         if canonical is None:

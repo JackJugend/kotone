@@ -131,6 +131,52 @@ class DatabaseTests(unittest.TestCase):
 
         db.close()
 
+    def test_cached_artist_and_release_catalog_comes_from_ratings(self):
+        db = self.make_db(("enso",))
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "783921",
+                "score": "91",
+                "artist": "ARTMS",
+                "artist_url": "https://www.albumoftheyear.org/artist/999-artms/",
+                "album": "Dall",
+                "url": "https://www.albumoftheyear.org/album/783921-artms-dall.php",
+                "release_format": "LP",
+            },
+        )
+        db.save_release_details(
+            "783921",
+            {
+                "artist": "ARTMS",
+                "album": "Dall",
+                "url": "https://www.albumoftheyear.org/album/783921-artms-dall.php",
+                "year": "2024",
+                "release_date": "May 31, 2024",
+                "album_format": "LP",
+            },
+        )
+
+        artists = db.cached_artists()
+        self.assertEqual(
+            artists,
+            [
+                {
+                    "name": "ARTMS",
+                    "url": "https://www.albumoftheyear.org/artist/999-artms/",
+                    "release_count": 1,
+                }
+            ],
+        )
+
+        releases = db.cached_artist_releases("artms")
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(releases[0]["album_id"], "783921")
+        self.assertEqual(releases[0]["title"], "Dall")
+        self.assertEqual(releases[0]["year"], "2024")
+        self.assertEqual(releases[0]["source"], "SQLite cache")
+        db.close()
+
     def test_existing_old_sqlite_schema_upgrades_in_place(self):
         import sqlite3
 
