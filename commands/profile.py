@@ -4,6 +4,7 @@ import discord
 import requests
 
 import aoty
+from services import DATA
 from display_utils import display_romanized_name
 from settings import AOTY_ICON_ATTACHMENT
 from shared import (
@@ -66,16 +67,15 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         username = username.strip()
 
         try:
-            if not await asyncio.to_thread(aoty.aoty_user_exists, username):
+            if not await DATA.user_exists(username):
                 await interaction.followup.send(
                     f"❌ Konto AOTY **{username}** nie istnieje."
                 )
                 return
 
-            profile = await asyncio.to_thread(
-                aoty.get_profile_data,
+            profile = await DATA.get_profile(
                 username,
-                50,
+                recent_limit=50,
             )
         except aoty.AOTYRateLimit:
             await interaction.followup.send(

@@ -8,6 +8,7 @@ from collections.abc import Callable
 import discord
 
 import aoty
+from services import DATA
 from display_utils import display_romanized_name
 from shared import rating_flags_text, score_color, score_icon
 
@@ -122,39 +123,49 @@ async def _load_live_extra(
     *,
     fallback_limit: int | None = 60,
 ) -> dict:
-    """Load review / track ratings without letting AOTY 429 crash a View.
+    """Load review/track ratings through SQLite-first shared service.
 
-    For /last, /recent and /profile the selected rating is recent, so a small
-    fallback limit is enough if the direct user-release URL cannot be used.
+    Config users reuse persisted detail and only touch AOTY when it is missing
+    or stale. Other users remain live-only.
     """
     try:
-        return await asyncio.to_thread(
-            aoty.get_user_rating_for_album,
+        return await DATA.get_user_rating_for_album(
             username,
             item.get("album_id"),
             item.get("url"),
             item.get("release_format") or item.get("album_format"),
-            fallback_limit,
-            item.get("review_url"),
-            item.get("album") or item.get("title"),
+            fallback_limit=fallback_limit,
+            user_release_url=item.get("review_url"),
+            album_title=item.get("album") or item.get("title"),
+            require_detail=True,
         )
-
     except aoty.AOTYRateLimit as exc:
         return {
             "score": item.get("score"),
             "date": item.get("date"),
             "review_url": item.get("review_url"),
-            "review_text": None,
+            "review_text": item.get("review_text"),
             "has_review": bool(item.get("has_review")),
-            "track_ratings": [],
-            "has_track_ratings": bool(
-                item.get("has_track_ratings")
-            ),
+            "track_ratings": list(item.get("track_ratings") or []),
+            "has_track_ratings": bool(item.get("has_track_ratings")),
             "liked": bool(item.get("liked")),
             "rate_limited": True,
             "rate_limit_error": str(exc),
         }
-
+    except Exception as exc:
+        # A button should never produce discord.ui's noisy unhandled traceback.
+        return {
+            "score": item.get("score"),
+            "date": item.get("date"),
+            "review_url": item.get("review_url"),
+            "review_text": item.get("review_text"),
+            "has_review": bool(item.get("has_review")),
+            "track_ratings": list(item.get("track_ratings") or []),
+            "has_track_ratings": bool(item.get("has_track_ratings")),
+            "liked": bool(item.get("liked")),
+            "detail_incomplete": True,
+            "load_error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 

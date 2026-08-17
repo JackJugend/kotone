@@ -12,7 +12,6 @@
         "kulkien"
     ],
     "check_interval": 1200,
-
     "rating_fetch_limits": {
         "lp": 500,
         "ep": 300,
@@ -34,6 +33,25 @@
         "remix": 0,
         "audiobook": 0
     },
-
-    "album_lookup_fallback_limit": 1000
+    "album_lookup_fallback_limit": 1000,
+    "runtime": {
+        "profile_sync_interval": 1800,
+        "full_sync_interval": 21600,
+        "quick_rating_limit_per_format": 20,
+        "detail_enrich_per_cycle": 2,
+        "release_enrich_per_cycle": 2,
+        "aoty_min_request_interval": 1.25,
+        "aoty_max_retries": 2,
+        "aoty_circuit_failures": 4,
+        "aoty_circuit_cooldown": 90,
+        "aoty_cache_max_entries": 512,
+        "aoty_connect_timeout": 8,
+        "aoty_read_timeout": 25,
+        "rating_detail_ttl": 3600,
+        "release_detail_ttl": 43200,
+        "local_database_backup_interval": 86400,
+        "profile_rating_archive_interval": 86400,
+        "profile_rating_archive_formats_per_cycle": 1,
+        "profile_rating_archive_limit_per_format": 2000
+    }
 }

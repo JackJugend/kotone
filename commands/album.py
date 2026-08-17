@@ -5,6 +5,8 @@ import discord
 import requests
 
 import aoty
+from http_client import PRIORITY_INTERACTIVE, call_with_priority
+from services import DATA
 from display_utils import display_romanized_name
 from settings import USERS
 from shared import (
@@ -29,11 +31,18 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         if cached and now - cached[0] < DISCOGRAPHY_CACHE_TTL:
             return cached[1], cached[2]
 
-        artist_info = await asyncio.to_thread(aoty.resolve_artist, artist_value)
+        artist_info = await asyncio.to_thread(
+            call_with_priority,
+            PRIORITY_INTERACTIVE,
+            aoty.resolve_artist,
+            artist_value,
+        )
         if not artist_info:
             return None, None
 
         discography = await asyncio.to_thread(
+            call_with_priority,
+            PRIORITY_INTERACTIVE,
             aoty.get_artist_releases,
             artist_info["url"],
         )
@@ -56,7 +65,13 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             return []
 
         try:
-            results = await asyncio.to_thread(aoty.search_aoty_artists, current, 10)
+            results = await asyncio.to_thread(
+                call_with_priority,
+                PRIORITY_INTERACTIVE,
+                aoty.search_aoty_artists,
+                current,
+                10,
+            )
         except Exception:
             return []
 
@@ -201,15 +216,15 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
         for username in USERS[:25]:
             try:
-                rating_info = await asyncio.to_thread(
-                    aoty.get_user_rating_for_album,
+                rating_info = await DATA.get_user_rating_for_album(
                     username,
                     release["album_id"],
                     release["url"],
                     variables.album_format,
-                    None,
-                    None,
-                    release.get("title"),
+                    fallback_limit=20,
+                    user_release_url=None,
+                    album_title=release.get("title"),
+                    require_detail=False,
                 )
             except aoty.AOTYRateLimit:
                 rating_info = {"score": None, "source": "rate limit"}

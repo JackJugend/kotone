@@ -33,7 +33,11 @@ AOTY_ICON_ATTACHMENT = AOTY_ICON_URL
 DEFAULT_DATA_FILE = os.path.join(BASE_DIR, "data.json")
 DEFAULT_DATABASE_FILE = os.path.join(BASE_DIR, "kotone.sqlite3")
 
-DATA_DIR = os.getenv("DATA_DIR")
+# Railway injects RAILWAY_VOLUME_MOUNT_PATH for an attached volume. Explicit
+# DATA_DIR still wins locally/when intentionally overridden, but Kotone no
+# longer depends on remembering a second Railway variable just to persist DB.
+RAILWAY_VOLUME_DIR = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+DATA_DIR = os.getenv("DATA_DIR") or RAILWAY_VOLUME_DIR
 
 if DATA_DIR:
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -73,6 +77,87 @@ USER_CHANNELS = {
 }
 
 CHECK_INTERVAL = max(60, int(CONFIG.get("check_interval", 300)))
+
+# ---------------------------------------------------------------------------
+# Runtime / reliability settings
+# ---------------------------------------------------------------------------
+#
+# Wszystkie wartości mają bezpieczne defaulty. Można je nadpisać w config.json
+# w sekcji "runtime" bez dotykania kodu. Dzięki temu tuning Railway/AOTY nie
+# wymaga kolejnego refactoru.
+RUNTIME = CONFIG.get("runtime", {}) if isinstance(CONFIG.get("runtime", {}), dict) else {}
+
+def _runtime_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(RUNTIME.get(name, default)))
+    except (TypeError, ValueError):
+        return max(minimum, int(default))
+
+def _runtime_float(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(RUNTIME.get(name, default)))
+    except (TypeError, ValueError):
+        return max(minimum, float(default))
+
+# Profil zmienia się dużo rzadziej niż ratings, więc odświeżamy go osobno.
+PROFILE_SYNC_INTERVAL = _runtime_int("profile_sync_interval", 30 * 60, 300)
+
+# Quick sync służy do wykrywania nowych/recent zmian. Pełny sync co kilka
+# godzin łapie zmianę starej oceny, której quick sync już nie widzi.
+FULL_SYNC_INTERVAL = _runtime_int("full_sync_interval", 6 * 60 * 60, 15 * 60)
+QUICK_RATING_LIMIT_PER_FORMAT = _runtime_int("quick_rating_limit_per_format", 20, 5)
+
+# Background enrichment stopniowo zapisuje review/track ratings i publiczne
+# szczegóły wydań do SQLite bez robienia burstu requestów.
+DETAIL_ENRICH_PER_CYCLE = _runtime_int("detail_enrich_per_cycle", 2, 0)
+RELEASE_ENRICH_PER_CYCLE = _runtime_int("release_enrich_per_cycle", 2, 0)
+
+# Niezależny archiwizator profilu. Monitor może celowo ignorować niektóre
+# formaty (limit 0), ale baza ma docelowo znać pełny profil użytkowników z
+# config. Dlatego po cichu odświeżamy po jednym/kilku formatach na cykl.
+# Każdy format ma własny timestamp, więc praca rozkłada się w czasie zamiast
+# robić kilkadziesiąt requestów naraz.
+PROFILE_RATING_ARCHIVE_INTERVAL = _runtime_int(
+    "profile_rating_archive_interval",
+    24 * 60 * 60,
+    60 * 60,
+)
+PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE = _runtime_int(
+    "profile_rating_archive_formats_per_cycle",
+    1,
+    0,
+)
+PROFILE_RATING_ARCHIVE_LIMIT_PER_FORMAT = _runtime_int(
+    "profile_rating_archive_limit_per_format",
+    2000,
+    20,
+)
+
+# Centralny transport AOTY. Jeden request naraz + minimalny odstęp to
+# najważniejsza ochrona przed 429.
+AOTY_MIN_REQUEST_INTERVAL = _runtime_float("aoty_min_request_interval", 1.25, 0.2)
+AOTY_MAX_RETRIES = _runtime_int("aoty_max_retries", 2, 0)
+AOTY_CIRCUIT_FAILURES = _runtime_int("aoty_circuit_failures", 4, 2)
+AOTY_CIRCUIT_COOLDOWN = _runtime_float("aoty_circuit_cooldown", 90.0, 10.0)
+AOTY_CACHE_MAX_ENTRIES = _runtime_int("aoty_cache_max_entries", 512, 32)
+AOTY_REQUEST_TIMEOUT_CONNECT = _runtime_float("aoty_connect_timeout", 8.0, 2.0)
+AOTY_REQUEST_TIMEOUT_READ = _runtime_float("aoty_read_timeout", 25.0, 5.0)
+
+# Po jakim czasie cached detail konkretnego ratingu warto sprawdzić ponownie.
+RATING_DETAIL_TTL = _runtime_int("rating_detail_ttl", 60 * 60, 5 * 60)
+RELEASE_DETAIL_TTL = _runtime_int("release_detail_ttl", 12 * 60 * 60, 10 * 60)
+
+# Lokalny backup SQLite na tym samym volume. Railway backups nadal są mocno
+# zalecane, ale ten plik daje dodatkową warstwę ochrony przed uszkodzeniem DB.
+LOCAL_DATABASE_BACKUP_INTERVAL = _runtime_int("local_database_backup_interval", 24 * 60 * 60, 60 * 60)
+DATABASE_BACKUP_FILE = os.path.join(
+    DATA_DIR or BASE_DIR,
+    "kotone.backup.sqlite3",
+)
+
+# Health server dla Railway. Nie odpytuje AOTY — stan zewnętrznego serwisu nie
+# powinien decydować, czy nowy deploy Kotone jest zdrowy.
+PORT = _runtime_int("port", int(os.getenv("PORT", "8080")), 1)
 
 # Wszystkie formaty obsługiwane przez monitor /last /artist.
 RATING_FORMATS = {

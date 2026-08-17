@@ -1,17 +1,14 @@
 """Kotone entry point.
 
-The entry point deliberately contains almost no scraping/monitor logic:
-- settings.py     -> config/assets/formats
-- aoty.py         -> AOTY HTTP + parsing/search
-- shared.py       -> variables shared by commands
-- views.py        -> interactive Discord buttons/selects
-- monitor.py      -> automatic + manual update checks
-- commands/*.py   -> slash commands
+The entry point only wires modules together. Scraping policy, database logic,
+monitoring and Discord views live in separate files so new features can be
+added without turning bot.py into a monolith.
 """
 
 from __future__ import annotations
 
 import asyncio
+import signal
 
 import discord
 
@@ -21,6 +18,9 @@ from commands.check import setup_check_command
 from commands.last import setup_last_command
 from commands.profile import setup_profile_command
 from commands.recent import setup_recent_command
+from database import DB
+from health import HealthServer
+from http_client import HTTP
 from monitor import RatingMonitor
 from settings import APPLICATION_ID, GUILD_ID, TOKEN
 
@@ -41,8 +41,8 @@ client = discord.Client(
 
 tree = discord.app_commands.CommandTree(client)
 monitor = RatingMonitor(client)
+health = HealthServer(client, monitor)
 
-# Commands stay separated, but share settings/aoty/shared/views modules.
 setup_last_command(tree)
 setup_recent_command(tree)
 setup_artist_command(tree)
@@ -52,37 +52,22 @@ setup_check_command(tree, monitor)
 
 
 async def setup_hook() -> None:
-    """Guild-sync commands so new/changed commands appear immediately."""
+    """Sync one authoritative guild command set.
+
+    Clearing locally and syncing only after commands are copied avoids the old
+    two-step deploy where the server briefly had zero slash commands.
+    """
+
     guild = discord.Object(id=GUILD_ID)
+    tree.clear_commands(guild=guild)
+    tree.copy_global_to(guild=guild)
+    synced = await tree.sync(guild=guild)
 
-    # Force-remove the previous guild schema first. This is important after
-    # deleting slash-command options (e.g. the old /artist "format" field),
-    # because Discord can otherwise keep showing a stale command definition.
-    tree.clear_commands(
-        guild=guild
-    )
-    await tree.sync(
-        guild=guild
-    )
-
-    # Commands are declared as global objects in discord.py and copied only to
-    # the configured guild, so the fresh schema appears almost immediately.
-    tree.copy_global_to(
-        guild=guild
-    )
-    synced = await tree.sync(
-        guild=guild
-    )
-
-    # Remove old global copies left by earlier Kotone versions.
-    tree.clear_commands(
-        guild=None
-    )
+    # Old global copies from historic Kotone versions should stay removed.
+    tree.clear_commands(guild=None)
     await tree.sync()
 
-    print(
-        f"[DISCORD] Zsynchronizowano {len(synced)} komend na serwerze."
-    )
+    print(f"[DISCORD] Zsynchronizowano {len(synced)} komend na serwerze.")
     for command in synced:
         print(f"[DISCORD] /{command.name}")
 
@@ -104,4 +89,53 @@ async def on_ready() -> None:
         )
 
 
-client.run(TOKEN)
+async def _request_shutdown() -> None:
+    """Graceful SIGTERM path used by Railway draining."""
+
+    monitor.stop()
+    if not client.is_closed():
+        await client.close()
+
+
+async def main() -> None:
+    loop = asyncio.get_running_loop()
+
+    # Railway sends SIGTERM before SIGKILL. add_signal_handler is unavailable
+    # on some Windows event loops, so local Windows development simply falls
+    # back to normal discord.py/Ctrl+C behavior.
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(
+                sig,
+                lambda: asyncio.create_task(_request_shutdown()),
+            )
+        except (NotImplementedError, RuntimeError):
+            pass
+
+    await health.start()
+
+    try:
+        async with client:
+            await client.start(TOKEN)
+    finally:
+        monitor.stop()
+
+        if monitor_task is not None and not monitor_task.done():
+            try:
+                await asyncio.wait_for(monitor_task, timeout=8)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                monitor_task.cancel()
+
+        await health.stop()
+
+        # Flush WAL and keep one local SQLite backup on the persistent volume.
+        try:
+            DB.backup_if_due(force=True)
+        except Exception as exc:
+            print(f"[DB] Backup przy shutdown nie powiódł się: {exc}")
+        HTTP.close()
+        DB.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,0 +1,469 @@
+"""Resilient HTTP transport shared by all external-site scrapers.
+
+The parser layer (``aoty.py``) should not know how to retry, rate-limit or
+cache requests.  It only asks this module for a page.  Keeping all network
+policy here makes future scraper changes much easier and prevents one command
+from accidentally hammering AOTY while another command is already active.
+
+Design goals:
+- one request at a time to AOTY;
+- interactive Discord actions have priority over the background monitor;
+- global minimum delay between requests;
+- Retry-After + exponential backoff for 429/5xx/network errors;
+- a small in-memory stale cache so repeated button clicks do not refetch pages;
+- a circuit breaker so an outage does not turn into an endless retry storm.
+"""
+
+from __future__ import annotations
+
+import heapq
+import random
+import threading
+import time
+from collections import OrderedDict
+from contextlib import contextmanager
+from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+from typing import Iterator
+from urllib.parse import urlparse
+
+import requests
+
+from settings import (
+    AOTY_CACHE_MAX_ENTRIES,
+    AOTY_CIRCUIT_COOLDOWN,
+    AOTY_CIRCUIT_FAILURES,
+    AOTY_MAX_RETRIES,
+    AOTY_MIN_REQUEST_INTERVAL,
+    AOTY_REQUEST_TIMEOUT_CONNECT,
+    AOTY_REQUEST_TIMEOUT_READ,
+)
+
+
+PRIORITY_INTERACTIVE = 0
+PRIORITY_NORMAL = 10
+PRIORITY_BACKGROUND = 20
+
+
+class ExternalRateLimit(RuntimeError):
+    """Remote site explicitly rejected us for sending requests too quickly."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class ExternalUnavailable(RuntimeError):
+    """Remote site is temporarily unavailable and no usable stale page exists."""
+
+
+@dataclass(slots=True)
+class PageResult:
+    text: str
+    url: str
+    status_code: int
+    stale: bool = False
+    from_cache: bool = False
+
+
+@dataclass(slots=True)
+class _CacheEntry:
+    result: PageResult
+    stored_at: float
+    fresh_until: float
+    stale_until: float
+
+
+_thread_context = threading.local()
+
+
+@contextmanager
+def request_priority(priority: int) -> Iterator[None]:
+    """Temporarily set the priority used by nested synchronous scraper calls.
+
+    The value is thread-local.  This matters because most scraper functions run
+    inside ``asyncio.to_thread`` and can make several nested ``fetch_page`` calls.
+    """
+
+    previous = getattr(_thread_context, "priority", PRIORITY_NORMAL)
+    _thread_context.priority = int(priority)
+
+    try:
+        yield
+    finally:
+        _thread_context.priority = previous
+
+
+def current_priority() -> int:
+    return int(getattr(_thread_context, "priority", PRIORITY_NORMAL))
+
+
+def call_with_priority(priority: int, func, /, *args, **kwargs):
+    """Run a synchronous scraper function under one network priority."""
+
+    with request_priority(priority):
+        return func(*args, **kwargs)
+
+
+class _PriorityGate:
+    """Thread-safe one-at-a-time request gate with a priority queue."""
+
+    def __init__(self, min_interval: float):
+        self.min_interval = max(0.0, float(min_interval))
+        self._condition = threading.Condition()
+        self._queue: list[tuple[int, int, object]] = []
+        self._sequence = 0
+        self._in_flight = False
+        self._next_allowed = 0.0
+        self._blocked_until = 0.0
+
+    def block_for(self, seconds: float) -> None:
+        seconds = max(0.0, float(seconds))
+        with self._condition:
+            self._blocked_until = max(
+                self._blocked_until,
+                time.monotonic() + seconds,
+            )
+            self._condition.notify_all()
+
+    @property
+    def blocked_seconds(self) -> float:
+        with self._condition:
+            return max(0.0, self._blocked_until - time.monotonic())
+
+    @contextmanager
+    def slot(self, priority: int) -> Iterator[None]:
+        ticket = object()
+
+        with self._condition:
+            self._sequence += 1
+            sequence = self._sequence
+            heapq.heappush(
+                self._queue,
+                (int(priority), sequence, ticket),
+            )
+
+            while True:
+                now = time.monotonic()
+                first = self._queue and self._queue[0][2] is ticket
+                allowed_at = max(self._next_allowed, self._blocked_until)
+
+                if first and not self._in_flight and now >= allowed_at:
+                    heapq.heappop(self._queue)
+                    self._in_flight = True
+                    break
+
+                timeout = 0.25
+                if first and not self._in_flight and allowed_at > now:
+                    timeout = min(1.0, max(0.05, allowed_at - now))
+
+                self._condition.wait(timeout=timeout)
+
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._in_flight = False
+                self._next_allowed = time.monotonic() + self.min_interval
+                self._condition.notify_all()
+
+
+class ResilientHTTPClient:
+    """Small, synchronous HTTP client designed for scraper workloads."""
+
+    def __init__(self):
+        self.session = requests.Session()
+        self._gate = _PriorityGate(AOTY_MIN_REQUEST_INTERVAL)
+        self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._cache_lock = threading.RLock()
+        self._circuit_lock = threading.RLock()
+        self._consecutive_failures = 0
+        self._circuit_open_until = 0.0
+        self._last_error: str | None = None
+        self._request_count = 0
+        self._cache_hits = 0
+
+    def configure_headers(self, headers: dict[str, str]) -> None:
+        self.session.headers.update(headers)
+
+    # ------------------------------------------------------------------
+    # Cache policy
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cache_policy(url: str) -> tuple[float, float]:
+        """Return (fresh_seconds, stale_seconds) based on URL semantics."""
+
+        path = urlparse(url).path.casefold()
+
+        if "/search/" in path or path.rstrip("/") == "/search":
+            return 45.0, 10 * 60.0
+
+        if "/user/" in path and "/ratings" in path:
+            return 20.0, 30 * 60.0
+
+        if "/user/" in path and "/album/" in path:
+            return 60.0, 6 * 60 * 60.0
+
+        if "/user/" in path:
+            return 90.0, 6 * 60 * 60.0
+
+        if "/album/" in path:
+            return 10 * 60.0, 24 * 60 * 60.0
+
+        if "/artist/" in path:
+            return 10 * 60.0, 24 * 60 * 60.0
+
+        return 60.0, 30 * 60.0
+
+    def _cache_get(self, url: str, *, stale: bool) -> PageResult | None:
+        now = time.monotonic()
+
+        with self._cache_lock:
+            entry = self._cache.get(url)
+
+            if entry is None:
+                return None
+
+            deadline = entry.stale_until if stale else entry.fresh_until
+            if now > deadline:
+                if now > entry.stale_until:
+                    self._cache.pop(url, None)
+                return None
+
+            self._cache.move_to_end(url)
+            self._cache_hits += 1
+
+            return PageResult(
+                text=entry.result.text,
+                url=entry.result.url,
+                status_code=entry.result.status_code,
+                stale=stale and now > entry.fresh_until,
+                from_cache=True,
+            )
+
+    def _cache_put(self, url: str, result: PageResult) -> None:
+        fresh_seconds, stale_seconds = self._cache_policy(url)
+        now = time.monotonic()
+
+        with self._cache_lock:
+            self._cache[url] = _CacheEntry(
+                result=PageResult(
+                    text=result.text,
+                    url=result.url,
+                    status_code=result.status_code,
+                ),
+                stored_at=now,
+                fresh_until=now + fresh_seconds,
+                stale_until=now + max(fresh_seconds, stale_seconds),
+            )
+            self._cache.move_to_end(url)
+
+            while len(self._cache) > AOTY_CACHE_MAX_ENTRIES:
+                self._cache.popitem(last=False)
+
+    # ------------------------------------------------------------------
+    # Circuit breaker / retry helpers
+    # ------------------------------------------------------------------
+
+    def _circuit_open(self) -> bool:
+        with self._circuit_lock:
+            return time.monotonic() < self._circuit_open_until
+
+    def _record_success(self) -> None:
+        with self._circuit_lock:
+            self._consecutive_failures = 0
+            self._circuit_open_until = 0.0
+            self._last_error = None
+
+    def _record_failure(self, message: str) -> None:
+        with self._circuit_lock:
+            self._consecutive_failures += 1
+            self._last_error = message
+
+            if self._consecutive_failures >= AOTY_CIRCUIT_FAILURES:
+                self._circuit_open_until = max(
+                    self._circuit_open_until,
+                    time.monotonic() + AOTY_CIRCUIT_COOLDOWN,
+                )
+
+    @staticmethod
+    def _retry_after_seconds(response: requests.Response) -> float | None:
+        raw = response.headers.get("Retry-After")
+        if not raw:
+            return None
+
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            target = parsedate_to_datetime(raw)
+            seconds = target.timestamp() - time.time()
+            return max(0.0, seconds)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _backoff(attempt: int, *, rate_limited: bool = False) -> float:
+        base = 4.0 if rate_limited else 1.2
+        return min(90.0, base * (2 ** attempt) + random.uniform(0.0, 0.8))
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def get(
+        self,
+        url: str,
+        *,
+        use_cache: bool = True,
+        allow_stale: bool = True,
+        priority: int | None = None,
+    ) -> PageResult:
+        """GET one page with rate limiting, retries and stale fallback."""
+
+        url = str(url).strip()
+        if not url:
+            raise ValueError("Pusty URL")
+
+        if use_cache:
+            fresh = self._cache_get(url, stale=False)
+            if fresh is not None:
+                return fresh
+
+        stale_result = self._cache_get(url, stale=True) if allow_stale else None
+
+        if self._circuit_open():
+            if stale_result is not None:
+                return stale_result
+            raise ExternalUnavailable(
+                "Obwód ochronny HTTP jest chwilowo otwarty po serii błędów."
+            )
+
+        request_priority_value = current_priority() if priority is None else int(priority)
+        last_exception: Exception | None = None
+
+        for attempt in range(AOTY_MAX_RETRIES + 1):
+            try:
+                with self._gate.slot(request_priority_value):
+                    # Another worker may have fetched the same URL while this
+                    # request waited in the priority queue. Re-checking here
+                    # gives us single-flight-like behavior without a second
+                    # coordination system.
+                    if use_cache:
+                        refreshed = self._cache_get(url, stale=False)
+                        if refreshed is not None:
+                            return refreshed
+
+                    self._request_count += 1
+                    response = self.session.get(
+                        url,
+                        timeout=(
+                            AOTY_REQUEST_TIMEOUT_CONNECT,
+                            AOTY_REQUEST_TIMEOUT_READ,
+                        ),
+                    )
+
+                if response.status_code == 429:
+                    retry_after = self._retry_after_seconds(response)
+                    wait = retry_after if retry_after is not None else self._backoff(
+                        attempt,
+                        rate_limited=True,
+                    )
+                    wait = min(max(wait, 2.0), 15 * 60.0)
+                    self._gate.block_for(wait)
+                    message = f"HTTP 429 - za dużo zapytań; cooldown {wait:.0f}s"
+                    self._record_failure(message)
+
+                    if attempt < AOTY_MAX_RETRIES:
+                        continue
+
+                    if stale_result is not None:
+                        return stale_result
+
+                    raise ExternalRateLimit(message, retry_after=wait)
+
+                if response.status_code >= 500:
+                    message = f"HTTP {response.status_code} z serwera zewnętrznego"
+                    self._record_failure(message)
+
+                    if attempt < AOTY_MAX_RETRIES:
+                        self._gate.block_for(self._backoff(attempt))
+                        continue
+
+                    if stale_result is not None:
+                        return stale_result
+
+                    response.raise_for_status()
+
+                # 404/403/etc. should reach the parser exactly as a normal
+                # requests exception; retrying them usually makes no sense.
+                response.raise_for_status()
+
+                result = PageResult(
+                    text=response.text,
+                    url=str(response.url),
+                    status_code=response.status_code,
+                )
+
+                self._record_success()
+
+                if use_cache:
+                    self._cache_put(url, result)
+
+                return result
+
+            except ExternalRateLimit:
+                raise
+            except requests.RequestException as exc:
+                last_exception = exc
+                message = f"{type(exc).__name__}: {exc}"
+                self._record_failure(message)
+
+                if attempt < AOTY_MAX_RETRIES:
+                    self._gate.block_for(self._backoff(attempt))
+                    continue
+
+                if stale_result is not None:
+                    return stale_result
+
+                raise
+
+        if stale_result is not None:
+            return stale_result
+
+        raise ExternalUnavailable(
+            str(last_exception or "Nie udało się pobrać strony")
+        )
+
+    def invalidate(self, url: str) -> None:
+        with self._cache_lock:
+            self._cache.pop(str(url), None)
+
+    def close(self) -> None:
+        """Close pooled sockets during a graceful Railway shutdown."""
+        try:
+            self.session.close()
+        except Exception:
+            pass
+
+    def status(self) -> dict:
+        with self._circuit_lock, self._cache_lock:
+            return {
+                "circuit_open": time.monotonic() < self._circuit_open_until,
+                "circuit_seconds": max(
+                    0.0,
+                    self._circuit_open_until - time.monotonic(),
+                ),
+                "blocked_seconds": self._gate.blocked_seconds,
+                "consecutive_failures": self._consecutive_failures,
+                "last_error": self._last_error,
+                "cache_entries": len(self._cache),
+                "requests": self._request_count,
+                "cache_hits": self._cache_hits,
+            }
+
+
+HTTP = ResilientHTTPClient()

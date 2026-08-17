@@ -14,6 +14,7 @@ from typing import Any
 import discord
 
 from display_utils import display_romanized_name
+from settings import USERS
 
 
 def score_color(score: Any) -> discord.Color:
@@ -306,30 +307,29 @@ def build_release_variables(
 async def load_release_variables(
     item: dict | None,
     *,
+    username: str | None = None,
     missing: str = "Brak danych",
 ) -> ReleaseVariables:
-    """The single public-release details path used across the whole bot.
+    """Build release variables through the shared cache/live service.
 
-    This prevents /last, /recent, /album and monitor notifications from
-    silently using different ratings_count/default logic.
+    For configured users, public release details are persisted in SQLite and
+    survive AOTY/Railway restarts.  For arbitrary users/artists the same parser
+    is used, but nothing personal is persisted.
     """
     item = item or {}
     details = {}
 
-    url = item.get("url")
+    try:
+        from services import DATA
 
-    if url:
-        import aoty
-
-        try:
-            details = await asyncio.to_thread(
-                aoty.get_album_details,
-                url,
-            )
-        except aoty.AOTYRateLimit:
-            details = {}
-        except Exception:
-            details = {}
+        details = await DATA.get_release_details(
+            item,
+            username=username,
+        )
+    except Exception:
+        # Release enrichment is optional. A rating should still render from the
+        # data already present in the rating card / SQLite.
+        details = {}
 
     return build_release_variables(
         item,
@@ -364,28 +364,55 @@ def rating_flags_text(item_or_variables: dict | ReleaseVariables | None) -> str:
 
 
 async def username_autocomplete(interaction: discord.Interaction, current: str):
-    """Shared AOTY username autocomplete used by /last /recent /profile."""
+    """Config users first, then AOTY search; no autocomplete result is persisted."""
     current = str(current or "").strip()
 
-    if len(current) < 2:
+    if len(current) < 1:
         return []
 
-    # Import lokalny zapobiega cyklicznemu importowi przy starcie bota.
-    import aoty
+    choices: list[discord.app_commands.Choice] = []
+    seen = set()
+    needle = current.casefold()
 
-    try:
-        results = await asyncio.to_thread(
-            aoty.search_aoty_users,
-            current,
-            10,
+    for username in USERS:
+        if needle not in username.casefold():
+            continue
+        choices.append(
+            discord.app_commands.Choice(
+                name=username[:100],
+                value=username[:100],
+            )
         )
-    except Exception:
-        return []
+        seen.add(username.casefold())
 
-    return [
-        discord.app_commands.Choice(
-            name=str(item.get("name") or item["username"])[:100],
-            value=str(item["username"])[:100],
-        )
-        for item in results[:10]
-    ]
+    if len(current) >= 2 and len(choices) < 10:
+        import aoty
+        from http_client import PRIORITY_INTERACTIVE, call_with_priority
+
+        try:
+            results = await asyncio.to_thread(
+                call_with_priority,
+                PRIORITY_INTERACTIVE,
+                aoty.search_aoty_users,
+                current,
+                10,
+            )
+        except Exception:
+            results = []
+
+        for item in results:
+            username = str(item.get("username") or "")
+            if not username or username.casefold() in seen:
+                continue
+            choices.append(
+                discord.app_commands.Choice(
+                    name=str(item.get("name") or username)[:100],
+                    value=username[:100],
+                )
+            )
+            seen.add(username.casefold())
+            if len(choices) >= 10:
+                break
+
+    return choices[:10]
+

@@ -4,9 +4,10 @@ import discord
 import requests
 
 import aoty
+from http_client import PRIORITY_INTERACTIVE, call_with_priority
 from display_utils import display_romanized_name
 from settings import RATING_FORMATS
-from shared import load_release_variables
+from shared import build_release_variables
 from views import TimedDisableView, VIEW_TIMEOUT_SECONDS
 
 
@@ -658,7 +659,10 @@ class ArtistSortView(TimedDisableView):
         if cached is not None:
             return cached
 
-        variables = await load_release_variables(
+        # The artist page already contains the compact release information
+        # needed by this list. Do NOT fetch 18 individual album pages here.
+        variables = build_release_variables(
+            release,
             release,
         )
 
@@ -693,9 +697,6 @@ class ArtistSortView(TimedDisableView):
                 f" — ⭐ **{variables.aoty_user_score}**"
             )
 
-            await asyncio.sleep(
-                0.08
-            )
 
         if lines:
             releases_text = "\n".join(
@@ -884,6 +885,8 @@ def setup_artist_command(
 
         try:
             results = await asyncio.to_thread(
+                call_with_priority,
+                PRIORITY_INTERACTIVE,
                 aoty.search_aoty_artists,
                 current,
                 10,
@@ -941,6 +944,8 @@ def setup_artist_command(
 
         try:
             artist_info = await asyncio.to_thread(
+                call_with_priority,
+                PRIORITY_INTERACTIVE,
                 aoty.resolve_artist,
                 artist,
             )
@@ -952,6 +957,8 @@ def setup_artist_command(
                 return
 
             discography = await asyncio.to_thread(
+                call_with_priority,
+                PRIORITY_INTERACTIVE,
                 aoty.get_artist_releases,
                 artist_info["url"],
             )

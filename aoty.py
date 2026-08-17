@@ -17,6 +17,7 @@ from urllib.parse import quote_plus, urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from http_client import HTTP, ExternalRateLimit, ExternalUnavailable
 from settings import (
     ALBUM_LOOKUP_FALLBACK_LIMIT,
     BASE_URL,
@@ -34,8 +35,10 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-session = requests.Session()
-session.headers.update(HEADERS)
+# All AOTY requests go through one shared transport. The parser layer below
+# never opens its own Session, so retries/rate limiting/cache cannot diverge
+# between commands.
+HTTP.configure_headers(HEADERS)
 
 
 class AOTYRateLimit(Exception):
@@ -51,27 +54,22 @@ class AOTYUserNotFound(Exception):
 # ---------------------------------------------------------------------------
 
 def fetch_page(url: str, expected_url: str | None = None) -> str:
-    response = session.get(url, timeout=30)
-
-    if response.status_code == 429:
-        retry_after = response.headers.get("Retry-After")
-        message = "HTTP 429 - za dużo zapytań"
-
-        if retry_after:
-            message += f" (Retry-After: {retry_after}s)"
-
-        raise AOTYRateLimit(message)
-
-    response.raise_for_status()
+    """Fetch one AOTY page through the central resilient transport."""
+    try:
+        result = HTTP.get(url)
+    except ExternalRateLimit as exc:
+        raise AOTYRateLimit(str(exc)) from exc
+    except ExternalUnavailable as exc:
+        raise requests.ConnectionError(str(exc)) from exc
 
     if expected_url:
-        final_url = response.url.rstrip("/").casefold()
+        final_url = result.url.rstrip("/").casefold()
         expected = expected_url.rstrip("/").casefold()
 
         if final_url != expected:
             raise AOTYUserNotFound()
 
-    return response.text
+    return result.text
 
 
 def aoty_user_exists(username: str) -> bool:
@@ -645,7 +643,7 @@ def search_aoty_artists(
             pair[1],
         ),
         reverse=True,
-    )[:12]
+    )[:5]
 
     ranked = []
 
@@ -1458,25 +1456,45 @@ def get_artist_releases(artist_url: str) -> dict:
 
         year_match = re.search(r"\b(?:19|20)\d{2}\b", container_text)
         year = year_match.group(0) if year_match else None
+
+        date_match = re.search(
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+            r"\s+\d{1,2},\s+(?:19|20)\d{2}\b",
+            container_text,
+            flags=re.IGNORECASE,
+        )
+        release_date = date_match.group(0) if date_match else year
         release_format = _extract_release_format(container_text)
 
         user_score = None
-        score_match = re.search(
+        score_patterns = (
+            r"\buser\s*score\s*(100|\d{1,2})(?!\d)",
             r"\b(100|\d{1,2})\s*user\s*score\b",
-            container_text,
-            flags=re.IGNORECASE,
         )
-        if score_match:
-            user_score = score_match.group(1)
+        for pattern in score_patterns:
+            score_match = re.search(
+                pattern,
+                container_text,
+                flags=re.IGNORECASE,
+            )
+            if score_match:
+                user_score = score_match.group(1)
+                break
 
         ratings_count = None
-        count_match = re.search(
+        count_patterns = (
             r"user\s*score\s*\(([\d,.]+(?:\s*[KM])?)\)",
-            container_text,
-            flags=re.IGNORECASE,
+            r"based\s+on\s+([\d,.]+(?:\s*[KM])?)\s+ratings",
         )
-        if count_match:
-            ratings_count = count_match.group(1).replace(" ", "")
+        for pattern in count_patterns:
+            count_match = re.search(
+                pattern,
+                container_text,
+                flags=re.IGNORECASE,
+            )
+            if count_match:
+                ratings_count = count_match.group(1).replace(" ", "")
+                break
 
         album_url = urljoin(BASE_URL, href)
 
@@ -1487,6 +1505,7 @@ def get_artist_releases(artist_url: str) -> dict:
             "artist": artist_name,
             "url": album_url,
             "year": year,
+            "release_date": release_date,
             "album_format": release_format,
             "release_format": release_format,
             "user_score": user_score,
@@ -3075,41 +3094,27 @@ def _fetch_user_release_page(
     for candidate in candidates:
         last_url = candidate
 
-        response = session.get(
-            candidate,
-            timeout=30,
-        )
-
-        if response.status_code == 429:
-            retry_after = response.headers.get(
-                "Retry-After"
+        try:
+            result = HTTP.get(
+                candidate,
+                allow_stale=True,
             )
-
-            message = (
-                "HTTP 429 - za dużo zapytań"
-            )
-
-            if retry_after:
-                message += (
-                    f" (Retry-After: {retry_after}s)"
-                )
-
-            raise AOTYRateLimit(
-                message
-            )
-
-        if response.status_code == 404:
-            continue
-
-        response.raise_for_status()
+        except ExternalRateLimit as exc:
+            raise AOTYRateLimit(str(exc)) from exc
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                continue
+            raise
+        except ExternalUnavailable as exc:
+            raise requests.ConnectionError(str(exc)) from exc
 
         soup = BeautifulSoup(
-            response.text,
+            result.text,
             "html.parser",
         )
 
         final_url = str(
-            response.url
+            result.url
         )
 
         final_lower = final_url.casefold()
@@ -4390,25 +4395,25 @@ def _extract_profile_favorites(soup: BeautifulSoup, limit: int = 5) -> tuple[str
     return favorite_kind, favorites
 
 
-def _extract_profile_average(soup: BeautifulSoup) -> float | None:
+def _extract_profile_distribution(soup: BeautifulSoup) -> dict[str, int]:
+    """Return the complete Rating Distribution shown on a user profile."""
     marker = _find_exact_text_marker(soup, "rating distribution")
     if marker is None:
-        return None
+        return {}
 
-    midpoint_map = {
-        "100": 100.0,
-        "90-99": 94.5,
-        "80-89": 84.5,
-        "70-79": 74.5,
-        "60-69": 64.5,
-        "50-59": 54.5,
-        "40-49": 44.5,
-        "30-39": 34.5,
-        "20-29": 24.5,
-        "10-19": 14.5,
-        "0-9": 4.5,
-    }
-
+    labels = (
+        "100",
+        "90-99",
+        "80-89",
+        "70-79",
+        "60-69",
+        "50-59",
+        "40-49",
+        "30-39",
+        "20-29",
+        "10-19",
+        "0-9",
+    )
     found: dict[str, int] = {}
 
     for row in marker.parent.find_all_next("tr", limit=30):
@@ -4431,39 +4436,70 @@ def _extract_profile_average(soup: BeautifulSoup) -> float | None:
         count_match = re.search(r"([\d,]+)", compact[label_match.end():])
         if count_match:
             found[label] = int(count_match.group(1).replace(",", ""))
-        if len(found) >= 11:
+        if len(found) >= len(labels):
             break
 
-    if not found:
-        texts = []
-        checked = 0
-        for element in marker.parent.next_elements:
-            if isinstance(element, str):
-                value = " ".join(str(element).split())
-                if value:
-                    texts.append(value)
-            checked += 1
-            if checked >= 350:
-                break
+    if found:
+        return found
 
-        distribution_text = " ".join(texts)
-        for label in midpoint_map:
-            match = re.search(
-                rf"(?<!\d){re.escape(label)}\s+([\d,]+)",
-                distribution_text,
-            )
-            if match:
-                found[label] = int(match.group(1).replace(",", ""))
+    texts = []
+    checked = 0
+    for element in marker.parent.next_elements:
+        if isinstance(element, str):
+            value = " ".join(str(element).split())
+            if value:
+                texts.append(value)
+        checked += 1
+        if checked >= 350:
+            break
 
-    total_count = sum(found.values())
+    distribution_text = " ".join(texts)
+    for label in labels:
+        match = re.search(
+            rf"(?<!\d){re.escape(label)}\s+([\d,]+)",
+            distribution_text,
+        )
+        if match:
+            found[label] = int(match.group(1).replace(",", ""))
+
+    return found
+
+
+def _profile_average_from_distribution(distribution: dict[str, int]) -> float | None:
+    """Approximate average without reparsing the same profile DOM twice."""
+    midpoint_map = {
+        "100": 100.0,
+        "90-99": 94.5,
+        "80-89": 84.5,
+        "70-79": 74.5,
+        "60-69": 64.5,
+        "50-59": 54.5,
+        "40-49": 44.5,
+        "30-39": 34.5,
+        "20-29": 24.5,
+        "10-19": 14.5,
+        "0-9": 4.5,
+    }
+    total_count = sum(distribution.values())
     if total_count <= 0:
         return None
-
-    weighted = sum(midpoint_map[label] * count for label, count in found.items())
+    weighted = sum(
+        midpoint_map[label] * count
+        for label, count in distribution.items()
+        if label in midpoint_map
+    )
     return weighted / total_count
 
 
-def get_profile_data(username: str, recent_limit: int = 50) -> dict:
+def _extract_profile_average(soup: BeautifulSoup) -> float | None:
+    # Compatibility helper for existing callers/tests.
+    return _profile_average_from_distribution(
+        _extract_profile_distribution(soup)
+    )
+
+
+def get_profile_summary(username: str) -> dict:
+    """Fetch only the profile page, without fetching ratings routes again."""
     username = str(username).strip()
     url = f"{BASE_URL}/user/{username}/"
     soup = BeautifulSoup(fetch_page(url), "html.parser")
@@ -4475,16 +4511,9 @@ def get_profile_data(username: str, recent_limit: int = 50) -> dict:
     heading = soup.find("h1")
     display_username = heading.get_text(" ", strip=True) if heading else username
     page_text = " ".join(soup.get_text(" ", strip=True).split())
-    average_rating = _extract_profile_average(soup)
-    favorite_kind, favorites = _extract_profile_favorites(soup, limit=5)
-
-    try:
-        recent_limit = max(5, min(50, int(recent_limit)))
-    except (TypeError, ValueError):
-        recent_limit = 50
-
-    # Fetch up to 50 recent ratings so /profile can paginate 10 x 5.
-    recent_ratings = get_recent_ratings(username, recent_limit)
+    distribution = _extract_profile_distribution(soup)
+    average_rating = _profile_average_from_distribution(distribution)
+    favorite_kind, favorites = _extract_profile_favorites(soup, limit=50)
 
     favorite_albums = favorites if favorite_kind == "albums" else []
     favorite_artists = favorites if favorite_kind == "artists" else []
@@ -4500,9 +4529,22 @@ def get_profile_data(username: str, recent_limit: int = 50) -> dict:
         "followers_count": _profile_count(page_text, "Followers"),
         "average_rating": average_rating,
         "average_rating_text": f"~{average_rating:.1f}" if average_rating is not None else None,
+        "rating_distribution": distribution,
         "favorite_kind": favorite_kind,
         "favorites": favorites,
         "favorite_albums": favorite_albums,
         "favorite_artists": favorite_artists,
-        "recent_ratings": recent_ratings,
     }
+
+
+def get_profile_data(username: str, recent_limit: int = 50) -> dict:
+    """Compatibility helper: profile summary + recent ratings."""
+    try:
+        recent_limit = max(5, min(50, int(recent_limit)))
+    except (TypeError, ValueError):
+        recent_limit = 50
+
+    profile = get_profile_summary(username)
+    profile["recent_ratings"] = get_recent_ratings(username, recent_limit)
+    return profile
+

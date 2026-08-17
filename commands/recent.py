@@ -4,6 +4,7 @@ import discord
 import requests
 
 import aoty
+from services import DATA
 from shared import (
     load_release_variables,
     rating_flags_text,
@@ -84,14 +85,13 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
         username = username.strip()
 
         try:
-            if not await asyncio.to_thread(aoty.aoty_user_exists, username):
+            if not await DATA.user_exists(username):
                 await interaction.followup.send(
                     f"❌ Konto AOTY **{username}** nie istnieje."
                 )
                 return
 
-            ratings = await asyncio.to_thread(
-                aoty.get_recent_ratings,
+            ratings = await DATA.get_recent_ratings(
                 username,
                 int(amount),
             )
@@ -118,7 +118,7 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
             return
 
         try:
-            avatar = await asyncio.to_thread(aoty.get_user_avatar, username)
+            avatar = await DATA.get_avatar(username)
         except Exception:
             avatar = None
 
@@ -128,6 +128,7 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
         for item in ratings:
             variables = await load_release_variables(
                 item,
+                username=username,
             )
 
             embeds.append(

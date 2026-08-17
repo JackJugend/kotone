@@ -4,6 +4,7 @@ import discord
 import requests
 
 import aoty
+from services import DATA
 from settings import AOTY_ICON_ATTACHMENT, RATING_FORMATS
 from shared import (
     load_release_variables,
@@ -42,14 +43,13 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         username = username.strip()
 
         try:
-            if not await asyncio.to_thread(aoty.aoty_user_exists, username):
+            if not await DATA.user_exists(username):
                 await interaction.followup.send(
                     f"❌ Konto AOTY **{username}** nie istnieje."
                 )
                 return
 
-            ratings = await asyncio.to_thread(
-                aoty.get_recent_ratings,
+            ratings = await DATA.get_recent_ratings(
                 username,
                 1,
                 format,
@@ -87,6 +87,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         variables = await load_release_variables(
             latest,
+            username=username,
             missing="?",
         )
 
@@ -103,15 +104,15 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         live_extra = None
 
         try:
-            live_extra = await asyncio.to_thread(
-                aoty.get_user_rating_for_album,
+            live_extra = await DATA.get_user_rating_for_album(
                 username,
                 latest.get("album_id"),
                 latest.get("url"),
                 latest.get("release_format"),
-                10,
-                latest.get("review_url"),
-                latest.get("album"),
+                fallback_limit=10,
+                user_release_url=latest.get("review_url"),
+                album_title=latest.get("album"),
+                require_detail=True,
             )
 
             # Preserve the exact user-release URL discovered live.
@@ -143,10 +144,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             live_extra = None
 
         try:
-            avatar = await asyncio.to_thread(
-                aoty.get_user_avatar,
-                username,
-            )
+            avatar = await DATA.get_avatar(username)
         except Exception:
             avatar = None
 
