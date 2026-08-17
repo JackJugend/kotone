@@ -20,3 +20,6 @@ Thumbs.db
 *.db-wal
 data_migrated.json.bak
 
+railway ssh
+railway ssh.pub
+railway.json
