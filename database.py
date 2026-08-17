@@ -1420,7 +1420,21 @@ class Database:
         limit: int = 20,
         *,
         release_format: str | None = None,
+        genre: str | None = None,
+        year: int | None = None,
+        decade: int | None = None,
+        rating_date: str | None = None,
+        aoty_min: int | None = None,
+        aoty_max: int | None = None,
+        user_min: int | None = None,
+        user_max: int | None = None,
     ) -> list[dict]:
+        """Read a filtered rating list from SQLite only.
+
+        Release metadata lives in ``releases`` while a user's rating lives in
+        ``ratings``.  Missing enrichment simply means a metadata filter does
+        not match yet; commands never make a surprise HTTP request to fill it.
+        """
         canonical = self.canonical_username(username)
         if canonical is None:
             return []
@@ -1430,16 +1444,56 @@ class Database:
         except (TypeError, ValueError):
             limit = 20
 
-        sql = "SELECT * FROM ratings WHERE username = ? AND active = 1"
+        sql = (
+            "SELECT r.* FROM ratings r "
+            "LEFT JOIN releases rel ON rel.album_id = r.album_id "
+            "WHERE r.username = ? AND r.active = 1"
+        )
         params: list = [canonical]
 
         if release_format:
-            sql += " AND lower(COALESCE(release_format, '')) = lower(?)"
+            sql += (
+                " AND lower(COALESCE(r.release_format, rel.album_format, '')) "
+                "= lower(?)"
+            )
             params.append(release_format)
 
+        if genre:
+            sql += " AND lower(COALESCE(rel.genres_json, '')) LIKE lower(?)"
+            params.append(f"%{str(genre).strip()}%")
+
+        year_text = "COALESCE(NULLIF(TRIM(rel.year), ''), '')"
+        if year is not None:
+            sql += f" AND {year_text} = ?"
+            params.append(str(int(year)))
+
+        if decade is not None:
+            lower = int(decade)
+            sql += f" AND CAST({year_text} AS INTEGER) BETWEEN ? AND ?"
+            params.extend([lower, lower + 9])
+
+        if rating_date:
+            sql += " AND lower(COALESCE(r.date, '')) LIKE lower(?)"
+            params.append(f"%{str(rating_date).strip()}%")
+
+        numeric_user = "CAST(COALESCE(r.score, '') AS REAL)"
+        numeric_aoty = "CAST(COALESCE(rel.user_score, '') AS REAL)"
+        if user_min is not None:
+            sql += f" AND {numeric_user} >= ?"
+            params.append(int(user_min))
+        if user_max is not None:
+            sql += f" AND {numeric_user} <= ?"
+            params.append(int(user_max))
+        if aoty_min is not None:
+            sql += f" AND {numeric_aoty} >= ?"
+            params.append(int(aoty_min))
+        if aoty_max is not None:
+            sql += f" AND {numeric_aoty} <= ?"
+            params.append(int(aoty_max))
+
         sql += (
-            " ORDER BY COALESCE(sort_timestamp, last_seen_at, first_seen_at, 0) DESC, "
-            "rowid DESC LIMIT ?"
+            " ORDER BY COALESCE(r.sort_timestamp, r.last_seen_at, r.first_seen_at, 0) DESC, "
+            "r.rowid DESC LIMIT ?"
         )
         params.append(limit)
 
@@ -1447,6 +1501,32 @@ class Database:
             rows = self.connection.execute(sql, params).fetchall()
 
         return [self._row_to_rating(row) for row in rows]
+
+    def available_genres(self, username: str | None = None) -> list[str]:
+        """Return distinct cached primary genres for slash-command autocomplete."""
+
+        sql = "SELECT genres_json FROM releases"
+        params: list = []
+        if username:
+            canonical = self.canonical_username(username)
+            if canonical is None:
+                return []
+            sql = (
+                "SELECT DISTINCT rel.genres_json FROM releases rel "
+                "JOIN ratings r ON r.album_id = rel.album_id "
+                "WHERE r.username = ? AND r.active = 1"
+            )
+            params = [canonical]
+        with self._lock:
+            rows = self.connection.execute(sql, params).fetchall()
+
+        genres: set[str] = set()
+        for row in rows:
+            for value in _json_load(row["genres_json"], []):
+                value = str(value or "").strip()
+                if value:
+                    genres.add(value)
+        return sorted(genres, key=str.casefold)
 
     def cached_artists(self) -> list[dict]:
         """Artists already present in configured users' durable ratings.
@@ -1518,6 +1598,7 @@ class Database:
                     MAX(rel.ratings_count) AS ratings_count,
                     MAX(rel.release_date) AS release_date,
                     MAX(rel.year) AS year,
+                    MAX(rel.genres_json) AS genres_json,
                     COALESCE(
                         MAX(NULLIF(TRIM(COALESCE(rel.album_format, '')), '')),
                         MAX(NULLIF(TRIM(COALESCE(r.release_format, '')), ''))
@@ -1558,6 +1639,10 @@ class Database:
                 "ratings_count": row["ratings_count"],
                 "release_date": row["release_date"],
                 "year": row["year"],
+                "genres": _json_load(row["genres_json"], []),
+                "genres_text": ", ".join(
+                    _json_load(row["genres_json"], [])
+                ) or None,
                 "album_format": row["album_format"],
                 "release_format": row["album_format"],
                 "source": "SQLite cache",

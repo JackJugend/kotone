@@ -111,6 +111,7 @@ class ReleaseVariables:
     release_date: Any = None
     year: Any = None
     album_format: Any = None
+    duration: Any = None
 
     # Label.
     label: Any = None
@@ -261,6 +262,34 @@ def build_release_variables(
 
     user_score = value("user_score", missing)
 
+    def total_duration(tracklist_value: list[dict]) -> str | None:
+        """Return an album runtime from cached track lengths when possible."""
+
+        total_seconds = 0
+        found = False
+        for track in tracklist_value:
+            raw = str((track or {}).get("duration") or "").strip()
+            parts = raw.split(":")
+            if not raw or not all(part.isdigit() for part in parts):
+                continue
+            try:
+                seconds = 0
+                for part in parts:
+                    seconds = seconds * 60 + int(part)
+            except ValueError:
+                continue
+            total_seconds += seconds
+            found = True
+        if not found:
+            return None
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return (
+            f"{hours}:{minutes:02d}:{seconds:02d}"
+            if hours
+            else f"{minutes}:{seconds:02d}"
+        )
+
     return ReleaseVariables(
         score=item.get("score"),
         artist=artist,
@@ -293,6 +322,7 @@ def build_release_variables(
             or item.get("album_format")
             or missing
         ),
+        duration=value("duration", total_duration(tracklist) or missing),
         label=value("label", missing),
         labels=labels,
         labels_text=value("labels_text", ", ".join(labels) if labels else missing),
@@ -349,6 +379,7 @@ async def load_release_variables(
         details = await DATA.get_release_details(
             item,
             username=username,
+            allow_network=False,
         )
     except Exception:
         # Release enrichment is optional. A rating should still render from the
@@ -388,7 +419,7 @@ def rating_flags_text(item_or_variables: dict | ReleaseVariables | None) -> str:
 
 
 async def username_autocomplete(interaction: discord.Interaction, current: str):
-    """Config users first, then AOTY search; no autocomplete result is persisted."""
+    """Configured usernames only; command autocomplete never calls AOTY."""
     current = str(current or "").strip()
 
     if len(current) < 1:
@@ -408,35 +439,6 @@ async def username_autocomplete(interaction: discord.Interaction, current: str):
             )
         )
         seen.add(username.casefold())
-
-    if len(current) >= 2 and len(choices) < 10:
-        import aoty
-        from http_client import PRIORITY_INTERACTIVE, call_with_priority
-
-        try:
-            results = await asyncio.to_thread(
-                call_with_priority,
-                PRIORITY_INTERACTIVE,
-                aoty.search_aoty_users,
-                current,
-                10,
-            )
-        except Exception:
-            results = []
-
-        for item in results:
-            username = str(item.get("username") or "")
-            if not username or username.casefold() in seen:
-                continue
-            choices.append(
-                discord.app_commands.Choice(
-                    name=str(item.get("name") or username)[:100],
-                    value=username[:100],
-                )
-            )
-            seen.add(username.casefold())
-            if len(choices) >= 10:
-                break
 
     return choices[:10]
 

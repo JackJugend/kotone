@@ -507,6 +507,63 @@ class ArtistYearSelect(discord.ui.Select):
         )
 
 
+class ArtistGenreSelect(discord.ui.Select):
+    """Primary-genre filter sourced entirely from cached release metadata."""
+
+    def __init__(self, artist_view):
+        self.artist_view = artist_view
+        super().__init__(
+            placeholder="Gatunek: Wszystkie gatunki",
+            min_values=1,
+            max_values=1,
+            options=[],
+            row=4,
+        )
+        self.refresh_options()
+
+    def refresh_options(self):
+        view = self.artist_view
+        genres = view.available_genres()
+        if view.selected_genre not in {"all", *genres}:
+            view.selected_genre = "all"
+        self.options = [
+            discord.SelectOption(
+                label="Wszystkie gatunki",
+                value="all",
+                default=view.selected_genre == "all",
+            )
+        ] + [
+            discord.SelectOption(
+                label=genre[:100],
+                value=genre[:100],
+                default=view.selected_genre == genre,
+            )
+            for genre in genres[:24]
+        ]
+        self.placeholder = (
+            "Gatunek: Wszystkie gatunki"
+            if view.selected_genre == "all"
+            else f"Gatunek: {view.selected_genre}"
+        )
+        self.disabled = not genres
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        view = self.artist_view
+        view.selected_genre = self.values[0]
+        if (
+            view.selected_year is not None
+            and view.selected_year not in view.available_years()
+        ):
+            view.selected_year = None
+        view.year_menu_page = view.year_page_for_selected_year()
+        view.refresh_controls()
+        await interaction.edit_original_response(
+            embed=await view.build_embed(),
+            view=view,
+        )
+
+
 class ArtistSortView(TimedDisableView):
     """Interactive /artist sorter + format/year filters."""
 
@@ -515,6 +572,12 @@ class ArtistSortView(TimedDisableView):
         *,
         discography,
         releases,
+        selected_format="all",
+        selected_genre="all",
+        selected_year=None,
+        decade=None,
+        aoty_min=None,
+        aoty_max=None,
         timeout=VIEW_TIMEOUT_SECONDS,
     ):
         super().__init__(
@@ -527,8 +590,12 @@ class ArtistSortView(TimedDisableView):
         )
 
         self.sort_key = "newest"
-        self.selected_format = "all"
-        self.selected_year = None
+        self.selected_format = selected_format
+        self.selected_genre = selected_genre or "all"
+        self.selected_year = str(selected_year) if selected_year is not None else None
+        self.selected_decade = decade
+        self.aoty_min = aoty_min
+        self.aoty_max = aoty_max
         self.year_menu_page = 0
 
         # Cache public release details inside this message.
@@ -543,6 +610,8 @@ class ArtistSortView(TimedDisableView):
             self
         )
 
+        self.genre_select = ArtistGenreSelect(self)
+
         self.add_item(
             self.format_select
         )
@@ -550,6 +619,7 @@ class ArtistSortView(TimedDisableView):
         self.add_item(
             self.year_select
         )
+        self.add_item(self.genre_select)
 
         self.refresh_controls()
 
@@ -574,25 +644,87 @@ class ArtistSortView(TimedDisableView):
             or "Wszystkie lata"
         )
 
+    @property
+    def selected_genre_label(self):
+        return (
+            "Wszystkie gatunki"
+            if self.selected_genre == "all"
+            else self.selected_genre
+        )
+
     def _format_filtered_releases(self):
+        releases = self._base_filtered_releases()
         if self.selected_format == "all":
-            return list(
-                self.releases
-            )
+            return releases
 
         return [
             release
-            for release in self.releases
+            for release in releases
             if _format_key_for_release(
                 release
             ) == self.selected_format
         ]
 
+    def _base_filtered_releases(self):
+        releases = list(self.releases)
+        if self.selected_decade is not None:
+            start = int(self.selected_decade)
+            releases = [
+                release
+                for release in releases
+                if (
+                    _release_year(release) is not None
+                    and start <= int(_release_year(release)) <= start + 9
+                )
+            ]
+        if self.aoty_min is not None:
+            releases = [
+                release for release in releases
+                if (
+                    _score_number(release.get("user_score")) is not None
+                    and _score_number(release.get("user_score")) >= int(self.aoty_min)
+                )
+            ]
+        if self.aoty_max is not None:
+            releases = [
+                release for release in releases
+                if (
+                    _score_number(release.get("user_score")) is not None
+                    and _score_number(release.get("user_score")) <= int(self.aoty_max)
+                )
+            ]
+        return releases
+
+    def _format_and_genre_filtered_releases(self):
+        releases = self._format_filtered_releases()
+        if self.selected_genre == "all":
+            return releases
+        selected = self.selected_genre.casefold()
+        return [
+            release
+            for release in releases
+            if any(
+                str(genre).casefold() == selected
+                for genre in (release.get("genres") or [])
+            )
+        ]
+
+    def available_genres(self):
+        return sorted(
+            {
+                str(genre).strip()
+                for release in self._format_filtered_releases()
+                for genre in (release.get("genres") or [])
+                if str(genre).strip()
+            },
+            key=str.casefold,
+        )
+
     def available_years(self):
         """Years that REALLY contain releases after the current format filter."""
         years = {
             _release_year(release)
-            for release in self._format_filtered_releases()
+            for release in self._format_and_genre_filtered_releases()
         }
 
         years.discard(
@@ -623,7 +755,7 @@ class ArtistSortView(TimedDisableView):
         )
 
     def filtered_releases(self):
-        releases = self._format_filtered_releases()
+        releases = self._format_and_genre_filtered_releases()
 
         if self.selected_year is not None:
             releases = [
@@ -752,9 +884,20 @@ class ArtistSortView(TimedDisableView):
 
         filter_text = (
             f"{self.selected_format_label} • "
+            f"{self.selected_genre_label} • "
             f"{self.selected_year_label} • "
             f"{sort_label}"
         )
+        extra_filters = []
+        if self.selected_decade is not None:
+            extra_filters.append(f"{self.selected_decade}s")
+        if self.aoty_min is not None or self.aoty_max is not None:
+            extra_filters.append(
+                f"AOTY {self.aoty_min if self.aoty_min is not None else '—'}"
+                f"–{self.aoty_max if self.aoty_max is not None else '—'}"
+            )
+        if extra_filters:
+            filter_text += " • " + " • ".join(extra_filters)
 
         if len(filtered) > len(shown):
             footer = (
@@ -887,6 +1030,13 @@ class ArtistSortView(TimedDisableView):
 
 async def build_artist_response(
     artist: str,
+    *,
+    format_key: str = "all",
+    genre: str | None = None,
+    year: int | None = None,
+    decade: int | None = None,
+    aoty_min: int | None = None,
+    aoty_max: int | None = None,
 ) -> tuple[discord.Embed, ArtistSortView] | None:
     """Build exactly the same interactive artist result used by /artist."""
 
@@ -901,6 +1051,12 @@ async def build_artist_response(
     view = ArtistSortView(
         discography=discography,
         releases=releases,
+        selected_format=format_key,
+        selected_genre=genre or "all",
+        selected_year=year,
+        decade=decade,
+        aoty_min=aoty_min,
+        aoty_max=aoty_max,
     )
     embed = await view.build_embed()
     return embed, view
@@ -909,6 +1065,13 @@ async def build_artist_response(
 def setup_artist_command(
     tree: discord.app_commands.CommandTree
 ):
+    format_choices = [
+        discord.app_commands.Choice(name="Wszystkie formaty", value="all")
+    ] + [
+        discord.app_commands.Choice(name=info["label"], value=key)
+        for key, info in RATING_FORMATS.items()
+    ]
+
     async def artist_autocomplete(
         interaction: discord.Interaction,
         current: str,
@@ -950,24 +1113,57 @@ def setup_artist_command(
 
         return choices
 
+    async def genre_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ):
+        needle = str(current or "").casefold()
+        return [
+            discord.app_commands.Choice(name=value[:100], value=value[:100])
+            for value in DATA.cached_genres()
+            if needle in value.casefold()
+        ][:25]
+
     @tree.command(
         name="artist",
         description="Pokazuje dyskografię artysty z datami i ocenami AOTY",
     )
     @discord.app_commands.describe(
         artist="Nazwa artysty na AOTY",
+        format="Format zapisany w SQLite",
+        genre="Gatunek zapisany w SQLite",
+        year="Rok wydania",
+        decade="Początek dekady, np. 2020",
+        aoty_min="Minimalny AOTY User Score",
+        aoty_max="Maksymalny AOTY User Score",
     )
     @discord.app_commands.autocomplete(
-        artist=artist_autocomplete
+        artist=artist_autocomplete,
+        genre=genre_autocomplete,
     )
+    @discord.app_commands.choices(format=format_choices)
     async def artist_command(
         interaction: discord.Interaction,
         artist: str,
+        format: str = "all",
+        genre: str | None = None,
+        year: int | None = None,
+        decade: int | None = None,
+        aoty_min: int | None = None,
+        aoty_max: int | None = None,
     ):
         await interaction.response.defer()
 
         try:
-            result = await build_artist_response(artist)
+            result = await build_artist_response(
+                artist,
+                format_key=format,
+                genre=genre,
+                year=year,
+                decade=decade,
+                aoty_min=aoty_min,
+                aoty_max=aoty_max,
+            )
             if result is None:
                 await interaction.followup.send(
                     f"❌ Nie znaleziono artysty **{artist}** na AOTY ani w SQLite."

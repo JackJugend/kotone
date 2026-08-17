@@ -5,6 +5,7 @@ import requests
 
 import aoty
 from services import DATA
+from settings import RATING_FORMATS
 from shared import (
     load_release_variables,
     rating_flags_text,
@@ -72,6 +73,22 @@ def _rating_embed(username, item, avatar, variables):
 
 
 def setup_recent_command(tree: discord.app_commands.CommandTree):
+    format_choices = [
+        discord.app_commands.Choice(name="Wszystkie formaty", value="all")
+    ] + [
+        discord.app_commands.Choice(name=info["label"], value=key)
+        for key, info in RATING_FORMATS.items()
+    ]
+
+    async def genre_autocomplete(interaction: discord.Interaction, current: str):
+        username = str(getattr(interaction.namespace, "username", "") or "")
+        needle = str(current or "").casefold()
+        return [
+            discord.app_commands.Choice(name=value[:100], value=value[:100])
+            for value in DATA.cached_genres(username)
+            if needle in value.casefold()
+        ][:25]
+
     @tree.command(
         name="recent",
         description="Pokazuje od 1 do 20 ostatnich ocen użytkownika AOTY",
@@ -79,12 +96,34 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
     @discord.app_commands.describe(
         username="Użytkownik AOTY",
         amount="Ile ostatnich ocen pokazać (1-20)",
+        format="Opcjonalnie: tylko konkretny format wydania",
+        genre="Gatunek zapisany w SQLite",
+        year="Rok wydania",
+        decade="Początek dekady, np. 2020",
+        rating_date="Data oceny, np. 01.05.2026",
+        aoty_min="Minimalny AOTY User Score",
+        aoty_max="Maksymalny AOTY User Score",
+        user_min="Minimalna ocena użytkownika",
+        user_max="Maksymalna ocena użytkownika",
     )
-    @discord.app_commands.autocomplete(username=username_autocomplete)
+    @discord.app_commands.autocomplete(
+        username=username_autocomplete,
+        genre=genre_autocomplete,
+    )
+    @discord.app_commands.choices(format=format_choices)
     async def recent_command(
         interaction: discord.Interaction,
         username: str,
         amount: discord.app_commands.Range[int, 1, 20] = 5,
+        format: str = "all",
+        genre: str | None = None,
+        year: int | None = None,
+        decade: int | None = None,
+        rating_date: str | None = None,
+        aoty_min: int | None = None,
+        aoty_max: int | None = None,
+        user_min: int | None = None,
+        user_max: int | None = None,
     ):
         await interaction.response.defer()
         username = username.strip()
@@ -99,6 +138,16 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
             ratings = await DATA.get_recent_ratings(
                 username,
                 int(amount),
+                format,
+                allow_network=False,
+                genre=genre,
+                year=year,
+                decade=decade,
+                rating_date=rating_date,
+                aoty_min=aoty_min,
+                aoty_max=aoty_max,
+                user_min=user_min,
+                user_max=user_max,
             )
         except aoty.AOTYRateLimit:
             await interaction.followup.send(

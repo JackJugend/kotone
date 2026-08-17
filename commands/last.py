@@ -25,6 +25,15 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         for key, info in RATING_FORMATS.items()
     ]
 
+    async def genre_autocomplete(interaction: discord.Interaction, current: str):
+        username = str(getattr(interaction.namespace, "username", "") or "")
+        needle = str(current or "").casefold()
+        return [
+            discord.app_commands.Choice(name=value[:100], value=value[:100])
+            for value in DATA.cached_genres(username)
+            if needle in value.casefold()
+        ][:25]
+
     @tree.command(
         name="last",
         description="Pokazuje ostatnią ocenę użytkownika AOTY",
@@ -32,13 +41,32 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
     @discord.app_commands.describe(
         username="Użytkownik AOTY",
         format="Opcjonalnie: tylko konkretny format wydania",
+        genre="Gatunek zapisany w SQLite",
+        year="Rok wydania",
+        decade="Początek dekady, np. 2020",
+        rating_date="Data oceny, np. 01.05.2026",
+        aoty_min="Minimalny AOTY User Score",
+        aoty_max="Maksymalny AOTY User Score",
+        user_min="Minimalna ocena użytkownika",
+        user_max="Maksymalna ocena użytkownika",
     )
-    @discord.app_commands.autocomplete(username=username_autocomplete)
+    @discord.app_commands.autocomplete(
+        username=username_autocomplete,
+        genre=genre_autocomplete,
+    )
     @discord.app_commands.choices(format=format_choices)
     async def last_command(
         interaction: discord.Interaction,
         username: str,
         format: str = "all",
+        genre: str | None = None,
+        year: int | None = None,
+        decade: int | None = None,
+        rating_date: str | None = None,
+        aoty_min: int | None = None,
+        aoty_max: int | None = None,
+        user_min: int | None = None,
+        user_max: int | None = None,
     ):
         await interaction.response.defer()
         username = username.strip()
@@ -54,6 +82,15 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
                 username,
                 1,
                 format,
+                allow_network=False,
+                genre=genre,
+                year=year,
+                decade=decade,
+                rating_date=rating_date,
+                aoty_min=aoty_min,
+                aoty_max=aoty_max,
+                user_min=user_min,
+                user_max=user_max,
             )
 
         except aoty.AOTYRateLimit:
@@ -114,6 +151,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
                 user_release_url=latest.get("review_url"),
                 album_title=latest.get("album"),
                 require_detail=True,
+                allow_network=False,
             )
 
             # Preserve the exact user-release URL discovered live.
@@ -223,6 +261,10 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             (
                 f"**Release date:** "
                 f"{variables.release_date}"
+            ),
+            (
+                f"**Duration:** "
+                f"{variables.duration}"
             ),
             (
                 f"**Format:** "

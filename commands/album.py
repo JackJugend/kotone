@@ -272,6 +272,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                     user_release_url=None,
                     album_title=variables.album,
                     require_detail=False,
+                    allow_network=False,
                 )
             except aoty.AOTYRateLimit:
                 rating_info = {"score": None, "source": "rate limit"}

@@ -188,46 +188,13 @@ class DataService:
         return ranked[: max(1, int(limit))]
 
     async def search_artists(self, query: str, limit: int = 10) -> list[dict]:
-        """SQLite-first artist autocomplete with an optional live supplement."""
+        """Artist autocomplete from the durable SQLite cache only."""
 
         query = str(query or "").strip()
         limit = max(1, min(25, int(limit)))
         local = self.search_cached_artists(query, limit=limit)
 
-        # A strong cached match fully answers autocomplete and avoids spending
-        # an AOTY request for data Kotone already owns.
-        if local and float(local[0].get("score") or 0) >= 0.78:
-            return local
-
-        try:
-            live = await _thread_call(
-                PRIORITY_INTERACTIVE,
-                aoty.search_aoty_artists,
-                query,
-                limit,
-            )
-        except Exception:
-            return local
-
-        combined = list(local)
-        seen = {
-            aoty.normalize_match_text(item.get("name") or "")
-            for item in combined
-        }
-        for item in live:
-            normalized = aoty.normalize_match_text(item.get("name") or "")
-            if not normalized or normalized in seen:
-                continue
-            combined.append(dict(item))
-            seen.add(normalized)
-
-        combined.sort(
-            key=lambda item: (
-                -float(item.get("score") or 0),
-                str(item.get("name") or "").casefold(),
-            )
-        )
-        return combined[:limit]
+        return local
 
     def cached_artist_discography(
         self,
@@ -260,40 +227,18 @@ class DataService:
         *,
         prefer_cached: bool = False,
     ) -> tuple[dict | None, dict | None]:
-        """Load SQLite first, then enrich live, with durable outage fallback."""
+        """Load an artist discography exclusively from SQLite.
+
+        AOTY is refreshed by the monitor/background worker, never by a
+        command or command autocomplete.
+        """
 
         cached_info, cached_discography = self.cached_artist_discography(
             artist_query
         )
-        if prefer_cached and cached_discography is not None:
-            return cached_info, cached_discography
-
-        try:
-            artist_info = await _thread_call(
-                PRIORITY_INTERACTIVE,
-                aoty.resolve_artist,
-                artist_query,
-            )
-            if not artist_info:
-                return cached_info, cached_discography
-
-            discography = await _thread_call(
-                PRIORITY_INTERACTIVE,
-                aoty.get_artist_releases,
-                artist_info["url"],
-            )
-            if discography and discography.get("releases"):
-                discography = dict(discography)
-                discography["releases"] = [
-                    self.release_with_cached_details(item)
-                    for item in discography.get("releases") or []
-                ]
-                return artist_info, discography
-        except Exception:
-            if cached_discography is not None:
-                return cached_info, cached_discography
-            raise
-
+        # Interactive commands are SQLite-only. The background worker is the
+        # sole owner of regular AOTY refreshes, so an existing local artist
+        # cache always wins regardless of its age.
         return cached_info, cached_discography
 
     @staticmethod
@@ -422,11 +367,7 @@ class DataService:
         if DB.is_monitored(username):
             return True
 
-        return await _thread_call(
-            PRIORITY_INTERACTIVE,
-            aoty.aoty_user_exists,
-            username,
-        )
+        return False
 
     async def sync_profile(self, username: str, *, priority: int = PRIORITY_BACKGROUND) -> dict:
         """Refresh profile summary for one configured user."""
@@ -463,18 +404,29 @@ class DataService:
             raise
 
     async def get_profile(self, username: str, *, recent_limit: int = 50) -> dict:
-        """Profile command data with SQLite stale fallback for config users."""
+        """Return a cached profile, or one lightweight non-persistent lookup.
+
+        Profiles outside config.json are deliberately never written to SQLite.
+        Their profile page and compact recent-rating cards are fetched once from
+        AOTY; each card is then hydrated only from the existing public release
+        cache.  No extra album/detail requests are made.
+        """
 
         username = str(username).strip()
 
         if not DB.is_monitored(username):
-            # Privacy/scope rule: arbitrary users are never persisted.
-            return await _thread_call(
+            profile = await _thread_call(
                 PRIORITY_INTERACTIVE,
                 aoty.get_profile_data,
                 username,
                 recent_limit,
             )
+            result = dict(profile)
+            result["recent_ratings"] = [
+                self.release_with_cached_details(item)
+                for item in profile.get("recent_ratings") or []
+            ]
+            return result
 
         cached = self._profile_with_cached_details(
             username,
@@ -491,53 +443,14 @@ class DataService:
             return result
 
         cached = with_sqlite_average(cached)
-        timestamps = DB.sync_timestamps(username)
-        fresh = self._age(timestamps.get("profile_synced_at")) <= PROFILE_SYNC_INTERVAL
-
-        if cached is not None and fresh:
-            return cached
-
-        try:
-            await self.sync_profile(username, priority=PRIORITY_INTERACTIVE)
-            refreshed = self._profile_with_cached_details(
-                username,
-                DB.get_profile(username, recent_limit=recent_limit),
-            )
-            refreshed = with_sqlite_average(refreshed)
-            if refreshed is not None:
-                return refreshed
-        except (
-            aoty.AOTYRateLimit,
-            aoty.AOTYPageIncomplete,
-            requests.RequestException,
-        ):
-            if cached is not None:
-                return cached
-            raise
-
         if cached is not None:
             return cached
         raise aoty.AOTYUserNotFound()
 
     async def get_avatar(self, username: str) -> str | None:
         if DB.is_monitored(username):
-            cached = DB.get_avatar(username)
-            if cached:
-                return cached
-            try:
-                await self.sync_profile(username, priority=PRIORITY_INTERACTIVE)
-                return DB.get_avatar(username)
-            except Exception:
-                return None
-
-        try:
-            return await _thread_call(
-                PRIORITY_INTERACTIVE,
-                aoty.get_user_avatar,
-                username,
-            )
-        except Exception:
-            return None
+            return DB.get_avatar(username)
+        return None
 
     # ------------------------------------------------------------------
     # Ratings
@@ -648,6 +561,9 @@ class DataService:
         username: str,
         count: int = 20,
         format_key: str = "all",
+        *,
+        allow_network: bool = True,
+        **filters,
     ) -> list[dict]:
         username = str(username).strip()
         count = max(1, min(50, int(count)))
@@ -671,6 +587,7 @@ class DataService:
                 username,
                 count,
                 release_format=format_label,
+                **filters,
             )
         ]
         timestamps = DB.sync_timestamps(username)
@@ -695,6 +612,12 @@ class DataService:
                     <= PROFILE_RATING_ARCHIVE_INTERVAL
                 )
                 fresh = archive_fresh
+
+        # Command output is an SQLite snapshot. The legacy opt-in live path is
+        # retained for background/internal callers and regression coverage;
+        # every Discord command explicitly passes allow_network=False.
+        if not allow_network:
+            return cached
 
         if fresh:
             return cached
@@ -764,6 +687,10 @@ class DataService:
         """Return public release detail from SQLite without touching AOTY."""
         return DB.get_release_details(str(album_id or ""))
 
+    def cached_genres(self, username: str | None = None) -> list[str]:
+        """Distinct cached genres for command autocomplete, without HTTP."""
+        return DB.available_genres(username)
+
     async def get_user_rating_for_album(
         self,
         username: str,
@@ -775,6 +702,7 @@ class DataService:
         user_release_url: str | None = None,
         album_title: str | None = None,
         require_detail: bool = True,
+        allow_network: bool = True,
     ) -> dict:
         """One user's rating for one album, cached persistently only for config users."""
 
@@ -786,6 +714,17 @@ class DataService:
             cached = DB.get_rating_detail(username, album_id)
         else:
             cached = None
+
+        if cached is not None and not allow_network:
+            return cached
+
+        if not allow_network:
+            return {
+                "album_id": str(album_id or ""),
+                "score": None,
+                "detail_incomplete": True,
+                "source": "SQLite cache",
+            }
 
         if cached is not None:
             if not require_detail:
@@ -886,6 +825,7 @@ class DataService:
         item: dict,
         *,
         username: str | None = None,
+        allow_network: bool = True,
     ) -> dict:
         item = dict(item or {})
         album_id = str(item.get("album_id") or "")
@@ -894,8 +834,11 @@ class DataService:
         # scope enforcement still guarantees that a release is persisted only
         # when at least one configured user has rated it.
         cached = DB.get_release_details(album_id) if album_id else None
-        if cached is not None and self._age(cached.get("fetched_at")) <= RELEASE_DETAIL_TTL:
+        if cached is not None:
             return cached
+
+        if not allow_network:
+            return {}
 
         if not url:
             return cached or {}

@@ -147,6 +147,7 @@ async def build_release_details_embed(
         f"**AOTY User Score:** {variables.aoty_user_score}",
         f"**Ratings:** {variables.ratings_count}",
         f"**Release date:** {variables.release_date}",
+        f"**Duration:** {variables.duration}",
         f"**Format:** {variables.album_format}",
         f"**Label:** {variables.labels_text}",
         f"**Genre:** {variables.genres_text}",
@@ -210,7 +211,7 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
         item["album_id"] = album_id
 
     try:
-        details = await DATA.get_release_details(item)
+        details = await DATA.get_release_details(item, allow_network=False)
     except Exception:
         details = {}
 
@@ -253,6 +254,7 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
                     user_release_url=cached.get("review_url"),
                     album_title=item.get("album") or item.get("title"),
                     require_detail=True,
+                    allow_network=False,
                 )
             except Exception:
                 selected = cached
@@ -472,6 +474,7 @@ async def _load_live_extra(
             user_release_url=item.get("review_url"),
             album_title=item.get("album") or item.get("title"),
             require_detail=True,
+            allow_network=False,
         )
     except aoty.AOTYRateLimit as exc:
         return {
