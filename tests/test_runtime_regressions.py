@@ -23,6 +23,7 @@ os.environ.setdefault("DATA_DIR", TEST_RUNTIME)
 sys.path.insert(0, str(ROOT))
 
 import aoty  # noqa: E402
+import http_client  # noqa: E402
 import services  # noqa: E402
 from database import Database  # noqa: E402
 from http_client import (  # noqa: E402
@@ -460,6 +461,16 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HTTPRetryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="kotone-http-test-"))
+        self.challenge_file = self.tmp / "challenge.json"
+        self.original_challenge_file = http_client.AOTY_CHALLENGE_STATE_FILE
+        http_client.AOTY_CHALLENGE_STATE_FILE = str(self.challenge_file)
+
+    def tearDown(self):
+        http_client.AOTY_CHALLENGE_STATE_FILE = self.original_challenge_file
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     def test_user_detail_does_not_fallback_during_global_challenge(self):
         original_fetch = aoty._fetch_user_release_page
         original_route = aoty._get_ratings_from_route
@@ -550,6 +561,7 @@ class HTTPRetryTests(unittest.TestCase):
 
         # Simulate monotonic expiry without sleeping for the production delay.
         client._challenge_open_until = 0.0
+        client._challenge_until_epoch = 0.0
         result = client.get(
             "https://www.albumoftheyear.org/album/1-test.php",
             use_cache=False,
@@ -558,6 +570,17 @@ class HTTPRetryTests(unittest.TestCase):
         self.assertIn("Album of the Year", result.text)
         self.assertEqual(len(calls), 2)
         self.assertFalse(client.status()["challenge_open"])
+
+    def test_challenge_deadline_survives_a_new_client(self):
+        first = ResilientHTTPClient()
+        first._record_challenge("interstitial/challenge page")
+        self.assertTrue(self.challenge_file.exists())
+
+        restarted = ResilientHTTPClient()
+        status = restarted.status()
+        self.assertTrue(status["challenge_open"])
+        self.assertGreater(status["challenge_seconds"], 0)
+        self.assertIsNotNone(status["challenge_until_epoch"])
 
     def test_invalid_url_is_rejected_without_retry_or_circuit_failure(self):
         client = ResilientHTTPClient()

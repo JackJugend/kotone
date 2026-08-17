@@ -25,6 +25,8 @@ Thumbs.db
 *.db-shm
 *.db-wal
 data_migrated.json.bak
+aoty_challenge_state.json
+aoty_challenge_state.json.tmp
 
 railway ssh
 railway ssh.pub

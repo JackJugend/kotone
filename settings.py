@@ -227,6 +227,13 @@ AOTY_CHALLENGE_COOLDOWN = _runtime_float(
     2 * 60 * 60.0,
     5 * 60.0,
 )
+# Persisted on the Railway volume.  Without this a deploy forgets an active
+# anti-bot challenge and immediately probes AOTY again, effectively starting
+# a fresh cooldown every time the service restarts.
+AOTY_CHALLENGE_STATE_FILE = os.path.join(
+    DATA_DIR or BASE_DIR,
+    "aoty_challenge_state.json",
+)
 AOTY_CACHE_MAX_ENTRIES = _runtime_int("aoty_cache_max_entries", 512, 32)
 AOTY_REQUEST_TIMEOUT_CONNECT = _runtime_float("aoty_connect_timeout", 8.0, 2.0)
 AOTY_REQUEST_TIMEOUT_READ = _runtime_float("aoty_read_timeout", 25.0, 5.0)

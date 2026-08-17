@@ -18,12 +18,15 @@ Design goals:
 from __future__ import annotations
 
 import heapq
+import json
+import os
 import random
 import threading
 import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Iterator
 from urllib.parse import urlparse
@@ -33,6 +36,7 @@ import requests
 from settings import (
     AOTY_CACHE_MAX_ENTRIES,
     AOTY_CHALLENGE_COOLDOWN,
+    AOTY_CHALLENGE_STATE_FILE,
     AOTY_CIRCUIT_COOLDOWN,
     AOTY_CIRCUIT_FAILURES,
     AOTY_MAX_RETRIES,
@@ -211,10 +215,12 @@ class ResilientHTTPClient:
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
         self._challenge_open_until = 0.0
+        self._challenge_until_epoch = 0.0
         self._challenge_last_error: str | None = None
         self._last_error: str | None = None
         self._request_count = 0
         self._cache_hits = 0
+        self._restore_challenge_state()
 
     def configure_headers(self, headers: dict[str, str]) -> None:
         self.session.headers.update(headers)
@@ -307,6 +313,51 @@ class ResilientHTTPClient:
         with self._circuit_lock:
             return max(0.0, self._challenge_open_until - time.monotonic())
 
+    def _restore_challenge_state(self) -> None:
+        """Restore an AOTY cooldown after a Railway restart/deploy."""
+
+        try:
+            with open(AOTY_CHALLENGE_STATE_FILE, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+            until = float(payload.get("until_epoch") or 0.0)
+            reason = str(payload.get("reason") or "").strip() or None
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+
+        remaining = until - time.time()
+        if remaining <= 0:
+            return
+        self._challenge_open_until = time.monotonic() + remaining
+        self._challenge_until_epoch = until
+        self._challenge_last_error = reason or "AOTY challenge cooldown jest nadal aktywny."
+
+    def _persist_challenge_state_locked(self) -> None:
+        """Atomically persist the deadline; a failure never blocks the bot."""
+
+        path = AOTY_CHALLENGE_STATE_FILE
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            temporary = f"{path}.tmp"
+            with open(temporary, "w", encoding="utf-8") as file:
+                json.dump(
+                    {
+                        "until_epoch": self._challenge_until_epoch,
+                        "reason": self._challenge_last_error,
+                    },
+                    file,
+                )
+            os.replace(temporary, path)
+        except OSError:
+            pass
+
+    def _clear_challenge_state_locked(self) -> None:
+        try:
+            os.remove(AOTY_CHALLENGE_STATE_FILE)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
     @staticmethod
     def _challenge_issue(text: str) -> str | None:
         """Return a reason when a response is an anti-bot interstitial."""
@@ -334,7 +385,12 @@ class ResilientHTTPClient:
                 self._challenge_open_until,
                 time.monotonic() + seconds,
             )
+            self._challenge_until_epoch = max(
+                self._challenge_until_epoch,
+                time.time() + seconds,
+            )
             self._challenge_last_error = message
+            self._persist_challenge_state_locked()
         return ExternalChallenge(message, retry_after=seconds)
 
     def _active_challenge(self) -> ExternalChallenge | None:
@@ -352,8 +408,10 @@ class ResilientHTTPClient:
             self._consecutive_failures = 0
             self._circuit_open_until = 0.0
             self._challenge_open_until = 0.0
+            self._challenge_until_epoch = 0.0
             self._challenge_last_error = None
             self._last_error = None
+            self._clear_challenge_state_locked()
 
     def _record_failure(self, message: str) -> None:
         with self._circuit_lock:
@@ -598,6 +656,15 @@ class ResilientHTTPClient:
             "blocked_seconds": self._gate.blocked_seconds,
             "challenge_open": challenge_seconds > 0,
             "challenge_seconds": challenge_seconds,
+            "challenge_until_epoch": self._challenge_until_epoch or None,
+            "challenge_until_utc": (
+                datetime.fromtimestamp(
+                    self._challenge_until_epoch,
+                    tz=timezone.utc,
+                ).isoformat()
+                if self._challenge_until_epoch and challenge_seconds > 0
+                else None
+            ),
             "challenge_last_error": challenge_last_error,
             "consecutive_failures": consecutive_failures,
             "last_error": last_error,

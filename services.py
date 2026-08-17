@@ -1100,11 +1100,23 @@ class DataService:
         detail_done = 0
         errors = 0
 
-        # Pull a few extra candidates so one temporarily broken album does not
-        # monopolize position #1 forever.
-        release_candidates = DB.release_enrichment_candidates(
+        # Personal Track Ratings are more valuable than generic album metadata
+        # and were previously starved: a blocked release fetch returned before
+        # this pass ever reached the user-detail phase.  If even one detail is
+        # due, finish that queue first; public release enrichment resumes once
+        # it is empty.
+        priority_details = DB.detail_enrichment_candidates(
             username,
-            max(int(release_limit) * 5, int(release_limit)),
+            1,
+            stale_before=time.time() - DETAIL_CHANGE_SCAN_INTERVAL,
+        )
+        release_candidates = (
+            []
+            if priority_details
+            else DB.release_enrichment_candidates(
+                username,
+                max(int(release_limit) * 5, int(release_limit)),
+            )
         )
 
         for item in release_candidates:
