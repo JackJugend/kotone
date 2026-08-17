@@ -2452,6 +2452,7 @@ class Database:
                 LEFT JOIN releases rel ON rel.album_id = r.album_id
                 WHERE r.username = ?
                   AND r.active = 1
+                  AND NULLIF(TRIM(COALESCE(r.album_url, '')), '') IS NOT NULL
                   AND rel.album_id IS NULL
                 ORDER BY COALESCE(r.sort_timestamp, r.first_seen_at, 0) DESC
                 LIMIT ?

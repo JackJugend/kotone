@@ -188,6 +188,28 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HTTPRetryTests(unittest.TestCase):
+    def test_invalid_url_is_rejected_without_retry_or_circuit_failure(self):
+        client = ResilientHTTPClient()
+        calls = []
+
+        def fake_get(url, timeout):
+            calls.append((url, timeout))
+            raise AssertionError("Nie wolno wykonywać requestu dla błędnego URL")
+
+        client.session.get = fake_get
+
+        for invalid_url in (None, "", "None", "/relative/path"):
+            with self.subTest(url=invalid_url):
+                with self.assertRaises(ValueError):
+                    client.get(
+                        invalid_url,
+                        use_cache=False,
+                        allow_stale=False,
+                    )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(client.status()["consecutive_failures"], 0)
+
     def test_stable_404_is_not_retried_or_counted_as_circuit_failure(self):
         class NotFoundResponse:
             status_code = 404
@@ -218,6 +240,51 @@ class HTTPRetryTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 1)
         self.assertEqual(client.status()["consecutive_failures"], 0)
+
+
+class ReleaseEnrichmentCandidateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="kotone-release-candidates-"))
+        self.db = Database(
+            str(self.tmp / "kotone.sqlite3"),
+            monitored_users=("enso",),
+            legacy_json_path=str(self.tmp / "missing.json"),
+            migrated_backup_path=str(self.tmp / "migrated.bak"),
+            backup_path=str(self.tmp / "backup.sqlite3"),
+        )
+
+    def tearDown(self):
+        self.db.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_release_enrichment_skips_ratings_without_album_url(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "missing-url",
+                "album": "Missing URL",
+                "url": None,
+                "score": "70",
+            },
+        )
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "valid-url",
+                "album": "Valid URL",
+                "url": (
+                    "https://www.albumoftheyear.org/album/1-valid.php"
+                ),
+                "score": "80",
+            },
+        )
+
+        candidates = self.db.release_enrichment_candidates("enso", 10)
+
+        self.assertEqual(
+            [item["album_id"] for item in candidates],
+            ["valid-url"],
+        )
 
 
 class ParserCompletenessTests(unittest.TestCase):

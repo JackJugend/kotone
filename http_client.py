@@ -345,9 +345,13 @@ class ResilientHTTPClient:
     ) -> PageResult:
         """GET one page with rate limiting, retries and stale fallback."""
 
-        url = str(url).strip()
-        if not url:
-            raise ValueError("Pusty URL")
+        url = str(url or "").strip()
+        parsed_url = urlparse(url)
+        if (
+            parsed_url.scheme.casefold() not in {"http", "https"}
+            or not parsed_url.netloc
+        ):
+            raise ValueError("Nieprawidłowy URL HTTP")
 
         if use_cache:
             fresh = self._cache_get(url, stale=False)
