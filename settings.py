@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
@@ -27,18 +26,31 @@ AOTY_ICON_URL = "https://cdn.albumoftheyear.org/images/favicon.png"
 # Zachowujemy starą nazwę zmiennej dla kompatybilności istniejących komend.
 AOTY_ICON_ATTACHMENT = AOTY_ICON_URL
 
+# Runtime state.
+#
+# SQLite jest teraz głównym magazynem stanu. data.json służy wyłącznie jako
+# źródło jednorazowej migracji ze starszych wersji.
 DEFAULT_DATA_FILE = os.path.join(BASE_DIR, "data.json")
+DEFAULT_DATABASE_FILE = os.path.join(BASE_DIR, "kotone.sqlite3")
+
 DATA_DIR = os.getenv("DATA_DIR")
 
 if DATA_DIR:
     os.makedirs(DATA_DIR, exist_ok=True)
-    DATA_FILE = os.path.join(DATA_DIR, "data.json")
 
-    # Przy pierwszym uruchomieniu wolumenu kopiujemy stan z projektu.
-    if not os.path.exists(DATA_FILE) and os.path.exists(DEFAULT_DATA_FILE):
-        shutil.copyfile(DEFAULT_DATA_FILE, DATA_FILE)
+    DATA_FILE = os.path.join(DATA_DIR, "data.json")
+    DATABASE_FILE = os.path.join(DATA_DIR, "kotone.sqlite3")
+    MIGRATED_DATA_BACKUP_FILE = os.path.join(
+        DATA_DIR,
+        "data_migrated.json.bak",
+    )
 else:
     DATA_FILE = DEFAULT_DATA_FILE
+    DATABASE_FILE = DEFAULT_DATABASE_FILE
+    MIGRATED_DATA_BACKUP_FILE = os.path.join(
+        BASE_DIR,
+        "data_migrated.json.bak",
+    )
 
 with open(CONFIG_FILE, "r", encoding="utf-8") as file:
     CONFIG = json.load(file)
