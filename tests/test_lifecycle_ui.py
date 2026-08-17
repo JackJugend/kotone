@@ -643,6 +643,101 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("kulkien **75**", embed.description)
         live_detail.assert_not_awaited()
 
+    async def test_tracklist_button_is_disabled_without_any_track_rows(self):
+        item = {
+            "album_id": "77",
+            "artist": "Artist",
+            "album": "Album",
+            "url": "https://www.albumoftheyear.org/album/77-album/",
+        }
+        with (
+            patch.object(
+                views_module.DATA,
+                "cached_release_details",
+                return_value={"tracklist": []},
+            ),
+            patch.object(
+                views_module.DATA,
+                "cached_rating",
+                return_value={"track_ratings": []},
+            ),
+        ):
+            missing = views_module.SingleRatingView(
+                username="enso",
+                item=item,
+                main_embed=discord.Embed(),
+            )
+
+        missing_tracklist = next(
+            child
+            for child in missing.children
+            if isinstance(child, discord.ui.Button) and child.label == "☰"
+        )
+        self.assertTrue(missing_tracklist.disabled)
+
+        with patch.object(
+            views_module.DATA,
+            "cached_release_details",
+            return_value={"tracklist": [{"number": 1, "title": "Track"}]},
+        ):
+            available = views_module.SingleRatingView(
+                username="enso",
+                item=item,
+                main_embed=discord.Embed(),
+            )
+        available_tracklist = next(
+            child
+            for child in available.children
+            if isinstance(child, discord.ui.Button) and child.label == "☰"
+        )
+        self.assertFalse(available_tracklist.disabled)
+
+    async def test_album_user_selector_exists_only_inside_review_tab(self):
+        item = {
+            "album_id": "1",
+            "artist": "Artist",
+            "album": "Album",
+            "url": "https://www.albumoftheyear.org/album/1-album/",
+        }
+        infos = {
+            "enso": {
+                "score": "90",
+                "has_review": True,
+                "review_text": "Review enso",
+                "track_ratings": [],
+            },
+            "kulkien": {
+                "score": "80",
+                "has_review": True,
+                "review_text": "Review kulkien",
+                "track_ratings": [],
+            },
+        }
+        with patch.object(
+            views_module.DATA,
+            "cached_release_details",
+            return_value={"tracklist": []},
+        ):
+            view = views_module.AlbumRatingView(
+                main_embed=discord.Embed(),
+                release_item=item,
+                usernames=["enso", "kulkien"],
+                rating_infos=infos,
+            )
+
+        self.assertNotIn(view.user_select, view.children)
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+            message=SimpleNamespace(edit=AsyncMock()),
+        )
+        await view._show_selected_review(interaction)
+        self.assertIn(view.user_select, view.children)
+        self.assertEqual(view.user_select.placeholder, "Wybierz użytkownika")
+
+        view._set_user_selector_visible(False)
+        self.assertNotIn(view.user_select, view.children)
+
 
 @unittest.skipIf(
     PROJECT_IMPORT_ERROR is not None,

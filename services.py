@@ -741,6 +741,10 @@ class DataService:
             else None
         )
 
+    def cached_release_details(self, album_id: str) -> dict | None:
+        """Return public release detail from SQLite without touching AOTY."""
+        return DB.get_release_details(str(album_id or ""))
+
     async def get_user_rating_for_album(
         self,
         username: str,

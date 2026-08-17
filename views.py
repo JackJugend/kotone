@@ -91,6 +91,32 @@ def _release_action_available(item: dict | None) -> bool:
     )
 
 
+def _tracklist_available(item: dict | None) -> bool:
+    item = item or {}
+    if item.get("tracklist") or item.get("_has_tracklist"):
+        return True
+
+    album_id = str(
+        item.get("album_id")
+        or aoty.extract_album_id(item.get("url"))
+        or ""
+    )
+    if not album_id:
+        return False
+
+    cached_release = DATA.cached_release_details(album_id)
+    if cached_release and cached_release.get("tracklist"):
+        return True
+
+    # A personal Track Rating row can reconstruct the tracklist even when the
+    # public release cache is not complete yet.
+    for username in USERS[:25]:
+        cached_rating = DATA.cached_rating(username, album_id)
+        if cached_rating and cached_rating.get("track_ratings"):
+            return True
+    return False
+
+
 def _artist_name(item: dict | None) -> str:
     item = item or {}
     if item.get("_position_kind") == "favorite_artist":
@@ -607,7 +633,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         _set_button_enabled(self.main_button, True)
         _set_button_enabled(
             self.tracklist_button,
-            _release_action_available(self.item) or self.tracklist_embed is not None,
+            _tracklist_available(self.item),
         )
         _set_button_enabled(
             self.review_button,
@@ -840,7 +866,7 @@ class MultiRatingView(TimedDisableView):
         )
         _set_button_enabled(self.artist_button, _artist_action_available(item))
         _set_button_enabled(self.main_button, bool(self.main_embeds))
-        _set_button_enabled(self.tracklist_button, _release_action_available(item))
+        _set_button_enabled(self.tracklist_button, _tracklist_available(item))
         _set_button_enabled(
             self.review_button,
             _has_review_available(item, self._selected_extra),
@@ -942,11 +968,12 @@ class UserRatingSelect(discord.ui.Select):
                     label=username[:100],
                     value=username[:100],
                     description=f"{score} {flags}".strip()[:100],
+                    default=username == owner.selected_username,
                 )
             )
 
         super().__init__(
-            placeholder="Wybierz pozycję",
+            placeholder="Wybierz użytkownika",
             options=options,
             min_values=1,
             max_values=1,
@@ -955,12 +982,10 @@ class UserRatingSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         self.owner.selected_username = self.values[0]
+        for option in self.options:
+            option.default = option.value == self.owner.selected_username
         self.owner._refresh_detail_buttons()
-
-        await interaction.response.edit_message(
-            view=self.owner,
-        )
-        await _clear_artist_result(self.owner)
+        await self.owner._show_selected_review(interaction)
 
 
 class AlbumRatingView(TimedDisableView):
@@ -980,16 +1005,22 @@ class AlbumRatingView(TimedDisableView):
         self.release_item = dict(release_item)
         self.usernames = usernames
         self.rating_infos = rating_infos
-        self.selected_username = usernames[0] if usernames else ""
-
-        if usernames:
-            self.add_item(
-                UserRatingSelect(
-                    self,
-                    usernames,
-                    rating_infos,
+        self.selected_username = next(
+            (
+                username
+                for username in usernames
+                if _has_review_available(
+                    rating_infos.get(username, {}),
+                    rating_infos.get(username, {}),
                 )
-            )
+            ),
+            usernames[0] if usernames else "",
+        )
+        self.user_select = (
+            UserRatingSelect(self, usernames, rating_infos)
+            if usernames
+            else None
+        )
 
         self._refresh_detail_buttons()
         _order_action_buttons(
@@ -1012,7 +1043,6 @@ class AlbumRatingView(TimedDisableView):
         )
 
     def _refresh_detail_buttons(self):
-        info = self._selected_rating_info()
         _set_button_enabled(
             self.artist_button,
             _artist_action_available(self.release_item),
@@ -1020,16 +1050,31 @@ class AlbumRatingView(TimedDisableView):
         _set_button_enabled(self.main_button, True)
         _set_button_enabled(
             self.tracklist_button,
-            _release_action_available(self.release_item),
+            _tracklist_available(self.release_item),
         )
         _set_button_enabled(
             self.review_button,
-            bool(self.selected_username) and _has_review_available(info, info),
+            any(
+                _has_review_available(
+                    self.rating_infos.get(username, {}),
+                    self.rating_infos.get(username, {}),
+                )
+                for username in self.usernames
+            ),
         )
         _set_button_enabled(
             self.details_button,
             _release_action_available(self.release_item),
         )
+
+    def _set_user_selector_visible(self, visible: bool) -> None:
+        if self.user_select is None:
+            return
+        present = self.user_select in self.children
+        if visible and not present:
+            self.add_item(self.user_select)
+        elif not visible and present:
+            self.remove_item(self.user_select)
 
     async def _extra_for_selected(self) -> dict:
         username = self.selected_username
@@ -1093,9 +1138,58 @@ class AlbumRatingView(TimedDisableView):
 
         return extra
 
+    async def _show_selected_review(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+        if not self.selected_username:
+            await interaction.response.send_message(
+                "Brak użytkowników w configu.",
+                ephemeral=True,
+            )
+            return
+
+        cached = self._selected_rating_info()
+        if not _has_review_available(cached, cached):
+            await interaction.response.send_message(
+                "Ten użytkownik nie ma recenzji tego wydania.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+        await _clear_artist_result(self)
+        extra = await self._extra_for_selected()
+        if extra.get("rate_limited"):
+            await interaction.followup.send(
+                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
+                ephemeral=True,
+            )
+            return
+        if _review_detail_temporarily_unavailable(extra):
+            await _send_review_unavailable(interaction)
+            return
+        if not extra.get("review_text"):
+            await interaction.followup.send(
+                "Ten użytkownik nie ma recenzji tego wydania.",
+                ephemeral=True,
+            )
+            return
+
+        item = dict(self.release_item)
+        item["score"] = extra.get("score")
+        item["date"] = extra.get("date")
+        _set_active_action(self, REVIEW_BUTTON)
+        self._set_user_selector_visible(True)
+        await interaction.message.edit(
+            embed=build_review_embed(self.selected_username, item, extra),
+            view=self,
+        )
+
     @discord.ui.button(label=ARTIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def artist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         _set_active_action(self, ARTIST_BUTTON)
+        self._set_user_selector_visible(False)
         await _show_artist_command(
             interaction,
             self.release_item,
@@ -1105,12 +1199,14 @@ class AlbumRatingView(TimedDisableView):
     @discord.ui.button(label=HOME_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         _set_active_action(self, HOME_BUTTON)
+        self._set_user_selector_visible(False)
         await interaction.response.edit_message(embed=self.main_embed, view=self)
         await _clear_artist_result(self)
 
     @discord.ui.button(label=TRACKLIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def tracklist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         _set_active_action(self, TRACKLIST_BUTTON)
+        self._set_user_selector_visible(False)
         await interaction.response.defer()
         await _clear_artist_result(self)
         embed = await build_combined_tracklist_embed(self.release_item)
@@ -1118,41 +1214,12 @@ class AlbumRatingView(TimedDisableView):
 
     @discord.ui.button(label=REVIEW_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.selected_username:
-            await interaction.response.send_message("Brak użytkowników w configu.", ephemeral=True)
-            return
-
-        await interaction.response.defer()
-        await _clear_artist_result(self)
-        extra = await self._extra_for_selected()
-
-        if extra.get("rate_limited"):
-            await interaction.followup.send(
-                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
-                ephemeral=True,
-            )
-            return
-
-        if _review_detail_temporarily_unavailable(extra):
-            await _send_review_unavailable(interaction)
-            return
-
-        if not extra.get("review_text"):
-            await interaction.followup.send("Ten użytkownik nie ma recenzji tego wydania.", ephemeral=True)
-            return
-
-        item = dict(self.release_item)
-        item["score"] = extra.get("score")
-        item["date"] = extra.get("date")
-        _set_active_action(self, REVIEW_BUTTON)
-        await interaction.message.edit(
-            embed=build_review_embed(self.selected_username, item, extra),
-            view=self,
-        )
+        await self._show_selected_review(interaction)
 
     @discord.ui.button(label=DETAILS_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def details_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         _set_active_action(self, DETAILS_BUTTON)
+        self._set_user_selector_visible(False)
         await interaction.response.defer()
         await _clear_artist_result(self)
         embed = await build_release_details_embed(self.release_item)
@@ -1334,7 +1401,7 @@ class ProfilePagerView(TimedDisableView):
             (ARTIST_BUTTON, self._artist, _artist_action_available(selected_item)),
             (DETAILS_BUTTON, self._details, _release_action_available(selected_item)),
             (HOME_BUTTON, self._main, True),
-            (TRACKLIST_BUTTON, self._tracklist, _release_action_available(selected_item)),
+            (TRACKLIST_BUTTON, self._tracklist, _tracklist_available(selected_item)),
             (
                 REVIEW_BUTTON,
                 self._review,
