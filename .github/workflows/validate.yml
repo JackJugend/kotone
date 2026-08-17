@@ -6,7 +6,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
 
     steps:
@@ -25,11 +29,11 @@ jobs:
       - name: Compile Python files
         env:
           DISCORD_TOKEN: test-token
-          DATA_DIR: /tmp/kotone-ci-data
+          DATA_DIR: ${{ runner.temp }}/kotone-ci-data
         run: python -m compileall -q .
 
       - name: Run offline regression tests
         env:
           DISCORD_TOKEN: test-token
-          DATA_DIR: /tmp/kotone-ci-data
-        run: python -m unittest tests.test_core -v
+          DATA_DIR: ${{ runner.temp }}/kotone-ci-data
+        run: python -m unittest discover -s tests -p "test_*.py" -v

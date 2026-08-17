@@ -59,6 +59,45 @@ else:
 with open(CONFIG_FILE, "r", encoding="utf-8") as file:
     CONFIG = json.load(file)
 
+
+def _validate_users(raw_users) -> list[str]:
+    """Return the configured persistence allow-list or fail before DB startup.
+
+    ``users`` controls a destructive startup prune, so permissive coercion is
+    unsafe here.  In particular, iterating a JSON string would otherwise turn
+    every character into a separate username and remove the real users from
+    SQLite.
+    """
+    if not isinstance(raw_users, list) or not raw_users:
+        raise RuntimeError(
+            "config.json -> users musi być niepustą listą nazw użytkowników AOTY."
+        )
+
+    users: list[str] = []
+    seen: set[str] = set()
+
+    for position, raw_user in enumerate(raw_users, start=1):
+        if not isinstance(raw_user, str) or not raw_user.strip():
+            raise RuntimeError(
+                "config.json -> users zawiera pustą lub niepoprawną nazwę "
+                f"na pozycji {position}."
+            )
+
+        username = raw_user.strip()
+        folded = username.casefold()
+        if folded in seen:
+            raise RuntimeError(
+                "config.json -> users zawiera zduplikowaną nazwę "
+                f"{username!r} (wielkość liter nie ma znaczenia)."
+            )
+
+        seen.add(folded)
+        users.append(username)
+
+    return users
+
+
+USERS = _validate_users(CONFIG.get("users"))
 TOKEN = os.getenv("DISCORD_TOKEN") or CONFIG.get("discord_token", "")
 
 if not TOKEN:
@@ -69,7 +108,6 @@ if not TOKEN:
 APPLICATION_ID = int(CONFIG["application_id"])
 GUILD_ID = int(CONFIG["guild_id"])
 CHANNEL_ID = int(CONFIG["channel_id"])
-USERS = [str(user).strip() for user in CONFIG.get("users", []) if str(user).strip()]
 
 USER_CHANNELS = {
     str(username).casefold(): int(channel_id)

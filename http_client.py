@@ -369,6 +369,17 @@ class ResilientHTTPClient:
         for attempt in range(AOTY_MAX_RETRIES + 1):
             try:
                 with self._gate.slot(request_priority_value):
+                    # The circuit may have opened while this request was
+                    # waiting behind another worker.  Re-check it after the
+                    # priority gate as well, otherwise every already-queued
+                    # request would still hit AOTY during the outage.
+                    if self._circuit_open():
+                        if stale_result is not None:
+                            return stale_result
+                        raise ExternalUnavailable(
+                            "Obwód ochronny HTTP jest chwilowo otwarty po serii błędów."
+                        )
+
                     # Another worker may have fetched the same URL while this
                     # request waited in the priority queue. Re-checking here
                     # gives us single-flight-like behavior without a second
@@ -419,8 +430,10 @@ class ResilientHTTPClient:
 
                     response.raise_for_status()
 
-                # 404/403/etc. should reach the parser exactly as a normal
-                # requests exception; retrying them usually makes no sense.
+                # Stable 4xx responses (especially the expected 404s used
+                # while probing canonical user-release URLs) are not an AOTY
+                # outage.  They must reach the caller immediately, without
+                # retries and without contributing to the circuit breaker.
                 response.raise_for_status()
 
                 result = PageResult(
@@ -437,6 +450,11 @@ class ResilientHTTPClient:
                 return result
 
             except ExternalRateLimit:
+                raise
+            except requests.HTTPError:
+                # 429 has its dedicated branch above and 5xx retries were
+                # already handled before raise_for_status().  What remains is
+                # a stable HTTP response, not a transport failure.
                 raise
             except requests.RequestException as exc:
                 last_exception = exc

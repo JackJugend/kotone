@@ -15,6 +15,12 @@ Thumbs.db
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
+*.sqlite3.tmp
+*.tmp.sqlite3
+*.corrupt-*
+*.empty-*
+*.recovery-required
+*.recovery-required.tmp
 *.db
 *.db-shm
 *.db-wal
@@ -22,3 +28,11 @@ data_migrated.json.bak
 
 railway ssh
 railway ssh.pub
+
+# Local credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12

@@ -229,6 +229,46 @@ def _has_track_ratings_available(
     )
 
 
+def _review_detail_temporarily_unavailable(extra: dict | None) -> bool:
+    """A card confirms a review, but its body could not be fetched safely."""
+
+    extra = extra or {}
+    return bool(
+        extra.get("detail_incomplete")
+        and extra.get("has_review")
+        and not extra.get("review_text")
+    )
+
+
+def _track_detail_temporarily_unavailable(extra: dict | None) -> bool:
+    """A card confirms Track Ratings, but detailed rows are unavailable."""
+
+    extra = extra or {}
+    return bool(
+        extra.get("detail_incomplete")
+        and extra.get("has_track_ratings")
+        and not extra.get("track_ratings")
+    )
+
+
+async def _send_review_unavailable(interaction: discord.Interaction) -> None:
+    await interaction.followup.send(
+        "⚠️ AOTY potwierdza recenzję dla tej oceny, "
+        "ale jej treść nie została teraz pobrana. "
+        "Spróbuj ponownie za chwilę.",
+        ephemeral=True,
+    )
+
+
+async def _send_tracks_unavailable(interaction: discord.Interaction) -> None:
+    await interaction.followup.send(
+        "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
+        "ale szczegóły nie zostały teraz pobrane. "
+        "Spróbuj ponownie za chwilę.",
+        ephemeral=True,
+    )
+
+
 def _set_button_visible(
     view: discord.ui.View,
     button: discord.ui.Item,
@@ -443,6 +483,10 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
             )
             return
 
+        if _review_detail_temporarily_unavailable(extra):
+            await _send_review_unavailable(interaction)
+            return
+
         if not extra.get(
             "review_text"
         ):
@@ -485,23 +529,8 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
             )
             return
 
-        if (
-            extra.get(
-                "detail_incomplete"
-            )
-            and extra.get(
-                "has_track_ratings"
-            )
-            and not extra.get(
-                "track_ratings"
-            )
-        ):
-            await interaction.followup.send(
-                "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
-                "ale szczegóły nie zostały teraz pobrane. "
-                "Spróbuj ponownie za chwilę.",
-                ephemeral=True,
-            )
+        if _track_detail_temporarily_unavailable(extra):
+            await _send_tracks_unavailable(interaction)
             return
 
         if not extra.get(
@@ -646,6 +675,10 @@ class MultiRatingView(TimedDisableView):
             )
             return
 
+        if _review_detail_temporarily_unavailable(extra):
+            await _send_review_unavailable(interaction)
+            return
+
         if not extra.get("review_text"):
             await interaction.followup.send("Wybrana ocena nie ma recenzji.", ephemeral=True)
             return
@@ -668,17 +701,8 @@ class MultiRatingView(TimedDisableView):
             )
             return
 
-        if (
-            extra.get("detail_incomplete")
-            and extra.get("has_track_ratings")
-            and not extra.get("track_ratings")
-        ):
-            await interaction.followup.send(
-                "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
-                "ale szczegóły nie zostały teraz pobrane. "
-                "Spróbuj ponownie za chwilę.",
-                ephemeral=True,
-            )
+        if _track_detail_temporarily_unavailable(extra):
+            await _send_tracks_unavailable(interaction)
             return
 
         if not extra.get("has_track_ratings"):
@@ -790,9 +814,13 @@ class AlbumRatingView(TimedDisableView):
         username = self.selected_username
         cached = self.rating_infos.get(username, {})
 
+        # /album initially asks for a compact rating card. A DB card can have
+        # review_text/detail_complete but deliberately does not join the
+        # user_track_ratings rows. Only a payload that explicitly contains the
+        # track list is complete enough to serve both detail buttons.
         if (
-            cached.get("review_text") is not None
-            or cached.get("track_ratings")
+            "track_ratings" in cached
+            and not cached.get("detail_incomplete")
         ):
             return cached
 
@@ -817,6 +845,18 @@ class AlbumRatingView(TimedDisableView):
             selected_item["date"] = cached.get(
                 "date"
             )
+
+        # Preserve card-level evidence in the error fallback. Without these
+        # flags a failed detail refresh would turn a known review/Track Ratings
+        # into the misleading normal "brak" response.
+        for key in (
+            "has_review",
+            "has_track_ratings",
+            "liked",
+            "review_text",
+        ):
+            if key in cached:
+                selected_item[key] = cached.get(key)
 
         extra = await _load_live_extra(
             username,
@@ -852,6 +892,10 @@ class AlbumRatingView(TimedDisableView):
             )
             return
 
+        if _review_detail_temporarily_unavailable(extra):
+            await _send_review_unavailable(interaction)
+            return
+
         if not extra.get("review_text"):
             await interaction.followup.send("Ten użytkownik nie ma recenzji tego wydania.", ephemeral=True)
             return
@@ -880,17 +924,8 @@ class AlbumRatingView(TimedDisableView):
             )
             return
 
-        if (
-            extra.get("detail_incomplete")
-            and extra.get("has_track_ratings")
-            and not extra.get("track_ratings")
-        ):
-            await interaction.followup.send(
-                "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
-                "ale szczegóły nie zostały teraz pobrane. "
-                "Spróbuj ponownie za chwilę.",
-                ephemeral=True,
-            )
+        if _track_detail_temporarily_unavailable(extra):
+            await _send_tracks_unavailable(interaction)
             return
 
         if not extra.get("has_track_ratings"):
@@ -1091,6 +1126,10 @@ class ProfilePagerView(TimedDisableView):
             )
             return
 
+        if _review_detail_temporarily_unavailable(extra):
+            await _send_review_unavailable(interaction)
+            return
+
         if not extra.get("review_text"):
             await interaction.followup.send("Wybrana ocena nie ma recenzji.", ephemeral=True)
             return
@@ -1114,6 +1153,10 @@ class ProfilePagerView(TimedDisableView):
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
                 ephemeral=True,
             )
+            return
+
+        if _track_detail_temporarily_unavailable(extra):
+            await _send_tracks_unavailable(interaction)
             return
 
         if not extra.get("has_track_ratings"):

@@ -12,7 +12,7 @@ import time
 import unicodedata
 from html import unescape
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import quote_plus, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -50,8 +50,137 @@ class AOTYUserNotFound(Exception):
     pass
 
 
-class AOTYArchiveIncomplete(Exception):
+class AOTYPageIncomplete(Exception):
+    """A 200 response was not trustworthy enough to mutate durable state."""
+
+
+class AOTYStalePage(AOTYPageIncomplete):
+    """Only a stale transport-cache response was available."""
+
+
+class AOTYArchiveIncomplete(AOTYPageIncomplete):
     """Safety stop: paginacja nie zakończyła się w rozsądnym limicie stron."""
+
+
+class AOTYPage(str):
+    """String-compatible HTML carrying transport provenance.
+
+    BeautifulSoup and the older parser helpers can continue treating this as a
+    normal string, while destructive/archive paths can distinguish a live page
+    from a stale cache fallback.  Keeping the metadata on the value avoids a
+    second global/thread-local side channel.
+    """
+
+    def __new__(
+        cls,
+        text: str,
+        *,
+        url: str,
+        status_code: int,
+        stale: bool = False,
+        from_cache: bool = False,
+    ):
+        value = super().__new__(cls, text)
+        value.url = str(url)
+        value.status_code = int(status_code)
+        value.stale = bool(stale)
+        value.from_cache = bool(from_cache)
+        return value
+
+
+class RatingsResult(list):
+    """List-compatible rating batch with aggregate transport provenance."""
+
+    def __init__(self, values=(), *, stale: bool = False):
+        super().__init__(values)
+        self.stale = bool(stale)
+
+    def __getitem__(self, key):
+        result = super().__getitem__(key)
+        if isinstance(key, slice):
+            return type(self)(result, stale=self.stale)
+        return result
+
+
+def _page_integrity_issue(page: str, soup: BeautifulSoup) -> str | None:
+    """Return a conservative reason why a transport page is not authoritative.
+
+    Plain strings are intentionally accepted for backwards-compatible parser
+    fixtures.  Production pages created by :func:`fetch_page` carry enough
+    provenance for these checks.
+    """
+
+    if not isinstance(page, AOTYPage):
+        return None
+
+    normalized = " ".join(soup.get_text(" ", strip=True).split()).casefold()
+    title = (
+        " ".join(soup.title.get_text(" ", strip=True).split()).casefold()
+        if soup.title
+        else ""
+    )
+    raw_lower = str(page).casefold()
+
+    interstitial_markers = (
+        "cf-chl-",
+        "challenge-platform",
+        "verify you are human",
+        "checking your browser before accessing",
+        "attention required! | cloudflare",
+    )
+    if any(
+        marker in raw_lower or marker in normalized
+        for marker in interstitial_markers
+    ):
+        return "interstitial/challenge page"
+
+    if title in {
+        "just a moment...",
+        "access denied",
+        "service unavailable",
+        "gateway timeout",
+    }:
+        return f"unexpected page title: {title}"
+
+    # Normal AOTY pages include the full site shell.  A tiny 200 response is
+    # much more likely to be a truncated proxy/upstream body than a valid page.
+    if len(str(page).strip()) < 256:
+        return "response body is unexpectedly short"
+
+    if soup.find("html") is None and soup.find("body") is None:
+        return "response is missing an HTML document shell"
+
+    return None
+
+
+def _ratings_page_identity_issue(
+    page: str,
+    soup: BeautifulSoup,
+    username: str,
+    expected_url: str,
+) -> str | None:
+    """Verify that a production response is really the requested ratings area."""
+
+    if not isinstance(page, AOTYPage):
+        return None
+
+    path = urlparse(page.url).path.rstrip("/").casefold()
+    expected_path = urlparse(expected_url).path.rstrip("/").casefold()
+    if path != expected_path:
+        return (
+            f"unexpected final route: {path or '/'} "
+            f"(expected {expected_path or '/'})"
+        )
+
+    title = (
+        " ".join(soup.title.get_text(" ", strip=True).split()).casefold()
+        if soup.title
+        else ""
+    )
+    if "album of the year" not in title:
+        return "ratings page is missing the AOTY document identity"
+
+    return None
 
 
 
@@ -76,7 +205,13 @@ def fetch_page(url: str, expected_url: str | None = None) -> str:
         if final_url != expected:
             raise AOTYUserNotFound()
 
-    return result.text
+    return AOTYPage(
+        result.text,
+        url=result.url,
+        status_code=result.status_code,
+        stale=result.stale,
+        from_cache=result.from_cache,
+    )
 
 
 def aoty_user_exists(username: str) -> bool:
@@ -2076,7 +2211,16 @@ def _extract_album_artist_info(
 
 
 def get_album_details(album_url: str) -> dict:
-    soup = BeautifulSoup(fetch_page(album_url), "html.parser")
+    page_html = fetch_page(album_url)
+    soup = BeautifulSoup(page_html, "html.parser")
+    issue = _page_integrity_issue(page_html, soup)
+    if issue:
+        raise AOTYPageIncomplete(f"Niepełna strona albumu: {issue}.")
+    if getattr(page_html, "stale", False):
+        raise AOTYStalePage(
+            "Szczegóły albumu pochodzą wyłącznie ze stale cache."
+        )
+
     page_text = " ".join(soup.get_text(" ", strip=True).split())
 
     album_heading = soup.find("h1")
@@ -2090,6 +2234,11 @@ def get_album_details(album_url: str) -> dict:
         if album_heading
         else None
     )
+
+    if not album_title:
+        raise AOTYPageIncomplete(
+            "Strona albumu nie zawiera nagłówka wydania."
+        )
 
     artist_name, artist_url = _extract_album_artist_info(
         soup
@@ -2212,6 +2361,11 @@ def get_album_details(album_url: str) -> dict:
         year_ranking = ranking_match.group(2)
         year_ranking_text = f"#{year_ranking}"
 
+    tracklist_heading_present = any(
+        " ".join(candidate.get_text(" ", strip=True).split()).casefold()
+        == "track list"
+        for candidate in soup.find_all(["h2", "h3"])
+    )
     tracklist = _extract_tracklist(soup)
     tracklist_lines = []
     previous_disc = None
@@ -2228,6 +2382,45 @@ def get_album_details(album_url: str) -> dict:
         if track.get("user_score"):
             line += f" — {track['user_score']}"
         tracklist_lines.append(line)
+
+    # A heading alone is not enough to make a sparse/truncated 200 response an
+    # authoritative replacement for the persistent release cache. Real AOTY
+    # release pages expose an artist plus at least one release-specific data
+    # section even when optional metadata or a tracklist is absent.
+    if not artist_name or not any(
+        (
+            release_date,
+            album_format,
+            user_score,
+            ratings_count,
+            labels,
+            genres,
+            vibes,
+            ranking_match,
+            tracklist,
+        )
+    ):
+        raise AOTYPageIncomplete(
+            "Strona albumu nie zawiera kompletnej struktury szczegółów."
+        )
+
+    # Each section has its own authority bit. A valid 200 response may still
+    # be a partially rendered release page, so persistence must not interpret
+    # a missing section as an authoritative empty value. For list sections we
+    # require both the section marker and parsed content; this deliberately
+    # favors retaining known-good cache data over clearing it after a layout
+    # change. A hand-built details dictionary without these flags keeps the
+    # historical all-authoritative behaviour in Database.save_release_details.
+    section_complete = {
+        "score": bool(user_score is not None or ratings_count is not None),
+        "release_date": bool(release_row is not None and release_date),
+        "format": bool(format_row is not None and album_format),
+        "labels": bool(label_row is not None and labels),
+        "genres": bool(genre_row is not None and (genres or secondary_genres)),
+        "vibes": bool(vibe_row is not None and vibes),
+        "ranking": bool(ranking_match),
+        "tracklist": bool(tracklist_heading_present and tracklist),
+    }
 
     return {
         "url": album_url,
@@ -2253,6 +2446,7 @@ def get_album_details(album_url: str) -> dict:
         "year_ranking_text": year_ranking_text,
         "tracklist": tracklist,
         "tracklist_text": "\n".join(tracklist_lines) if tracklist_lines else None,
+        "_section_complete": section_complete,
     }
 
 
@@ -2839,6 +3033,7 @@ def _get_ratings_from_route(
     all_ratings = []
     seen = set()
     page = 1
+    saw_stale = False
 
     while unlimited or len(all_ratings) < int(limit):
         if page > max_pages:
@@ -2848,10 +3043,73 @@ def _get_ratings_from_route(
             )
 
         url = _ratings_route_url(username, slug=slug, page=page)
-        soup = BeautifulSoup(fetch_page(url), "html.parser")
+        page_html = fetch_page(url)
+        soup = BeautifulSoup(page_html, "html.parser")
+        issue = _page_integrity_issue(page_html, soup)
+        identity_issue = _ratings_page_identity_issue(
+            page_html,
+            soup,
+            username,
+            url,
+        )
+        if issue is None:
+            issue = identity_issue
+
+        if issue:
+            error_type = (
+                AOTYArchiveIncomplete
+                if unlimited
+                else AOTYPageIncomplete
+            )
+            raise error_type(
+                f"Niepełna strona ratings {username}/{slug or 'all'}/{page}: {issue}."
+            )
+
+        page_is_stale = bool(getattr(page_html, "stale", False))
+        saw_stale = saw_stale or page_is_stale
+
+        # A stale list is useful for an interactive fallback, but it must never
+        # be accepted as a new comprehensive archive snapshot.
+        if unlimited and page_is_stale:
+            raise AOTYArchiveIncomplete(
+                f"Archiwum {username}/{slug or 'all'} otrzymało stale cache "
+                f"na stronie {page}; format pozostaje due."
+            )
+
         page_ratings = _parse_ratings_soup(soup, forced_format=forced_format)
 
+        if unlimited and page_ratings:
+            parsed_ids = {
+                str(item.get("album_id") or "")
+                for item in page_ratings
+                if item.get("album_id")
+            }
+            container_ids = {
+                album_id
+                for block in soup.select(".albumBlock")
+                for link in block.select('a[href*="/album/"]')
+                if (album_id := extract_album_id(link.get("href", "")))
+            }
+            if container_ids - parsed_ids:
+                raise AOTYArchiveIncomplete(
+                    f"Parser ratings odczytał tylko część kontenerów "
+                    f"{username}/{slug or 'all'}/{page}; snapshot pozostaje due."
+                )
+
         if not page_ratings:
+            # If album links are visibly present but none could be parsed as a
+            # rating, this is a layout/parser failure rather than an empty end
+            # page.  Do not turn a partial archive into authoritative removals.
+            if soup.select(".albumBlock"):
+                error_type = (
+                    AOTYArchiveIncomplete
+                    if unlimited
+                    else AOTYPageIncomplete
+                )
+                raise error_type(
+                    f"Parser ratings nie odczytał żadnej oceny ze strony "
+                    f"{username}/{slug or 'all'}/{page}, mimo obecnych linków albumów."
+                )
             break
 
         new_on_page = 0
@@ -2869,14 +3127,19 @@ def _get_ratings_from_route(
 
         # Repeated page/canonical redirect: stop instead of looping forever.
         if new_on_page == 0:
+            if unlimited:
+                raise AOTYArchiveIncomplete(
+                    f"Powtórzona strona paginacji {username}/{slug or 'all'}/{page}; "
+                    "częściowy snapshot nie zostanie oznaczony jako pełny."
+                )
             break
 
         page += 1
 
     if unlimited:
-        return all_ratings
+        return RatingsResult(all_ratings, stale=saw_stale)
 
-    return all_ratings[: int(limit)]
+    return RatingsResult(all_ratings[: int(limit)], stale=saw_stale)
 
 
 def get_ratings_for_format(username: str, format_key: str, limit: int | None = None) -> list[dict]:
@@ -2965,7 +3228,13 @@ def _merge_rating_lists(*rating_lists: list[dict]) -> list[dict]:
     for item in items:
         item.pop("_merge_sequence", None)
 
-    return items
+    return RatingsResult(
+        items,
+        stale=any(
+            bool(getattr(ratings, "stale", False))
+            for ratings in rating_lists
+        ),
+    )
 
 
 def get_ratings(username: str, max_pages=None, fetch_limits: dict | None = None) -> list[dict]:
@@ -3142,6 +3411,7 @@ def _fetch_user_release_page(
             )
 
     last_url = None
+    last_incomplete = None
 
     for candidate in candidates:
         last_url = candidate
@@ -3160,8 +3430,15 @@ def _fetch_user_release_page(
         except ExternalUnavailable as exc:
             raise requests.ConnectionError(str(exc)) from exc
 
-        soup = BeautifulSoup(
+        page_html = AOTYPage(
             result.text,
+            url=result.url,
+            status_code=result.status_code,
+            stale=result.stale,
+            from_cache=result.from_cache,
+        )
+        soup = BeautifulSoup(
+            page_html,
             "html.parser",
         )
 
@@ -3231,14 +3508,41 @@ def _fetch_user_release_page(
         ):
             continue
 
-        return (
+        issue = _page_integrity_issue(page_html, soup)
+        score_evidence = _extract_user_score_from_user_release_page(
+            soup,
+            username,
+        )
+        complete = bool(
+            issue is None
+            and not result.stale
+            and title_looks_right
+            and score_evidence is not None
+        )
+
+        if complete:
+            return (
+                soup,
+                final_url,
+                True,
+            )
+
+        # Keep the best partial page for display/fallback purposes, but make
+        # the lack of authority explicit so SQLite cannot interpret missing
+        # review/like/track fields as removals.
+        last_incomplete = (
             soup,
             final_url,
+            False,
         )
+
+    if last_incomplete is not None:
+        return last_incomplete
 
     return (
         None,
         last_url,
+        False,
     )
 
 
@@ -4157,6 +4461,7 @@ def get_user_rating_for_album(
     def parse_user_page(
         soup: BeautifulSoup,
         resolved_user_url: str | None,
+        detail_complete: bool,
     ) -> dict:
         score = _extract_user_score_from_user_release_page(
             soup,
@@ -4182,7 +4487,7 @@ def get_user_rating_for_album(
             "score": str(score) if score is not None else None,
             "date": extract_date(soup),
             "source": "AOTY live",
-            "detail_incomplete": False,
+            "detail_incomplete": not detail_complete,
             "review_url": resolved_user_url,
             "review_text": review_text,
             "has_review": bool(review_text),
@@ -4200,7 +4505,7 @@ def get_user_rating_for_album(
     # 1. Direct user-release page.
     # ------------------------------------------------------------------
     try:
-        soup, resolved_user_url = _fetch_user_release_page(
+        soup, resolved_user_url, detail_complete = _fetch_user_release_page(
             username,
             album_id,
             album_url,
@@ -4212,6 +4517,7 @@ def get_user_rating_for_album(
             return parse_user_page(
                 soup,
                 resolved_user_url,
+                detail_complete,
             )
 
     except AOTYRateLimit:
@@ -4256,7 +4562,11 @@ def get_user_rating_for_album(
 
         if exact_user_url:
             try:
-                soup, resolved_user_url = _fetch_user_release_page(
+                (
+                    soup,
+                    resolved_user_url,
+                    detail_complete,
+                ) = _fetch_user_release_page(
                     username,
                     album_id,
                     album_url,
@@ -4271,6 +4581,7 @@ def get_user_rating_for_album(
                     result = parse_user_page(
                         soup,
                         resolved_user_url,
+                        detail_complete,
                     )
 
                     # Preserve the list score/date if the detail page parser
@@ -4447,6 +4758,46 @@ def _extract_profile_favorites(soup: BeautifulSoup, limit: int = 5) -> tuple[str
     return favorite_kind, favorites
 
 
+def _profile_favorites_are_authoritatively_empty(soup: BeautifulSoup) -> bool:
+    """Recognize an explicit empty Favorites section without guessing.
+
+    If the section vanished entirely, a truncated profile and a genuine
+    removal are indistinguishable. In that ambiguous case callers preserve the
+    previous baseline. Explicit empty-state copy is safe to persist as a real
+    removal.
+    """
+
+    marker = _find_exact_text_marker(soup, "favorites")
+    if marker is None:
+        return False
+
+    empty_markers = (
+        "no favorites",
+        "no favourites",
+        "has no favorites",
+        "hasn't added any favorites",
+        "has not added any favorites",
+        "nothing here yet",
+    )
+    checked = 0
+    for element in marker.parent.next_elements:
+        if getattr(element, "name", None) in {"h2", "h3"}:
+            heading = " ".join(element.get_text(" ", strip=True).split()).casefold()
+            if heading.startswith("best of ") or heading == "recently rated":
+                break
+
+        if isinstance(element, str):
+            text = " ".join(str(element).split()).casefold()
+            if any(empty in text for empty in empty_markers):
+                return True
+
+        checked += 1
+        if checked >= 250:
+            break
+
+    return False
+
+
 def _extract_profile_distribution(soup: BeautifulSoup) -> dict[str, int]:
     """Return the complete Rating Distribution shown on a user profile."""
     marker = _find_exact_text_marker(soup, "rating distribution")
@@ -4554,7 +4905,15 @@ def get_profile_summary(username: str) -> dict:
     """Fetch only the profile page, without fetching ratings routes again."""
     username = str(username).strip()
     url = f"{BASE_URL}/user/{username}/"
-    soup = BeautifulSoup(fetch_page(url), "html.parser")
+    page_html = fetch_page(url)
+    soup = BeautifulSoup(page_html, "html.parser")
+    issue = _page_integrity_issue(page_html, soup)
+    if issue:
+        raise AOTYPageIncomplete(f"Niepełna strona profilu {username}: {issue}.")
+    if getattr(page_html, "stale", False):
+        raise AOTYStalePage(
+            f"Profil {username} pochodzi wyłącznie ze stale cache."
+        )
 
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
     if " - profile - album of the year" not in title.casefold():
@@ -4566,6 +4925,10 @@ def get_profile_summary(username: str) -> dict:
     distribution = _extract_profile_distribution(soup)
     average_rating = _profile_average_from_distribution(distribution)
     favorite_kind, favorites = _extract_profile_favorites(soup, limit=50)
+    favorites_complete = (
+        favorite_kind in {"albums", "artists"}
+        or _profile_favorites_are_authoritatively_empty(soup)
+    )
 
     favorite_albums = favorites if favorite_kind == "albums" else []
     favorite_artists = favorites if favorite_kind == "artists" else []
@@ -4586,6 +4949,9 @@ def get_profile_summary(username: str) -> dict:
         "favorites": favorites,
         "favorite_albums": favorite_albums,
         "favorite_artists": favorite_artists,
+        # Persistence may preserve the previous list if AOTY rendered only a
+        # partial profile without the Favorites section.
+        "favorites_complete": favorites_complete,
     }
 
 
@@ -4599,4 +4965,3 @@ def get_profile_data(username: str, recent_limit: int = 50) -> dict:
     profile = get_profile_summary(username)
     profile["recent_ratings"] = get_recent_ratings(username, recent_limit)
     return profile
-

@@ -22,6 +22,7 @@ from settings import (
     ARCHIVE_WORKER_START_DELAY,
     DETAIL_ENRICH_PER_CYCLE,
     ENRICH_WORKER_REST_SECONDS,
+    PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
     RELEASE_ENRICH_PER_CYCLE,
     USERS,
 )
@@ -33,7 +34,10 @@ class BackgroundWorker:
     def __init__(self, client: discord.Client):
         self.client = client
         self._stop_event = asyncio.Event()
+        # Archive and enrichment are independent queues. Advancing one must
+        # not accidentally skip a user in the other phase.
         self._cursor = 0
+        self._enrich_cursor = 0
         self.last_run_at: float | None = None
         self.last_success_at: float | None = None
         self.last_error: str | None = None
@@ -51,15 +55,27 @@ class BackgroundWorker:
         except asyncio.TimeoutError:
             pass
 
-    def _ordered_users(self) -> list[str]:
-        """Round-robin users so a huge profile cannot starve the next one."""
+    @staticmethod
+    def _ordered_users_from(cursor: int) -> list[str]:
+        """Return a round-robin view without advancing it speculatively."""
+
         if not USERS:
             return []
 
-        start = self._cursor % len(USERS)
-        ordered = USERS[start:] + USERS[:start]
-        self._cursor = (start + 1) % len(USERS)
-        return ordered
+        start = int(cursor) % len(USERS)
+        return USERS[start:] + USERS[:start]
+
+    @staticmethod
+    def _cursor_after(username: str) -> int:
+        """Return the slot after the user that consumed a real work unit."""
+
+        if not USERS:
+            return 0
+        try:
+            position = USERS.index(username)
+        except ValueError:
+            return 0
+        return (position + 1) % len(USERS)
 
     async def _enrich_one_user(self, username: str) -> dict:
         return await DATA.enrich_user(
@@ -73,18 +89,28 @@ class BackgroundWorker:
         """Do one bounded unit of maintenance and return the next sleep time."""
         self.last_run_at = time.time()
 
-        # Phase 1: ratings first. Exactly one format globally per pass keeps
-        # pressure predictable, while the short rest means first bootstrap no
-        # longer waits 20 minutes for every next format.
-        for username in self._ordered_users():
-            result = await DATA.archive_profile_ratings(
-                username,
-                formats_per_cycle=1,
-                priority=PRIORITY_MAINTENANCE,
-            )
+        # Phase 1: ratings first. Exactly one configured user's bounded format
+        # batch per pass keeps pressure predictable, while the short rest means
+        # first bootstrap no longer waits 20 minutes for every next format.
+        for username in self._ordered_users_from(self._cursor):
+            try:
+                result = await DATA.archive_profile_ratings(
+                    username,
+                    formats_per_cycle=(
+                        PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE
+                    ),
+                    priority=PRIORITY_MAINTENANCE,
+                )
+            except Exception:
+                # A broken user/route must not monopolize the first position
+                # forever. CancelledError remains untouched on modern Python.
+                self._cursor = self._cursor_after(username)
+                raise
 
             if not result.get("formats_attempted", 0):
                 continue
+
+            self._cursor = self._cursor_after(username)
 
             if result.get("errors"):
                 self.last_error = str(
@@ -99,14 +125,20 @@ class BackgroundWorker:
         # Phase 2: every format is complete/not due. Fill public album data,
         # reviews and Track Ratings a few rows at a time. This may take longer
         # than the initial rating bootstrap, but never blocks the monitor.
-        for username in self._ordered_users():
-            result = await self._enrich_one_user(username)
+        for username in self._ordered_users_from(self._enrich_cursor):
+            try:
+                result = await self._enrich_one_user(username)
+            except Exception:
+                self._enrich_cursor = self._cursor_after(username)
+                raise
 
             if result.get("errors"):
+                self._enrich_cursor = self._cursor_after(username)
                 self.last_error = "enrichment error"
                 return ARCHIVE_WORKER_ERROR_SLEEP
 
             if result.get("releases") or result.get("details"):
+                self._enrich_cursor = self._cursor_after(username)
                 self.last_success_at = time.time()
                 self.last_error = None
                 return ENRICH_WORKER_REST_SECONDS

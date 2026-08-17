@@ -1,12 +1,13 @@
 """Tiny HTTP health server for Railway.
 
-The endpoint deliberately checks only Kotone itself (Discord readiness +
-SQLite).  It never calls AOTY, so a third-party outage cannot make Railway
-reject an otherwise healthy bot deployment.
+The endpoint deliberately checks only Kotone itself (Discord readiness,
+SQLite and both long-running workers). It never calls AOTY, so a third-party
+outage cannot make Railway reject an otherwise healthy bot deployment.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from aiohttp import web
@@ -17,24 +18,63 @@ from settings import PORT
 
 
 class HealthServer:
-    def __init__(self, client, monitor):
+    def __init__(self, client, monitor, background=None):
         self.client = client
         self.monitor = monitor
+        self.background = background
+        self.monitor_task = None
+        self.background_task = None
         self.runner: web.AppRunner | None = None
         self.started_at = time.time()
+
+    def bind_worker_tasks(self, *, monitor_task, background_task) -> None:
+        """Expose the exact long-running tasks used by bot.py to readiness."""
+
+        self.monitor_task = monitor_task
+        self.background_task = background_task
+
+    @staticmethod
+    def _task_state(task) -> str:
+        if task is None:
+            return "not_started"
+        if task.cancelled():
+            return "cancelled"
+        if not task.done():
+            return "running"
+
+        try:
+            error = task.exception()
+        except (asyncio.CancelledError, RuntimeError):
+            return "cancelled"
+        return "failed" if error is not None else "stopped"
 
     async def _health(self, request: web.Request) -> web.Response:
         database_ok = DB.health()
         discord_ready = self.client.is_ready() and not self.client.is_closed()
-        ok = database_ok and discord_ready
+        monitor_state = self._task_state(self.monitor_task)
+        background_state = self._task_state(self.background_task)
+        monitor_ok = monitor_state == "running"
+        background_ok = background_state == "running"
+        ok = database_ok and discord_ready and monitor_ok and background_ok
 
         return web.json_response(
             {
                 "ok": ok,
                 "discord_ready": discord_ready,
                 "database_ok": database_ok,
+                "monitor_ok": monitor_ok,
+                "background_ok": background_ok,
+                "workers": {
+                    "monitor": monitor_state,
+                    "background": background_state,
+                },
                 "uptime_seconds": int(time.time() - self.started_at),
                 "monitor_last_success": self.monitor.last_success_at,
+                "background_last_success": (
+                    self.background.last_success_at
+                    if self.background is not None
+                    else None
+                ),
                 "aoty_transport": HTTP.status(),
             },
             status=200 if ok else 503,

@@ -71,6 +71,111 @@ class DataService:
             return float("inf")
         return max(0.0, time.time() - float(timestamp))
 
+    @staticmethod
+    def _enabled_format_labels() -> set[str]:
+        return {
+            str(RATING_FORMATS[key]["label"]).casefold()
+            for key, value in RATING_FETCH_LIMITS.items()
+            if int(value or 0) > 0 and key in RATING_FORMATS
+        }
+
+    @classmethod
+    def _notification_enabled_for_item(
+        cls,
+        item: dict,
+        *,
+        requested_format_key: str | None = None,
+    ) -> bool:
+        if requested_format_key and requested_format_key != "all":
+            if requested_format_key in RATING_FORMATS:
+                return int(RATING_FETCH_LIMITS.get(requested_format_key, 0) or 0) > 0
+
+        release_format = item.get("release_format") or item.get("album_format")
+        if not release_format:
+            # Missing format metadata is ambiguous.  Treat it as monitored so
+            # an interactive cache refresh can never consume a notification.
+            return True
+        return str(release_format).casefold() in cls._enabled_format_labels()
+
+    @staticmethod
+    def _monitor_has_baseline(username: str) -> bool:
+        return bool(DB.sync_timestamps(username).get("ratings_synced_at"))
+
+    def _persist_non_notification_ratings(
+        self,
+        username: str,
+        ratings: list[dict],
+        *,
+        source: str,
+    ) -> None:
+        """Persist disabled-format ratings and retain post-baseline history."""
+
+        record_changes = self._monitor_has_baseline(username)
+        for item in ratings:
+            DB.upsert_rating(
+                username,
+                item,
+                record_history=record_changes,
+                record_changes=record_changes,
+                source=source,
+            )
+
+    def _persist_interactive_ratings_safely(
+        self,
+        username: str,
+        ratings: list[dict],
+        *,
+        requested_format_key: str | None,
+    ) -> None:
+        """Cache interactive results without stealing monitor-owned scores.
+
+        Existing rows in notification-enabled formats are deliberately left
+        untouched.  New rows may be seeded for offline use, but after the
+        monitor baseline they are marked pending so Discord delivery remains
+        at-least-once.  Disabled formats have no Discord event to protect and
+        therefore update normally with post-baseline change history.
+        """
+
+        existing = DB.get_ratings_map(username, include_inactive=True)
+        has_baseline = self._monitor_has_baseline(username)
+
+        for item in ratings:
+            album_id = str(item.get("album_id") or "").strip()
+            if not album_id:
+                continue
+
+            if not self._notification_enabled_for_item(
+                item,
+                requested_format_key=requested_format_key,
+            ):
+                DB.upsert_rating(
+                    username,
+                    item,
+                    record_history=has_baseline,
+                    record_changes=has_baseline,
+                    source="interactive_recent_disabled",
+                )
+                continue
+
+            previous = existing.get(album_id)
+            if previous is None:
+                DB.upsert_rating(
+                    username,
+                    item,
+                    record_history=False,
+                    record_changes=False,
+                    source="interactive_recent_seed",
+                )
+                if has_baseline:
+                    DB.set_notify_pending(username, album_id, True)
+                continue
+
+            # An inactive row represents a removal/restoration boundary.  Keep
+            # its old score/active state for the monitor, but make sure a later
+            # monitor pass treats the live rediscovery as pending.
+            if has_baseline and not previous.get("active", True):
+                DB.set_notify_pending(username, album_id, True)
+
     # ------------------------------------------------------------------
     # User existence / profile
     # ------------------------------------------------------------------
@@ -104,6 +209,22 @@ class DataService:
                 aoty.get_profile_summary,
                 username,
             )
+
+            # A valid but partially rendered profile may omit the whole
+            # Favorites section. Preserve the last authoritative list instead
+            # of recording a false mass removal.
+            if not profile.pop("favorites_complete", True):
+                cached = DB.get_profile(username, recent_limit=1)
+                if cached is not None:
+                    profile["favorite_kind"] = cached.get("favorite_kind")
+                    profile["favorites"] = list(cached.get("favorites") or [])
+                    profile["favorite_albums"] = list(
+                        cached.get("favorite_albums") or []
+                    )
+                    profile["favorite_artists"] = list(
+                        cached.get("favorite_artists") or []
+                    )
+
             DB.save_profile(username, profile)
             return profile
         except Exception as exc:
@@ -136,7 +257,11 @@ class DataService:
             refreshed = DB.get_profile(username, recent_limit=recent_limit)
             if refreshed is not None:
                 return refreshed
-        except (aoty.AOTYRateLimit, requests.RequestException):
+        except (
+            aoty.AOTYRateLimit,
+            aoty.AOTYPageIncomplete,
+            requests.RequestException,
+        ):
             if cached is not None:
                 return cached
             raise
@@ -197,13 +322,18 @@ class DataService:
         ratings outside the recent window.
         """
         if full:
-            return await _thread_call(
+            ratings = await _thread_call(
                 priority,
                 aoty.get_ratings,
                 username,
                 None,
                 RATING_FETCH_LIMITS,
             )
+            if getattr(ratings, "stale", False):
+                raise aoty.AOTYStalePage(
+                    f"Pełny monitor {username} otrzymał wyłącznie stale cache."
+                )
+            return ratings
 
         recent_count = min(
             50,
@@ -216,6 +346,11 @@ class DataService:
             recent_count,
             "all",
         )
+
+        if getattr(recent, "stale", False):
+            raise aoty.AOTYStalePage(
+                f"Szybki monitor {username} otrzymał wyłącznie stale cache."
+            )
 
         enabled_labels = {
             str(RATING_FORMATS[key]["label"]).casefold()
@@ -237,10 +372,10 @@ class DataService:
                 and str(item.get("release_format")).casefold() not in enabled_labels
             ]
             if silent_items:
-                DB.upsert_ratings(
+                self._persist_non_notification_ratings(
                     username,
                     silent_items,
-                    record_history=False,
+                    source="monitor_disabled_format",
                 )
 
         if not enabled_labels:
@@ -249,12 +384,15 @@ class DataService:
         # Cards from the combined route normally contain their exact format.
         # If AOTY temporarily omits the label, keep the item rather than miss a
         # genuine new rating; the next full sync will normalize its format.
-        return [
-            item
-            for item in recent
-            if not item.get("release_format")
-            or str(item.get("release_format")).casefold() in enabled_labels
-        ]
+        return aoty.RatingsResult(
+            [
+                item
+                for item in recent
+                if not item.get("release_format")
+                or str(item.get("release_format")).casefold() in enabled_labels
+            ],
+            stale=False,
+        )
 
     async def get_recent_ratings(
         self,
@@ -317,10 +455,32 @@ class DataService:
                 max(count, 10),
                 format_key,
             )
-            # Partial command refresh: never mark other DB ratings inactive.
-            DB.upsert_ratings(username, live, record_history=False)
+
+            # A stale transport page is still useful for display, but never as
+            # a new persistence/notification decision. Prefer SQLite when it
+            # already has the configured user's durable state.
+            if getattr(live, "stale", False):
+                return cached or live[:count]
+
+            if not live and cached:
+                # Empty partial reads are not authoritative for removals; the
+                # comprehensive per-format archive owns that decision.
+                return cached
+
+            # Partial command refresh: never mark other rows inactive and, for
+            # notification-enabled formats, never overwrite the monitor-owned
+            # score or consume notify_pending.
+            self._persist_interactive_ratings_safely(
+                username,
+                list(live),
+                requested_format_key=format_key,
+            )
             return live[:count]
-        except (aoty.AOTYRateLimit, requests.RequestException):
+        except (
+            aoty.AOTYRateLimit,
+            aoty.AOTYPageIncomplete,
+            requests.RequestException,
+        ):
             if cached:
                 return cached
             raise
@@ -373,6 +533,9 @@ class DataService:
                 user_release_url,
                 album_title,
             )
+
+            if live.get("detail_incomplete") and cached is not None:
+                return cached
 
             if monitored:
                 # If /album asks for a rating not yet present locally, only save
@@ -430,7 +593,11 @@ class DataService:
 
             return live
 
-        except (aoty.AOTYRateLimit, requests.RequestException):
+        except (
+            aoty.AOTYRateLimit,
+            aoty.AOTYPageIncomplete,
+            requests.RequestException,
+        ):
             if cached is not None:
                 return cached
             raise
@@ -468,9 +635,20 @@ class DataService:
                 # save_release_details() itself checks whether the album is in
                 # the configured-user scope. Public searches are never enough
                 # to create a persistent row on their own.
-                DB.save_release_details(album_id, details)
+                if DB.save_release_details(album_id, details):
+                    # Parser snapshots carry per-section completeness. Return
+                    # the same non-destructively merged view that was stored so
+                    # a partially rendered AOTY page cannot temporarily strip
+                    # metadata or tracks from an interactive command either.
+                    merged = DB.get_release_details(album_id)
+                    if merged is not None:
+                        return merged
             return details
-        except (aoty.AOTYRateLimit, requests.RequestException):
+        except (
+            aoty.AOTYRateLimit,
+            aoty.AOTYPageIncomplete,
+            requests.RequestException,
+        ):
             if cached is not None:
                 return cached
             raise
@@ -555,6 +733,15 @@ class DataService:
                     format_key,
                     {},
                 )
+                if (
+                    not ratings
+                    and int(previous_archive.get("item_count") or 0) > 0
+                ):
+                    raise aoty.AOTYArchiveIncomplete(
+                        f"Pusty snapshot {canonical}/{format_key} po wcześniejszych "
+                        f"{int(previous_archive.get('item_count') or 0)} ocenach; "
+                        "format nie zostanie oznaczony jako pełny."
+                    )
                 was_bootstrapped = bool(
                     previous_archive.get("last_success_at")
                 )

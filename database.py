@@ -24,6 +24,7 @@ import shutil
 import sqlite3
 import time
 from copy import deepcopy
+from pathlib import Path
 from threading import RLock
 from typing import Iterable
 
@@ -79,10 +80,13 @@ class Database:
     ):
         self.path = os.path.abspath(path)
         self.backup_path = os.path.abspath(backup_path) if backup_path else None
+        self.recovery_marker_path = self.path + ".recovery-required"
         self.legacy_json_path = legacy_json_path
         self.migrated_backup_path = migrated_backup_path
         self._lock = RLock()
         self._closed = False
+        self.pre_migration_backup_path: str | None = None
+        self.pre_prune_backup_path: str | None = None
 
         self.monitored_users = tuple(
             dict.fromkeys(
@@ -98,6 +102,24 @@ class Database:
 
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         self._recover_corrupt_database_if_possible()
+        database_existed_before_open = (
+            os.path.exists(self.path)
+            and os.path.getsize(self.path) > 0
+        )
+        stored_schema_version = (
+            self._stored_schema_version_from_file(self.path)
+            if database_existed_before_open
+            else None
+        )
+        if (
+            stored_schema_version is not None
+            and stored_schema_version > SCHEMA_VERSION
+        ):
+            raise RuntimeError(
+                "Baza SQLite ma nowszy schema_version "
+                f"({stored_schema_version}) niż obsługiwany przez tę wersję "
+                f"Kotone ({SCHEMA_VERSION}). Przerwano start bez zmiany bazy."
+            )
 
         self.connection = sqlite3.connect(
             self.path,
@@ -106,55 +128,318 @@ class Database:
         )
         self.connection.row_factory = sqlite3.Row
 
-        self._configure()
-        self._create_or_upgrade_schema()
+        try:
+            self._configure()
 
-        # Create the configured user rows before importing legacy ratings so
-        # the ratings foreign key always has a valid parent.
-        self.restrict_to_config_users()
-        self._migrate_legacy_json_if_needed()
-        self.restrict_to_config_users()
+            if (
+                database_existed_before_open
+                and (
+                    stored_schema_version is None
+                    or stored_schema_version < SCHEMA_VERSION
+                )
+            ):
+                self._create_verified_pre_migration_backup(
+                    stored_schema_version
+                )
+
+            self._create_or_upgrade_schema()
+
+            # Create the configured user rows before importing legacy ratings so
+            # the ratings foreign key always has a valid parent.
+            self.restrict_to_config_users()
+            self._migrate_legacy_json_if_needed()
+            self.restrict_to_config_users()
+        except Exception:
+            try:
+                self.connection.close()
+            finally:
+                self._closed = True
+            raise
 
     # ------------------------------------------------------------------
     # Setup / recovery / schema
     # ------------------------------------------------------------------
 
-    def _recover_corrupt_database_if_possible(self) -> None:
-        if not os.path.exists(self.path) or os.path.getsize(self.path) == 0:
-            return
+    @staticmethod
+    def _sqlite_error_is_corruption(exc: sqlite3.Error) -> bool:
+        code = getattr(exc, "sqlite_errorcode", None)
+        if code is not None:
+            base_code = int(code) & 0xFF
+            corruption_codes = {
+                int(getattr(sqlite3, "SQLITE_CORRUPT", 11)),
+                int(getattr(sqlite3, "SQLITE_NOTADB", 26)),
+            }
+            if base_code in corruption_codes:
+                return True
 
+        message = str(exc).casefold()
+        return (
+            "database disk image is malformed" in message
+            or "file is not a database" in message
+            or "malformed database schema" in message
+        )
+
+    @classmethod
+    def _probe_database_file(cls, path: str) -> tuple[str, str | None]:
+        """Return ``healthy``, ``missing``, ``corrupt`` or ``unavailable``.
+
+        Operational failures (lock, permissions, I/O) must not be interpreted
+        as corruption.  The read-only probe is always closed in ``finally`` so
+        Windows can safely rename a genuinely corrupt database afterwards.
+        """
         try:
-            probe = sqlite3.connect(self.path, timeout=5)
-            result = probe.execute("PRAGMA integrity_check").fetchone()
-            probe.close()
-            if result and result[0] == "ok":
-                return
-        except Exception:
-            pass
+            if not os.path.exists(path) or os.path.getsize(path) == 0:
+                return "missing", None
+        except OSError as exc:
+            return "unavailable", f"{type(exc).__name__}: {exc}"
 
-        stamp = int(_now())
-        corrupt_path = self.path + f".corrupt-{stamp}"
-        shutil.move(self.path, corrupt_path)
+        probe: sqlite3.Connection | None = None
+        try:
+            uri = Path(os.path.abspath(path)).as_uri() + "?mode=ro"
+            probe = sqlite3.connect(uri, uri=True, timeout=5)
+            rows = probe.execute("PRAGMA integrity_check").fetchall()
+            messages = [str(row[0]) for row in rows if row]
+            if messages == ["ok"]:
+                return "healthy", None
+            detail = "; ".join(messages[:5]) or "integrity_check nie zwrócił wyniku"
+            return "corrupt", detail
+        except sqlite3.Error as exc:
+            status = (
+                "corrupt"
+                if cls._sqlite_error_is_corruption(exc)
+                else "unavailable"
+            )
+            return status, f"{type(exc).__name__}: {exc}"
+        finally:
+            if probe is not None:
+                try:
+                    probe.close()
+                except sqlite3.Error:
+                    pass
+
+    def _quarantine_database_files(self, reason: str) -> str:
+        quarantine_path = self.path + f".{reason}-{time.time_ns()}"
+        if os.path.exists(self.path):
+            shutil.move(self.path, quarantine_path)
 
         # WAL/SHM belong to the same database generation. Never let a stale
-        # WAL attach itself to a restored backup.
+        # sidecar attach itself to a restored backup or a newly created DB.
         for suffix in ("-wal", "-shm"):
             sidecar = self.path + suffix
             if os.path.exists(sidecar):
-                shutil.move(sidecar, corrupt_path + suffix)
+                shutil.move(sidecar, quarantine_path + suffix)
 
-        print(f"[DB] Wykryto uszkodzoną bazę; przeniesiono do {corrupt_path}.")
+        return quarantine_path
 
-        if self.backup_path and os.path.exists(self.backup_path):
+    def _mark_recovery_required(self, reason: str) -> None:
+        """Persist fail-closed state across Railway restart attempts."""
+
+        temp_path = self.recovery_marker_path + ".tmp"
+        Path(temp_path).write_text(
+            str(reason).strip() or "manual SQLite recovery required",
+            encoding="utf-8",
+        )
+        os.replace(temp_path, self.recovery_marker_path)
+
+    def _clear_recovery_marker(self) -> None:
+        try:
+            os.remove(self.recovery_marker_path)
+        except FileNotFoundError:
+            pass
+
+    def _recover_corrupt_database_if_possible(self) -> None:
+        recovery_was_required = os.path.exists(self.recovery_marker_path)
+        main_file_existed = os.path.exists(self.path)
+        main_status, main_detail = self._probe_database_file(self.path)
+        if main_status == "healthy":
+            # An operator may have restored a verified database while the bot
+            # was stopped. A healthy main file is the only manual action that
+            # clears the persistent fail-closed marker without using backup.
+            if recovery_was_required:
+                self._clear_recovery_marker()
+            return
+        if main_status == "unavailable":
+            raise RuntimeError(
+                "Nie można bezpiecznie sprawdzić bazy SQLite; plik nie został "
+                f"uznany za uszkodzony ani przeniesiony: {main_detail}"
+            )
+
+        backup_status = "missing"
+        backup_detail = None
+        if self.backup_path:
+            backup_status, backup_detail = self._probe_database_file(
+                self.backup_path
+            )
+            if backup_status == "unavailable":
+                raise RuntimeError(
+                    "Nie można bezpiecznie sprawdzić lokalnego backupu SQLite; "
+                    f"przerwano odzyskiwanie: {backup_detail}"
+                )
+
+        quarantine_path = None
+        if (
+            os.path.exists(self.path)
+            or os.path.exists(self.path + "-wal")
+            or os.path.exists(self.path + "-shm")
+        ):
+            reason = "corrupt" if main_status == "corrupt" else "empty"
+            quarantine_path = self._quarantine_database_files(reason)
+
+        if main_status == "corrupt":
+            print(
+                "[DB] Wykryto uszkodzoną bazę; "
+                f"przeniesiono do {quarantine_path}. Szczegóły: {main_detail}"
+            )
+
+        if backup_status == "healthy" and self.backup_path:
+            shutil.copy2(self.backup_path, self.path)
+            restored_status, restored_detail = self._probe_database_file(self.path)
+            if restored_status != "healthy":
+                raise RuntimeError(
+                    "Skopiowany backup SQLite nie przeszedł kontroli po "
+                    f"odtworzeniu: {restored_detail or restored_status}"
+                )
+            self._clear_recovery_marker()
+            print("[DB] Przywrócono lokalny backup SQLite.")
+            return
+
+        if backup_status == "corrupt":
+            print(
+                "[DB] Lokalny backup SQLite jest uszkodzony i nie został "
+                f"przywrócony: {backup_detail}"
+            )
+
+        if main_status == "corrupt":
+            self._mark_recovery_required(
+                f"corrupt main quarantined at {quarantine_path}"
+            )
+            raise RuntimeError(
+                "Uszkodzona baza SQLite została zachowana w kwarantannie "
+                f"{quarantine_path}, ale nie ma poprawnego backupu. "
+                "Przerwano start zamiast tworzyć pustą bazę."
+            )
+
+        if main_status == "missing" and backup_status == "corrupt":
+            self._mark_recovery_required("main missing and backup corrupt")
+            raise RuntimeError(
+                "Główna baza SQLite nie istnieje lub ma 0 B, a dostępny "
+                "backup jest uszkodzony. Przerwano start zamiast tworzyć "
+                "pustą bazę."
+            )
+
+        if main_status == "missing" and (
+            recovery_was_required or main_file_existed
+        ):
+            self._mark_recovery_required(
+                "main database missing/empty without a healthy backup"
+            )
+            raise RuntimeError(
+                "Główna baza SQLite jest pusta albo wymaga ręcznego "
+                "odzyskania, a nie ma poprawnego backupu. Przerwano start "
+                "zamiast tworzyć pustą bazę."
+            )
+
+    @classmethod
+    def _stored_schema_version_from_file(cls, path: str) -> int | None:
+        probe: sqlite3.Connection | None = None
+        try:
+            uri = Path(os.path.abspath(path)).as_uri() + "?mode=ro"
+            probe = sqlite3.connect(uri, uri=True, timeout=5)
+            meta_exists = probe.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'meta'
+                """
+            ).fetchone()
+            if meta_exists is None:
+                return None
+
+            row = probe.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()
+            if row is None:
+                return None
+
             try:
-                probe = sqlite3.connect(self.backup_path, timeout=5)
-                result = probe.execute("PRAGMA integrity_check").fetchone()
+                version = int(row[0])
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Nieprawidłowa wartość meta.schema_version w SQLite."
+                ) from exc
+            if version < 0:
+                raise RuntimeError(
+                    "meta.schema_version w SQLite nie może być ujemny."
+                )
+            return version
+        finally:
+            if probe is not None:
                 probe.close()
-                if result and result[0] == "ok":
-                    shutil.copy2(self.backup_path, self.path)
-                    print("[DB] Przywrócono lokalny backup SQLite.")
-            except Exception as exc:
-                print(f"[DB] Backup również nie przeszedł kontroli: {exc}")
+
+    def _create_verified_pre_migration_backup(
+        self,
+        stored_schema_version: int | None,
+    ) -> None:
+        source_label = (
+            f"v{stored_schema_version}"
+            if stored_schema_version is not None
+            else "legacy"
+        )
+        final_path = (
+            f"{self.path}.pre-{source_label}-to-v{SCHEMA_VERSION}-"
+            f"{time.time_ns()}.sqlite3"
+        )
+        self._create_verified_snapshot(
+            final_path,
+            purpose="przed migracją SQLite",
+        )
+        self.pre_migration_backup_path = final_path
+
+    def _create_verified_snapshot(self, final_path: str, *, purpose: str) -> None:
+        temp_path = final_path + ".tmp.sqlite3"
+
+        try:
+            target = sqlite3.connect(temp_path)
+            try:
+                with self._lock:
+                    self.connection.backup(target)
+                target.commit()
+            finally:
+                target.close()
+
+            status, detail = self._probe_database_file(temp_path)
+            if status != "healthy":
+                raise RuntimeError(
+                    f"Kopia bezpieczeństwa {purpose} nie przeszła kontroli: "
+                    f"{detail or status}"
+                )
+
+            os.replace(temp_path, final_path)
+        except Exception:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
+            raise
+
+        print(f"[DB] Zweryfikowana kopia {purpose}: {final_path}")
+
+    def _create_verified_pre_prune_backup(
+        self,
+        removed_usernames: Iterable[str],
+    ) -> None:
+        final_path = (
+            f"{self.path}.pre-config-prune-{time.time_ns()}.sqlite3"
+        )
+        self._create_verified_snapshot(
+            final_path,
+            purpose=(
+                "przed usunięciem danych użytkowników spoza config "
+                f"({', '.join(removed_usernames)})"
+            ),
+        )
+        self.pre_prune_backup_path = final_path
 
     def _configure(self) -> None:
         with self._lock:
@@ -180,25 +465,35 @@ class Database:
         )
 
     def _import_legacy_rating_history_locked(self) -> None:
-        """Copy the old score-only audit trail into the unified history once.
+        """Copy legacy score events using a restart/rollback-safe watermark.
 
         Existing Railway volumes may already contain rating_history entries.
-        Importing them preserves that history when /history starts reading the
-        new change_history table. A meta flag makes the migration idempotent.
+        Older v10 builds stored only a boolean ``..._imported`` marker.  A later
+        rollback to v9 could append new rows behind that marker, so every row
+        above the numeric watermark is checked for an equivalent unified event
+        before it is imported. This remains idempotent for old and new v10 DBs.
         """
-        done = self.connection.execute(
-            "SELECT value FROM meta WHERE key = 'change_history_legacy_imported'"
+        watermark_row = self.connection.execute(
+            """
+            SELECT value
+            FROM meta
+            WHERE key = 'change_history_legacy_watermark'
+            """
         ).fetchone()
-        if done and str(done[0]) == "1":
-            return
+        try:
+            watermark = max(0, int(watermark_row[0])) if watermark_row else 0
+        except (TypeError, ValueError):
+            watermark = 0
 
         rows = self.connection.execute(
             """
-            SELECT username, album_id, event_type,
+            SELECT id, username, album_id, event_type,
                    old_score, new_score, changed_at
             FROM rating_history
+            WHERE id > ?
             ORDER BY id
-            """
+            """,
+            (watermark,),
         ).fetchall()
 
         event_map = {
@@ -210,23 +505,66 @@ class Database:
 
         for row in rows:
             event_type = event_map.get(str(row["event_type"]), "rating_changed")
-            self.connection.execute(
+            old_json = (
+                _json_dump(row["old_score"])
+                if row["old_score"] is not None
+                else None
+            )
+            new_json = (
+                _json_dump(row["new_score"])
+                if row["new_score"] is not None
+                else None
+            )
+
+            # Current v10 writes rating_history and change_history in one
+            # transaction for backward compatibility. Such a row may be above
+            # the last startup watermark but is already mirrored and must not
+            # be duplicated. Exact timestamps/values are shared by both writes.
+            mirrored = self.connection.execute(
                 """
-                INSERT INTO change_history(
-                    username, album_id, entity_type, event_type,
-                    field_name, item_key, old_value_json,
-                    new_value_json, source, detected_at
-                ) VALUES(?, ?, 'rating', ?, 'score', NULL, ?, ?, 'legacy', ?)
+                SELECT 1
+                FROM change_history
+                WHERE username = ?
+                  AND album_id = ?
+                  AND entity_type = 'rating'
+                  AND event_type = ?
+                  AND field_name = 'score'
+                  AND item_key IS NULL
+                  AND old_value_json IS ?
+                  AND new_value_json IS ?
+                  AND detected_at = ?
+                LIMIT 1
                 """,
                 (
                     row["username"],
                     row["album_id"],
                     event_type,
-                    _json_dump(row["old_score"]) if row["old_score"] is not None else None,
-                    _json_dump(row["new_score"]) if row["new_score"] is not None else None,
+                    old_json,
+                    new_json,
                     row["changed_at"],
                 ),
-            )
+            ).fetchone()
+
+            if mirrored is None:
+                self.connection.execute(
+                    """
+                    INSERT INTO change_history(
+                        username, album_id, entity_type, event_type,
+                        field_name, item_key, old_value_json,
+                        new_value_json, source, detected_at
+                    ) VALUES(?, ?, 'rating', ?, 'score', NULL, ?, ?, 'legacy', ?)
+                    """,
+                    (
+                        row["username"],
+                        row["album_id"],
+                        event_type,
+                        old_json,
+                        new_json,
+                        row["changed_at"],
+                    ),
+                )
+
+            watermark = max(watermark, int(row["id"]))
 
         self.connection.execute(
             """
@@ -234,6 +572,14 @@ class Database:
             VALUES('change_history_legacy_imported', '1')
             ON CONFLICT(key) DO UPDATE SET value='1'
             """
+        )
+        self.connection.execute(
+            """
+            INSERT INTO meta(key, value)
+            VALUES('change_history_legacy_watermark', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (str(watermark),),
         )
 
     def _record_change_locked(
@@ -603,15 +949,22 @@ class Database:
     def restrict_to_config_users(self) -> None:
         """Delete persistent personal data for users removed from config."""
 
-        with self._lock, self.connection:
+        with self._lock:
             configured = {user.casefold() for user in self.monitored_users}
             existing = self.connection.execute(
                 "SELECT username FROM users"
             ).fetchall()
+            removed_usernames = [
+                str(row["username"])
+                for row in existing
+                if str(row["username"]).casefold() not in configured
+            ]
 
-            for row in existing:
-                username = str(row["username"])
-                if username.casefold() not in configured:
+            if removed_usernames:
+                self._create_verified_pre_prune_backup(removed_usernames)
+
+            with self.connection:
+                for username in removed_usernames:
                     self.connection.execute(
                         "DELETE FROM users WHERE username = ?",
                         (username,),
@@ -620,18 +973,18 @@ class Database:
                         f"[DB] Usunięto dane {username}: użytkownik nie jest już w config."
                     )
 
-            now = _now()
-            for username in self.monitored_users:
-                self.connection.execute(
-                    """
-                    INSERT INTO users(username, created_at, updated_at)
-                    VALUES(?, ?, ?)
-                    ON CONFLICT(username) DO UPDATE SET updated_at=excluded.updated_at
-                    """,
-                    (username, now, now),
-                )
+                now = _now()
+                for username in self.monitored_users:
+                    self.connection.execute(
+                        """
+                        INSERT INTO users(username, created_at, updated_at)
+                        VALUES(?, ?, ?)
+                        ON CONFLICT(username) DO UPDATE SET updated_at=excluded.updated_at
+                        """,
+                        (username, now, now),
+                    )
 
-            self._cleanup_orphan_release_cache_locked()
+                self._cleanup_orphan_release_cache_locked()
 
     # ------------------------------------------------------------------
     # Legacy data.json migration
@@ -1804,6 +2157,15 @@ class Database:
         details = dict(details or {})
         now = _now()
 
+        raw_section_complete = details.get("_section_complete")
+        legacy_authoritative = not isinstance(raw_section_complete, dict)
+
+        def section_complete(name: str) -> bool:
+            # Older callers and test fixtures predate the parser contract and
+            # remain fully authoritative. Parser-produced snapshots opt into
+            # section-by-section non-destructive merging.
+            return legacy_authoritative or bool(raw_section_complete.get(name))
+
         with self._lock, self.connection:
             if not self._release_is_in_scope_locked(album_id):
                 return False
@@ -1818,24 +2180,43 @@ class Database:
                     year_ranking, year_ranking_text, fetched_at
                 ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(album_id) DO UPDATE SET
-                    artist = excluded.artist,
-                    artist_url = excluded.artist_url,
-                    album = excluded.album,
-                    url = excluded.url,
-                    cover_url = excluded.cover_url,
-                    user_score = excluded.user_score,
-                    ratings_count = excluded.ratings_count,
-                    release_date = excluded.release_date,
-                    year = excluded.year,
-                    album_format = excluded.album_format,
-                    label = excluded.label,
-                    labels_json = excluded.labels_json,
-                    genres_json = excluded.genres_json,
-                    secondary_genres_json = excluded.secondary_genres_json,
-                    vibes_json = excluded.vibes_json,
-                    ranking_year = excluded.ranking_year,
-                    year_ranking = excluded.year_ranking,
-                    year_ranking_text = excluded.year_ranking_text,
+                    artist = COALESCE(excluded.artist, releases.artist),
+                    artist_url = COALESCE(excluded.artist_url, releases.artist_url),
+                    album = COALESCE(excluded.album, releases.album),
+                    url = COALESCE(excluded.url, releases.url),
+                    cover_url = COALESCE(excluded.cover_url, releases.cover_url),
+                    user_score = CASE WHEN ? THEN
+                        COALESCE(excluded.user_score, releases.user_score)
+                        ELSE releases.user_score END,
+                    ratings_count = CASE WHEN ? THEN
+                        COALESCE(excluded.ratings_count, releases.ratings_count)
+                        ELSE releases.ratings_count END,
+                    release_date = CASE WHEN ? THEN
+                        COALESCE(excluded.release_date, releases.release_date)
+                        ELSE releases.release_date END,
+                    year = CASE WHEN ? THEN
+                        COALESCE(excluded.year, releases.year)
+                        ELSE releases.year END,
+                    album_format = CASE WHEN ? THEN
+                        COALESCE(excluded.album_format, releases.album_format)
+                        ELSE releases.album_format END,
+                    label = CASE WHEN ? THEN excluded.label ELSE releases.label END,
+                    labels_json = CASE WHEN ? THEN
+                        excluded.labels_json ELSE releases.labels_json END,
+                    genres_json = CASE WHEN ? THEN
+                        excluded.genres_json ELSE releases.genres_json END,
+                    secondary_genres_json = CASE WHEN ? THEN
+                        excluded.secondary_genres_json
+                        ELSE releases.secondary_genres_json END,
+                    vibes_json = CASE WHEN ? THEN
+                        excluded.vibes_json ELSE releases.vibes_json END,
+                    ranking_year = CASE WHEN ? THEN
+                        excluded.ranking_year ELSE releases.ranking_year END,
+                    year_ranking = CASE WHEN ? THEN
+                        excluded.year_ranking ELSE releases.year_ranking END,
+                    year_ranking_text = CASE WHEN ? THEN
+                        excluded.year_ranking_text
+                        ELSE releases.year_ranking_text END,
                     fetched_at = excluded.fetched_at
                 """,
                 (
@@ -1859,36 +2240,56 @@ class Database:
                     details.get("year_ranking"),
                     details.get("year_ranking_text"),
                     now,
+                    section_complete("score"),
+                    section_complete("score"),
+                    section_complete("release_date"),
+                    section_complete("release_date"),
+                    section_complete("format"),
+                    section_complete("labels"),
+                    section_complete("labels"),
+                    section_complete("genres"),
+                    section_complete("genres"),
+                    section_complete("vibes"),
+                    section_complete("ranking"),
+                    section_complete("ranking"),
+                    section_complete("ranking"),
                 ),
             )
 
-            self.connection.execute(
-                "DELETE FROM release_tracks WHERE album_id = ?",
-                (album_id,),
-            )
-
-            for index, track in enumerate(list(details.get("tracklist") or []), start=1):
-                number = track.get("number")
-                title = str(track.get("title") or "").strip()
-                key = f"{number if number is not None else 'x'}:{title.casefold()}:{index}"
+            if section_complete("tracklist"):
                 self.connection.execute(
-                    """
-                    INSERT INTO release_tracks(
-                        album_id, track_key, track_number, title,
-                        duration, user_score, disc, url
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        album_id,
-                        key,
-                        number,
-                        title or None,
-                        track.get("duration"),
-                        track.get("user_score"),
-                        track.get("disc"),
-                        track.get("url"),
-                    ),
+                    "DELETE FROM release_tracks WHERE album_id = ?",
+                    (album_id,),
                 )
+
+                for index, track in enumerate(
+                    list(details.get("tracklist") or []),
+                    start=1,
+                ):
+                    number = track.get("number")
+                    title = str(track.get("title") or "").strip()
+                    key = (
+                        f"{number if number is not None else 'x'}:"
+                        f"{title.casefold()}:{index}"
+                    )
+                    self.connection.execute(
+                        """
+                        INSERT INTO release_tracks(
+                            album_id, track_key, track_number, title,
+                            duration, user_score, disc, url
+                        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            album_id,
+                            key,
+                            number,
+                            title or None,
+                            track.get("duration"),
+                            track.get("user_score"),
+                            track.get("disc"),
+                            track.get("url"),
+                        ),
+                    )
 
         return True
 
@@ -2546,6 +2947,11 @@ class Database:
             quick_check_row = self.connection.execute(
                 "PRAGMA quick_check"
             ).fetchone()
+            foreign_key_violations = len(
+                self.connection.execute(
+                    "PRAGMA foreign_key_check"
+                ).fetchall()
+            )
 
             quick_check = (
                 str(quick_check_row[0])
@@ -2939,8 +3345,12 @@ class Database:
                 backup_mtime = None
 
         return {
-            "healthy": quick_check.casefold() == "ok",
+            "healthy": (
+                quick_check.casefold() == "ok"
+                and foreign_key_violations == 0
+            ),
             "quick_check": quick_check,
+            "foreign_key_violations": foreign_key_violations,
             "schema_version": schema_version,
             "path": self.path,
             "backup_path": self.backup_path,
