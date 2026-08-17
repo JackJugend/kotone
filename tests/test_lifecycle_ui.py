@@ -291,23 +291,17 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(fallback_item["has_track_ratings"])
         self.assertEqual(result["track_ratings"][0]["score"], "88")
 
-    async def test_profile_track_failure_is_not_reported_as_no_ratings(self):
+    async def test_profile_track_action_uses_combined_tracklist(self):
         item = {
             "album_id": "1",
+            "artist": "Artist",
             "album": "Album",
-            "has_track_ratings": True,
+            "url": "https://www.albumoftheyear.org/album/1-album/",
         }
         view = views_module.ProfilePagerView(
             username="enso",
             ratings=[item],
             build_page_embed=lambda page: discord.Embed(),
-        )
-        view._extra = AsyncMock(
-            return_value={
-                "detail_incomplete": True,
-                "has_track_ratings": True,
-                "track_ratings": [],
-            }
         )
         interaction = SimpleNamespace(
             response=SimpleNamespace(
@@ -318,11 +312,16 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             message=SimpleNamespace(edit=AsyncMock()),
         )
 
-        await view._tracks(interaction)
+        combined = discord.Embed(description="combined")
+        with patch.object(
+            views_module,
+            "build_combined_tracklist_embed",
+            new=AsyncMock(return_value=combined),
+        ) as builder:
+            await view._tracks(interaction)
 
-        warning = interaction.followup.send.await_args.args[0]
-        self.assertIn("nie zostały teraz pobrane", warning)
-        interaction.message.edit.assert_not_awaited()
+        builder.assert_awaited_once_with(item)
+        interaction.message.edit.assert_awaited_once_with(embed=combined, view=view)
 
     async def test_profile_review_failure_is_not_reported_as_no_review(self):
         item = {
@@ -356,6 +355,158 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         warning = interaction.followup.send.await_args.args[0]
         self.assertIn("treść nie została teraz pobrana", warning)
         interaction.message.edit.assert_not_awaited()
+
+    async def test_shared_action_order_and_disabled_review_are_consistent(self):
+        item = {
+            "album_id": "1",
+            "artist": "Artist",
+            "album": "Album",
+            "url": "https://www.albumoftheyear.org/album/1-album/",
+        }
+        views = [
+            views_module.SingleRatingView(
+                username="enso",
+                item=item,
+                main_embed=discord.Embed(),
+            ),
+            views_module.MultiRatingView(
+                username="enso",
+                items=[item],
+                main_embeds=[discord.Embed()],
+            ),
+            views_module.AlbumRatingView(
+                main_embed=discord.Embed(),
+                release_item=item,
+                usernames=["enso"],
+                rating_infos={"enso": {}},
+            ),
+            views_module.ProfilePagerView(
+                username="enso",
+                ratings=[item],
+                build_page_embed=lambda page: discord.Embed(),
+            ),
+        ]
+
+        for view in views:
+            buttons = [
+                child
+                for child in view.children
+                if isinstance(child, discord.ui.Button)
+                and child.label in views_module.ACTION_BUTTON_ORDER
+            ]
+            self.assertEqual(
+                [button.label for button in buttons],
+                ["★", "🛈", "🏠︎", "☰", "✎"],
+            )
+            review = next(button for button in buttons if button.label == "✎")
+            self.assertTrue(review.disabled)
+
+    async def test_profile_select_contains_ratings_and_favorites(self):
+        rating = {
+            "album_id": "1",
+            "artist": "Rated Artist",
+            "album": "Rated Album",
+            "url": "https://www.albumoftheyear.org/album/1-rated/",
+        }
+        view = views_module.ProfilePagerView(
+            username="enso",
+            ratings=[rating],
+            favorites=[
+                {
+                    "type": "artist",
+                    "name": "Favorite Artist",
+                    "url": "https://www.albumoftheyear.org/artist/1-favorite/",
+                },
+                {
+                    "type": "album",
+                    "artist": "Album Artist",
+                    "album": "Favorite Album",
+                    "url": "https://www.albumoftheyear.org/album/2-favorite/",
+                },
+            ],
+            build_page_embed=lambda page: discord.Embed(),
+        )
+        selector = next(
+            child for child in view.children if isinstance(child, discord.ui.Select)
+        )
+        self.assertEqual(selector.placeholder, "Wybierz pozycję")
+        self.assertEqual(
+            {option.value for option in selector.options},
+            {"rating:0", "favorite:0", "favorite:1"},
+        )
+
+        view.selected_source = "favorite"
+        view.selected_index = 0
+        view._rebuild_components()
+        buttons = {
+            child.label: child
+            for child in view.children
+            if isinstance(child, discord.ui.Button)
+            and child.label in views_module.ACTION_BUTTON_ORDER
+        }
+        self.assertFalse(buttons["★"].disabled)
+        self.assertTrue(buttons["🛈"].disabled)
+        self.assertTrue(buttons["☰"].disabled)
+        self.assertTrue(buttons["✎"].disabled)
+
+    async def test_combined_tracklist_joins_public_and_config_user_scores(self):
+        item = {
+            "album_id": "7",
+            "artist": "Artist",
+            "album": "Album",
+            "url": "https://www.albumoftheyear.org/album/7-album/",
+        }
+        details = {
+            **item,
+            "album_format": "LP",
+            "tracklist": [
+                {
+                    "number": 1,
+                    "title": "Opening Track",
+                    "duration": "3:45",
+                    "user_score": "82",
+                }
+            ],
+        }
+        cached = {
+            "enso": {
+                "detail_complete": True,
+                "track_ratings": [
+                    {"number": 1, "title": "Opening Track", "score": "90"}
+                ],
+            },
+            "kulkien": {
+                "detail_complete": True,
+                "track_ratings": [
+                    {"number": None, "title": "Opening Track", "score": "75"}
+                ],
+            },
+        }
+        with (
+            patch.object(views_module, "USERS", ["enso", "kulkien"]),
+            patch.object(
+                views_module.DATA,
+                "get_release_details",
+                new=AsyncMock(return_value=details),
+            ),
+            patch.object(
+                views_module.DATA,
+                "cached_rating",
+                side_effect=lambda username, album_id: cached[username],
+            ),
+            patch.object(
+                views_module.DATA,
+                "get_user_rating_for_album",
+                new=AsyncMock(),
+            ) as live_detail,
+        ):
+            embed = await views_module.build_combined_tracklist_embed(item)
+
+        self.assertIn("**1.** Opening Track `3:45`", embed.description)
+        self.assertIn("AOTY **82**", embed.description)
+        self.assertIn("enso **90**", embed.description)
+        self.assertIn("kulkien **75**", embed.description)
+        live_detail.assert_not_awaited()
 
 
 @unittest.skipIf(

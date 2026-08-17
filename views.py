@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 
 import discord
@@ -10,7 +9,29 @@ import discord
 import aoty
 from services import DATA
 from display_utils import display_romanized_name
-from shared import rating_flags_text, score_color, score_icon
+from settings import USERS
+from shared import (
+    build_release_variables,
+    load_release_variables,
+    rating_flags_text,
+    score_color,
+    score_icon,
+    set_aoty_footer,
+)
+
+
+HOME_BUTTON = "🏠︎"
+TRACKLIST_BUTTON = "☰"
+REVIEW_BUTTON = "✎"
+DETAILS_BUTTON = "🛈"
+ARTIST_BUTTON = "★"
+ACTION_BUTTON_ORDER = (
+    ARTIST_BUTTON,
+    DETAILS_BUTTON,
+    HOME_BUTTON,
+    TRACKLIST_BUTTON,
+    REVIEW_BUTTON,
+)
 
 
 def _trim_description(text: str, limit: int = 4000) -> str:
@@ -47,39 +68,280 @@ def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
     return embed
 
 
-def build_track_ratings_embed(username: str, item: dict, extra: dict) -> discord.Embed:
-    artist = display_romanized_name(item.get("artist") or "Nieznany artysta")
-    album = display_romanized_name(item.get("album") or item.get("title") or "Nieznane wydanie")
-    score = extra.get("score") or item.get("score")
-    track_ratings = list(extra.get("track_ratings") or [])
+def _track_key(value) -> str:
+    return "".join(
+        character.casefold()
+        for character in str(value or "")
+        if character.isalnum()
+    )
 
-    lines = []
-    for track in track_ratings:
-        number = track.get("number") or "?"
-        title = track.get("title") or "Nieznany utwór"
-        track_score = track.get("score") or "NR"
-        lines.append(f"**{number}.** {title} — **{track_score}**")
 
-    description = "\n".join(lines) if lines else "Brak ocen tracklisty."
+def _track_number(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _release_action_available(item: dict | None) -> bool:
+    item = item or {}
+    return bool(
+        (item.get("album") or item.get("title"))
+        and (item.get("album_id") or item.get("url"))
+    )
+
+
+def _artist_name(item: dict | None) -> str:
+    item = item or {}
+    if item.get("_position_kind") == "favorite_artist":
+        return str(item.get("name") or item.get("artist") or "").strip()
+    return str(item.get("artist") or "").strip()
+
+
+def _artist_action_available(item: dict | None) -> bool:
+    return bool(_artist_name(item))
+
+
+async def build_release_details_embed(
+    item: dict,
+    *,
+    username: str | None = None,
+) -> discord.Embed:
+    """Build the shared details tab through the SQLite-first release service."""
+
+    variables = await load_release_variables(
+        item,
+        username=username,
+        missing="?",
+    )
+    lines = [
+        f"**AOTY User Score:** {variables.aoty_user_score}",
+        f"**Ratings:** {variables.ratings_count}",
+        f"**Release date:** {variables.release_date}",
+        f"**Format:** {variables.album_format}",
+        f"**Label:** {variables.labels_text}",
+        f"**Genre:** {variables.genres_text}",
+    ]
+    if variables.secondary_genres:
+        lines.append(
+            f"**Secondary genres:** {', '.join(variables.secondary_genres)}"
+        )
+    if variables.vibes:
+        lines.append(f"**Vibes:** {', '.join(variables.vibes)}")
+    if variables.year_ranking_text and variables.year_ranking_text != "?":
+        lines.append(
+            f"**{variables.ranking_year or variables.year} Ratings:** "
+            f"{variables.year_ranking_text}"
+        )
 
     embed = discord.Embed(
-        title=f"☷ {artist} — {album}",
-        url=extra.get("review_url") or item.get("url"),
-        description=_trim_description(description),
-        color=score_color(score),
+        title=f"{DETAILS_BUTTON} {variables.display_artist} — {variables.display_album}",
+        url=variables.url or None,
+        description="\n".join(lines),
+        color=score_color(variables.score or variables.aoty_user_score),
     )
-
-    embed.set_author(
-        name=f"{username}  •  {extra.get('date') or item.get('date') or '?'}",
-        url=f"https://www.albumoftheyear.org/user/{username}/",
+    if variables.cover:
+        embed.set_thumbnail(url=variables.cover)
+    if username:
+        embed.set_author(
+            name=f"{username}  •  {variables.date}",
+            url=f"https://www.albumoftheyear.org/user/{username}/",
+        )
+    set_aoty_footer(
+        embed,
+        f"AOTY • {score_icon(variables.score)} {variables.score or 'NR'}",
     )
-
-    cover = item.get("cover")
-    if cover:
-        embed.set_thumbnail(url=cover)
-
-    embed.set_footer(text=f"AOTY • {score_icon(score)} {score or 'NR'}")
     return embed
+
+
+def _rating_track_maps(rows: list[dict]) -> tuple[dict[int, dict], dict[str, dict]]:
+    by_number: dict[int, dict] = {}
+    by_title: dict[str, dict] = {}
+    for row in rows:
+        number = _track_number(row.get("number"))
+        title_key = _track_key(row.get("title"))
+        if number is not None:
+            by_number.setdefault(number, row)
+        if title_key:
+            by_title.setdefault(title_key, row)
+    return by_number, by_title
+
+
+async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
+    """Join the public tracklist with every configured user's track scores.
+
+    Public rows come from ``release_tracks`` (or AOTY when the cache is
+    missing); personal rows come from ``user_track_ratings``.  A button click
+    is also a safe opportunity to complete a missing personal detail snapshot.
+    """
+
+    item = dict(item or {})
+    album_id = str(item.get("album_id") or aoty.extract_album_id(item.get("url")) or "")
+    if album_id:
+        item["album_id"] = album_id
+
+    try:
+        details = await DATA.get_release_details(item)
+    except Exception:
+        details = {}
+
+    variables = build_release_variables(item, details, missing="?")
+    public_tracks = [dict(track) for track in variables.tracklist]
+    personal: dict[str, list[dict]] = {}
+
+    for username in USERS[:25]:
+        cached = DATA.cached_rating(username, album_id) if album_id else None
+        if cached is None:
+            personal[username] = []
+            continue
+
+        selected = cached
+        needs_refresh = bool(
+            not cached.get("detail_complete")
+            or (
+                cached.get("has_track_ratings")
+                and not cached.get("track_ratings")
+            )
+        )
+        if needs_refresh:
+            try:
+                selected = await DATA.get_user_rating_for_album(
+                    username,
+                    album_id,
+                    item.get("url") or details.get("url"),
+                    item.get("release_format")
+                    or item.get("album_format")
+                    or details.get("album_format"),
+                    fallback_limit=20,
+                    user_release_url=cached.get("review_url"),
+                    album_title=item.get("album") or item.get("title"),
+                    require_detail=True,
+                )
+            except Exception:
+                selected = cached
+        personal[username] = list(selected.get("track_ratings") or [])
+
+    personal_maps = {
+        username: _rating_track_maps(rows)
+        for username, rows in personal.items()
+    }
+
+    merged: list[dict] = []
+    seen_numbers: set[int] = set()
+    seen_titles: set[str] = set()
+    for position, track in enumerate(public_tracks, start=1):
+        number = _track_number(track.get("number"))
+        title_key = _track_key(track.get("title"))
+        merged.append({**track, "_display_number": number or position})
+        if number is not None:
+            seen_numbers.add(number)
+        if title_key:
+            seen_titles.add(title_key)
+
+    for rows in personal.values():
+        for row in rows:
+            number = _track_number(row.get("number"))
+            title_key = _track_key(row.get("title"))
+            if (number is not None and number in seen_numbers) or (
+                title_key and title_key in seen_titles
+            ):
+                continue
+            merged.append(
+                {
+                    "number": number,
+                    "title": row.get("title"),
+                    "duration": None,
+                    "user_score": None,
+                    "_display_number": number or len(merged) + 1,
+                }
+            )
+            if number is not None:
+                seen_numbers.add(number)
+            if title_key:
+                seen_titles.add(title_key)
+
+    lines: list[str] = []
+    for track in merged:
+        number = _track_number(track.get("number"))
+        display_number = track.get("_display_number") or "?"
+        title = str(track.get("title") or "Nieznany utwór")
+        title_key = _track_key(title)
+        duration = f" `{track.get('duration')}`" if track.get("duration") else ""
+        url = track.get("url")
+        title_text = f"[{title}]({url})" if url else title
+        scores = [f"AOTY **{track.get('user_score') or '—'}**"]
+        for username in USERS[:25]:
+            by_number, by_title = personal_maps.get(username, ({}, {}))
+            row = (
+                by_number.get(number)
+                if number is not None
+                else None
+            ) or by_title.get(title_key)
+            scores.append(f"{username} **{(row or {}).get('score') or '—'}**")
+        lines.append(
+            f"**{display_number}.** {title_text}{duration}\n"
+            + " • ".join(scores)
+        )
+
+    description = "\n".join(lines) if lines else "Brak tracklisty w SQLite i AOTY."
+    embed = discord.Embed(
+        title=f"{TRACKLIST_BUTTON} {variables.display_artist} — {variables.display_album}",
+        url=variables.url or None,
+        description=_trim_description(description),
+        color=score_color(variables.score or variables.aoty_user_score),
+    )
+    if variables.cover:
+        embed.set_thumbnail(url=variables.cover)
+    set_aoty_footer(
+        embed,
+        f"AOTY track scores • {variables.album_format} • oceny userów z configu",
+    )
+    return embed
+
+
+async def _show_artist_command(
+    interaction: discord.Interaction,
+    item: dict,
+) -> None:
+    artist = _artist_name(item)
+    if not artist:
+        await interaction.response.send_message(
+            "Brak artysty dla tej pozycji.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    try:
+        # Runtime import avoids a module cycle: commands.artist imports the
+        # common TimedDisableView from this module.
+        from commands.artist import build_artist_response
+
+        result = await build_artist_response(artist)
+        if result is None:
+            await interaction.followup.send(
+                f"❌ Nie znaleziono artysty **{artist}** na AOTY ani w SQLite.",
+                ephemeral=True,
+            )
+            return
+        embed, view = result
+        message = await interaction.followup.send(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+            wait=True,
+        )
+        view.bind_message(message)
+    except aoty.AOTYRateLimit:
+        await interaction.followup.send(
+            "⚠️ AOTY chwilowo ogranicza liczbę zapytań.",
+            ephemeral=True,
+        )
+    except Exception as exc:
+        await interaction.followup.send(
+            f"❌ Nie udało się otworzyć artysty: `{type(exc).__name__}: {exc}`",
+            ephemeral=True,
+        )
 
 
 VIEW_TIMEOUT_SECONDS = 15 * 60
@@ -192,43 +454,6 @@ def _has_review_available(
     )
 
 
-def _has_track_ratings_available(
-    item: dict | None,
-    extra: dict | None = None,
-) -> bool:
-    """True tylko wtedy, gdy ocena ma przynajmniej jeden Track Rating."""
-    item = item or {}
-
-    if (
-        extra is not None
-        and not extra.get("rate_limited")
-        and not extra.get("detail_incomplete")
-    ):
-        track_ratings = list(
-            extra.get("track_ratings")
-            or []
-        )
-
-        has_actual_score = any(
-            track.get("score") not in (
-                None,
-                "",
-                "NR",
-            )
-            for track in track_ratings
-        )
-
-        return bool(
-            has_actual_score
-            or extra.get("has_track_ratings")
-        )
-
-    return bool(
-        item.get("track_ratings")
-        or item.get("has_track_ratings")
-    )
-
-
 def _review_detail_temporarily_unavailable(extra: dict | None) -> bool:
     """A card confirms a review, but its body could not be fetched safely."""
 
@@ -237,17 +462,6 @@ def _review_detail_temporarily_unavailable(extra: dict | None) -> bool:
         extra.get("detail_incomplete")
         and extra.get("has_review")
         and not extra.get("review_text")
-    )
-
-
-def _track_detail_temporarily_unavailable(extra: dict | None) -> bool:
-    """A card confirms Track Ratings, but detailed rows are unavailable."""
-
-    extra = extra or {}
-    return bool(
-        extra.get("detail_incomplete")
-        and extra.get("has_track_ratings")
-        and not extra.get("track_ratings")
     )
 
 
@@ -260,28 +474,24 @@ async def _send_review_unavailable(interaction: discord.Interaction) -> None:
     )
 
 
-async def _send_tracks_unavailable(interaction: discord.Interaction) -> None:
-    await interaction.followup.send(
-        "⚠️ AOTY potwierdza Track Ratings dla tej oceny, "
-        "ale szczegóły nie zostały teraz pobrane. "
-        "Spróbuj ponownie za chwilę.",
-        ephemeral=True,
-    )
-
-
-def _set_button_visible(
-    view: discord.ui.View,
+def _set_button_enabled(
     button: discord.ui.Item,
-    visible: bool,
+    enabled: bool,
 ) -> None:
-    """Ukrywa button całkowicie zamiast tylko go disable'ować."""
-    present = button in view.children
+    """Keep an applicable action visible and disable it when unavailable."""
+    button.disabled = not bool(enabled)
 
-    if visible and not present:
+
+def _order_action_buttons(
+    view: discord.ui.View,
+    *buttons: discord.ui.Button,
+) -> None:
+    """Apply the one canonical action order inside a Discord component row."""
+    for button in buttons:
+        if button in view.children:
+            view.remove_item(button)
+    for button in buttons:
         view.add_item(button)
-
-    elif not visible and present:
-        view.remove_item(button)
 
 
 
@@ -311,16 +521,7 @@ class RatingDetailsMixin:
 
 
 class SingleRatingView(TimedDisableView, RatingDetailsMixin):
-    """Interactive tabs for one rating.
-
-    /last can additionally provide:
-      - Szczegóły
-      - Tracklista
-      - direct Artysta / Album URL buttons
-
-    Other places that use SingleRatingView keep working because all extended
-    arguments are optional.
-    """
+    """Shared five-action switcher for one rating."""
 
     def __init__(
         self,
@@ -347,62 +548,53 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         self.main_embed = main_embed
         self.details_embed = details_embed
         self.tracklist_embed = tracklist_embed
-
         self._extra_cache = extra
 
-        # Jeśli nie ma Recenzji albo Track Ratings, button w ogóle nie istnieje.
-        _set_button_visible(
-            self,
-            self.review_button,
-            _has_review_available(
-                self.item,
-                extra,
-            ),
-        )
-
-        _set_button_visible(
-            self,
-            self.tracks_button,
-            _has_track_ratings_available(
-                self.item,
-                extra,
-            ),
-        )
-
-        # Extended /last controls only.
-        if self.details_embed is None:
-            self.remove_item(
-                self.details_button
-            )
-
-        if self.tracklist_embed is None:
-            self.remove_item(
-                self.tracklist_button
-            )
-
+        # Keep compatibility with existing command arguments while making the
+        # selected item self-contained for all shared callbacks.
         if artist_url:
-            self.add_item(
-                discord.ui.Button(
-                    label="𝄞",
-                    style=discord.ButtonStyle.link,
-                    url=artist_url,
-                    row=0,
-                )
-            )
+            self.item.setdefault("artist_url", artist_url)
+        if album_url:
+            self.item.setdefault("url", album_url)
 
-        # if album_url:
-        #     self.add_item(
-        #         discord.ui.Button(
-        #             label="Album",
-        #             style=discord.ButtonStyle.link,
-        #             url=album_url,
-        #             row=1,
-        #         )
-        #     )
+        _set_button_enabled(self.artist_button, _artist_action_available(self.item))
+        _set_button_enabled(self.main_button, True)
+        _set_button_enabled(
+            self.tracklist_button,
+            _release_action_available(self.item) or self.tracklist_embed is not None,
+        )
+        _set_button_enabled(
+            self.review_button,
+            _has_review_available(self.item, extra),
+        )
+        _set_button_enabled(
+            self.details_button,
+            _release_action_available(self.item) or self.details_embed is not None,
+        )
+        _order_action_buttons(
+            self,
+            self.artist_button,
+            self.details_button,
+            self.main_button,
+            self.tracklist_button,
+            self.review_button,
+        )
 
     @discord.ui.button(
-        label="🏠︎",
-        style=discord.ButtonStyle.primary,
+        label=ARTIST_BUTTON,
+        style=discord.ButtonStyle.secondary,
+        row=0,
+    )
+    async def artist_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await _show_artist_command(interaction, self.item)
+
+    @discord.ui.button(
+        label=HOME_BUTTON,
+        style=discord.ButtonStyle.secondary,
         row=0,
     )
     async def main_button(
@@ -416,30 +608,8 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         )
 
     @discord.ui.button(
-        label="🛈",
-        style=discord.ButtonStyle.primary,
-        row=0,
-    )
-    async def details_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-        if self.details_embed is None:
-            await interaction.response.send_message(
-                "Brak szczegółów wydania.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.edit_message(
-            embed=self.details_embed,
-            view=self,
-        )
-
-    @discord.ui.button(
-        label="☰",
-        style=discord.ButtonStyle.primary,
+        label=TRACKLIST_BUTTON,
+        style=discord.ButtonStyle.secondary,
         row=0,
     )
     async def tracklist_button(
@@ -447,21 +617,16 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        if self.tracklist_embed is None:
-            await interaction.response.send_message(
-                "Brak tracklisty.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.edit_message(
-            embed=self.tracklist_embed,
+        await interaction.response.defer()
+        embed = await build_combined_tracklist_embed(self.item)
+        await interaction.message.edit(
+            embed=embed,
             view=self,
         )
 
     @discord.ui.button(
-        label="✎",
-        style=discord.ButtonStyle.primary,
+        label=REVIEW_BUTTON,
+        style=discord.ButtonStyle.secondary,
         row=0,
     )
     async def review_button(
@@ -506,48 +671,29 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         )
 
     @discord.ui.button(
-        label="☷",
-        style=discord.ButtonStyle.primary,
+        label=DETAILS_BUTTON,
+        style=discord.ButtonStyle.secondary,
         row=0,
     )
-    async def tracks_button(
+    async def details_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        if self.details_embed is not None:
+            await interaction.response.edit_message(
+                embed=self.details_embed,
+                view=self,
+            )
+            return
+
         await interaction.response.defer()
-
-        extra = await self._load_extra()
-
-        if extra.get(
-            "rate_limited"
-        ):
-            await interaction.followup.send(
-                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. "
-                "Spróbuj ponownie za chwilę.",
-                ephemeral=True,
-            )
-            return
-
-        if _track_detail_temporarily_unavailable(extra):
-            await _send_tracks_unavailable(interaction)
-            return
-
-        if not extra.get(
-            "has_track_ratings"
-        ):
-            await interaction.followup.send(
-                "Ta ocena nie ma ocen tracklisty.",
-                ephemeral=True,
-            )
-            return
-
+        embed = await build_release_details_embed(
+            self.item,
+            username=self.username,
+        )
         await interaction.message.edit(
-            embed=build_track_ratings_embed(
-                self.username,
-                self.item,
-                extra,
-            ),
+            embed=embed,
             view=self,
         )
 
@@ -614,6 +760,14 @@ class MultiRatingView(TimedDisableView):
             )
         )
         self._refresh_detail_buttons()
+        _order_action_buttons(
+            self,
+            self.artist_button,
+            self.details_button,
+            self.main_button,
+            self.tracklist_button,
+            self.review_button,
+        )
 
     def _refresh_detail_buttons(self):
         item = (
@@ -621,24 +775,14 @@ class MultiRatingView(TimedDisableView):
             if self.items
             else {}
         )
-
-        _set_button_visible(
-            self,
+        _set_button_enabled(self.artist_button, _artist_action_available(item))
+        _set_button_enabled(self.main_button, bool(self.main_embeds))
+        _set_button_enabled(self.tracklist_button, _release_action_available(item))
+        _set_button_enabled(
             self.review_button,
-            _has_review_available(
-                item,
-                self._selected_extra,
-            ),
+            _has_review_available(item, self._selected_extra),
         )
-
-        _set_button_visible(
-            self,
-            self.tracks_button,
-            _has_track_ratings_available(
-                item,
-                self._selected_extra,
-            ),
-        )
+        _set_button_enabled(self.details_button, _release_action_available(item))
 
     async def _extra(self):
         if self._selected_extra is not None:
@@ -659,11 +803,23 @@ class MultiRatingView(TimedDisableView):
 
         return extra
 
-    @discord.ui.button(label="🏠︎", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label=ARTIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
+    async def artist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        item = self.items[self.selected_index] if self.items else {}
+        await _show_artist_command(interaction, item)
+
+    @discord.ui.button(label=HOME_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embeds=self.main_embeds, view=self)
 
-    @discord.ui.button(label="✎", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label=TRACKLIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
+    async def tracklist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        item = self.items[self.selected_index] if self.items else {}
+        await interaction.response.defer()
+        embed = await build_combined_tracklist_embed(item)
+        await interaction.message.edit(embeds=[embed], view=self)
+
+    @discord.ui.button(label=REVIEW_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         extra = await self._extra()
@@ -689,29 +845,13 @@ class MultiRatingView(TimedDisableView):
             view=self,
         )
 
-    @discord.ui.button(label="☷", style=discord.ButtonStyle.secondary, row=0)
-    async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label=DETAILS_BUTTON, style=discord.ButtonStyle.secondary, row=0)
+    async def details_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        item = self.items[self.selected_index] if self.items else {}
         await interaction.response.defer()
-        extra = await self._extra()
-
-        if extra.get("rate_limited"):
-            await interaction.followup.send(
-                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
-                ephemeral=True,
-            )
-            return
-
-        if _track_detail_temporarily_unavailable(extra):
-            await _send_tracks_unavailable(interaction)
-            return
-
-        if not extra.get("has_track_ratings"):
-            await interaction.followup.send("Wybrana ocena nie ma ocen tracklisty.", ephemeral=True)
-            return
-
-        item = self.items[self.selected_index]
+        embed = await build_release_details_embed(item, username=self.username)
         await interaction.message.edit(
-            embeds=[build_track_ratings_embed(self.username, item, extra)],
+            embeds=[embed],
             view=self,
         )
 
@@ -734,11 +874,11 @@ class UserRatingSelect(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="Wybierz użytkownika",
+            placeholder="Wybierz pozycję",
             options=options,
             min_values=1,
             max_values=1,
-            row=0,
+            row=1,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -779,6 +919,14 @@ class AlbumRatingView(TimedDisableView):
             )
 
         self._refresh_detail_buttons()
+        _order_action_buttons(
+            self,
+            self.artist_button,
+            self.details_button,
+            self.main_button,
+            self.tracklist_button,
+            self.review_button,
+        )
 
     def _selected_rating_info(self) -> dict:
         if not self.selected_username:
@@ -791,23 +939,22 @@ class AlbumRatingView(TimedDisableView):
 
     def _refresh_detail_buttons(self):
         info = self._selected_rating_info()
-
-        _set_button_visible(
-            self,
-            self.review_button,
-            _has_review_available(
-                info,
-                info,
-            ),
+        _set_button_enabled(
+            self.artist_button,
+            _artist_action_available(self.release_item),
         )
-
-        _set_button_visible(
-            self,
-            self.tracks_button,
-            _has_track_ratings_available(
-                info,
-                info,
-            ),
+        _set_button_enabled(self.main_button, True)
+        _set_button_enabled(
+            self.tracklist_button,
+            _release_action_available(self.release_item),
+        )
+        _set_button_enabled(
+            self.review_button,
+            bool(self.selected_username) and _has_review_available(info, info),
+        )
+        _set_button_enabled(
+            self.details_button,
+            _release_action_available(self.release_item),
         )
 
     async def _extra_for_selected(self) -> dict:
@@ -872,11 +1019,21 @@ class AlbumRatingView(TimedDisableView):
 
         return extra
 
-    @discord.ui.button(label="🏠︎", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label=ARTIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
+    async def artist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _show_artist_command(interaction, self.release_item)
+
+    @discord.ui.button(label=HOME_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=self.main_embed, view=self)
 
-    @discord.ui.button(label="✎", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label=TRACKLIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
+    async def tracklist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        embed = await build_combined_tracklist_embed(self.release_item)
+        await interaction.message.edit(embed=embed, view=self)
+
+    @discord.ui.button(label=REVIEW_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_username:
             await interaction.response.send_message("Brak użytkowników w configu.", ephemeral=True)
@@ -908,76 +1065,114 @@ class AlbumRatingView(TimedDisableView):
             view=self,
         )
 
-    @discord.ui.button(label="☷", style=discord.ButtonStyle.secondary, row=0)
-    async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.selected_username:
-            await interaction.response.send_message("Brak użytkowników w configu.", ephemeral=True)
-            return
-
+    @discord.ui.button(label=DETAILS_BUTTON, style=discord.ButtonStyle.secondary, row=0)
+    async def details_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
-        extra = await self._extra_for_selected()
-
-        if extra.get("rate_limited"):
-            await interaction.followup.send(
-                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
-                ephemeral=True,
-            )
-            return
-
-        if _track_detail_temporarily_unavailable(extra):
-            await _send_tracks_unavailable(interaction)
-            return
-
-        if not extra.get("has_track_ratings"):
-            await interaction.followup.send("Ten użytkownik nie ma ocen tracklisty.", ephemeral=True)
-            return
-
-        item = dict(self.release_item)
-        item["score"] = extra.get("score")
-        item["date"] = extra.get("date")
+        embed = await build_release_details_embed(self.release_item)
         await interaction.message.edit(
-            embed=build_track_ratings_embed(self.selected_username, item, extra),
+            embed=embed,
             view=self,
         )
 
 
-class ProfileRatingSelect(discord.ui.Select):
-    def __init__(self, owner, page_items: list[dict]):
-        self.owner = owner
-        options = []
+def _normalize_profile_favorite(item: dict) -> dict:
+    normalized = dict(item or {})
+    item_type = str(
+        normalized.get("type") or normalized.get("item_type") or "album"
+    ).casefold()
+    if item_type == "artist":
+        name = normalized.get("name") or normalized.get("artist")
+        normalized.update(
+            {
+                "_position_kind": "favorite_artist",
+                "name": name,
+                "artist": name,
+                "artist_url": normalized.get("url"),
+            }
+        )
+        return normalized
 
-        for index, item in enumerate(page_items):
+    normalized["_position_kind"] = "favorite_album"
+    normalized.setdefault("album", normalized.get("name"))
+    album_id = normalized.get("album_id") or aoty.extract_album_id(
+        normalized.get("url")
+    )
+    if album_id:
+        normalized["album_id"] = str(album_id)
+    return normalized
+
+
+class ProfilePositionSelect(discord.ui.Select):
+    def __init__(self, owner):
+        self.owner = owner
+        options: list[discord.SelectOption] = []
+        page_start = owner.page_index * 5
+
+        for offset, item in enumerate(owner.page_items()):
+            absolute_index = page_start + offset
             artist = display_romanized_name(item.get("artist") or "?")
             album = display_romanized_name(item.get("album") or "?")
             options.append(
                 discord.SelectOption(
                     label=f"{artist} — {album}"[:100],
-                    value=str(index),
-                    description=f"{item.get('score') or 'NR'} {rating_flags_text(item)}".strip()[:100],
+                    value=f"rating:{absolute_index}",
+                    description=(
+                        f"Ocena • {item.get('score') or 'NR'} "
+                        f"{rating_flags_text(item)}"
+                    ).strip()[:100],
+                    default=(
+                        owner.selected_source == "rating"
+                        and owner.selected_index == absolute_index
+                    ),
+                )
+            )
+
+        # Five ratings + up to twenty favorites fit Discord's 25-option limit.
+        for favorite_index, item in enumerate(owner.favorites[:20]):
+            is_artist = item.get("_position_kind") == "favorite_artist"
+            if is_artist:
+                label = display_romanized_name(item.get("name") or "Nieznany artysta")
+                description = "Favorite Artist"
+            else:
+                artist = display_romanized_name(item.get("artist") or "?")
+                album = display_romanized_name(item.get("album") or "Nieznane wydanie")
+                label = f"{artist} — {album}" if item.get("artist") else album
+                description = "Favorite Album"
+            options.append(
+                discord.SelectOption(
+                    label=f"⭐ {label}"[:100],
+                    value=f"favorite:{favorite_index}",
+                    description=description,
+                    default=(
+                        owner.selected_source == "favorite"
+                        and owner.selected_index == favorite_index
+                    ),
                 )
             )
 
         super().__init__(
             placeholder="Wybierz pozycję",
-            options=options or [discord.SelectOption(label="Brak ocen", value="0")],
+            options=options or [discord.SelectOption(label="Brak pozycji", value="none")],
             min_values=1,
             max_values=1,
-            disabled=not bool(page_items),
+            disabled=not bool(options),
             row=1,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        self.owner.selected_index = int(self.values[0])
+        source, _, raw_index = self.values[0].partition(":")
+        if source not in {"rating", "favorite"} or not raw_index.isdigit():
+            await interaction.response.defer()
+            return
+        self.owner.selected_source = source
+        self.owner.selected_index = int(raw_index)
         self.owner._selected_extra = None
         self.owner._rebuild_components()
-
-        await interaction.response.edit_message(
-            view=self.owner,
-        )
+        await interaction.response.edit_message(view=self.owner)
 
 
 class ProfilePagerView(TimedDisableView):
-    """Up to 10 pages of five profile ratings, with dynamic arrows."""
+    """Profile paging plus shared actions for ratings and favorites."""
 
     def __init__(
         self,
@@ -985,13 +1180,19 @@ class ProfilePagerView(TimedDisableView):
         username: str,
         ratings: list[dict],
         build_page_embed: Callable[[int], discord.Embed],
+        favorites: list[dict] | None = None,
         timeout: float = VIEW_TIMEOUT_SECONDS,
     ):
         super().__init__(timeout=timeout)
         self.username = username
-        self.ratings = ratings[:50]
+        self.ratings = [dict(item) for item in ratings[:50]]
+        self.favorites = [
+            _normalize_profile_favorite(item)
+            for item in (favorites or [])
+        ]
         self.build_page_embed = build_page_embed
         self.page_index = 0
+        self.selected_source = "rating" if self.ratings else "favorite"
         self.selected_index = 0
         self._selected_extra = None
         self._rebuild_components()
@@ -1006,6 +1207,15 @@ class ProfilePagerView(TimedDisableView):
         start = self.page_index * 5
         return self.ratings[start:start + 5]
 
+    def _selected_item(self) -> dict | None:
+        if self.selected_source == "favorite":
+            if not self.favorites:
+                return None
+            return self.favorites[min(self.selected_index, len(self.favorites) - 1)]
+        if not self.ratings:
+            return None
+        return self.ratings[min(self.selected_index, len(self.ratings) - 1)]
+
     def _rebuild_components(self):
         self.clear_items()
 
@@ -1013,51 +1223,43 @@ class ProfilePagerView(TimedDisableView):
             previous = discord.ui.Button(label="←", style=discord.ButtonStyle.secondary, row=0)
             previous.callback = self._previous
             self.add_item(previous)
-
         if self.page_index < self.total_pages - 1:
             next_button = discord.ui.Button(label="→", style=discord.ButtonStyle.secondary, row=0)
             next_button.callback = self._next
             self.add_item(next_button)
 
-        self.add_item(ProfileRatingSelect(self, self.page_items()))
-
-        main = discord.ui.Button(label="🏠︎", style=discord.ButtonStyle.secondary, row=2)
-        main.callback = self._main
-        self.add_item(main)
-
+        self.add_item(ProfilePositionSelect(self))
         selected_item = self._selected_item() or {}
+        is_rating = self.selected_source == "rating" and bool(selected_item)
 
-        if _has_review_available(
-            selected_item,
-            self._selected_extra,
-        ):
-            review = discord.ui.Button(
-                label="✎",
+        actions = [
+            (ARTIST_BUTTON, self._artist, _artist_action_available(selected_item)),
+            (DETAILS_BUTTON, self._details, _release_action_available(selected_item)),
+            (HOME_BUTTON, self._main, True),
+            (TRACKLIST_BUTTON, self._tracklist, _release_action_available(selected_item)),
+            (
+                REVIEW_BUTTON,
+                self._review,
+                is_rating and _has_review_available(selected_item, self._selected_extra),
+            ),
+        ]
+        for label, callback, enabled in actions:
+            button = discord.ui.Button(
+                label=label,
                 style=discord.ButtonStyle.secondary,
                 row=2,
+                disabled=not enabled,
             )
-            review.callback = self._review
-            self.add_item(review)
-
-        if _has_track_ratings_available(
-            selected_item,
-            self._selected_extra,
-        ):
-            tracks = discord.ui.Button(
-                label="☷",
-                style=discord.ButtonStyle.secondary,
-                row=2,
-            )
-            tracks.callback = self._tracks
-            self.add_item(tracks)
+            button.callback = callback
+            self.add_item(button)
 
     async def _previous(self, interaction: discord.Interaction):
         if self.page_index <= 0:
             await interaction.response.defer()
             return
-
         self.page_index -= 1
-        self.selected_index = 0
+        self.selected_source = "rating"
+        self.selected_index = self.page_index * 5
         self._selected_extra = None
         self._rebuild_components()
         await interaction.response.edit_message(
@@ -1069,9 +1271,9 @@ class ProfilePagerView(TimedDisableView):
         if self.page_index >= self.total_pages - 1:
             await interaction.response.defer()
             return
-
         self.page_index += 1
-        self.selected_index = 0
+        self.selected_source = "rating"
+        self.selected_index = self.page_index * 5
         self._selected_extra = None
         self._rebuild_components()
         await interaction.response.edit_message(
@@ -1085,85 +1287,63 @@ class ProfilePagerView(TimedDisableView):
             view=self,
         )
 
-    def _selected_item(self) -> dict | None:
-        items = self.page_items()
-        if not items:
-            return None
-        index = min(self.selected_index, len(items) - 1)
-        return items[index]
-
     async def _extra(self, item: dict) -> dict:
         if self._selected_extra is not None:
             return self._selected_extra
-
-        extra = await _load_live_extra(
-            self.username,
-            item,
-            fallback_limit=60,
-        )
-
-        if (
-            not extra.get("rate_limited")
-            and not extra.get("detail_incomplete")
-        ):
+        extra = await _load_live_extra(self.username, item, fallback_limit=60)
+        if not extra.get("rate_limited") and not extra.get("detail_incomplete"):
             self._selected_extra = extra
-
         return extra
+
+    async def _artist(self, interaction: discord.Interaction):
+        await _show_artist_command(interaction, self._selected_item() or {})
+
+    async def _tracklist(self, interaction: discord.Interaction):
+        item = self._selected_item()
+        if not item:
+            await interaction.response.send_message("Brak wybranej pozycji.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        embed = await build_combined_tracklist_embed(item)
+        await interaction.message.edit(embed=embed, view=self)
+
+    # Compatibility name for older tests/callers; this is intentionally the
+    # same combined public + configured-user tracklist now.
+    async def _tracks(self, interaction: discord.Interaction):
+        await self._tracklist(interaction)
 
     async def _review(self, interaction: discord.Interaction):
         item = self._selected_item()
-        if not item:
-            await interaction.response.send_message("Brak oceny na tej stronie.", ephemeral=True)
+        if not item or self.selected_source != "rating":
+            await interaction.response.send_message("Brak recenzji dla tej pozycji.", ephemeral=True)
             return
-
         await interaction.response.defer()
         extra = await self._extra(item)
-
         if extra.get("rate_limited"):
             await interaction.followup.send(
                 "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
                 ephemeral=True,
             )
             return
-
         if _review_detail_temporarily_unavailable(extra):
             await _send_review_unavailable(interaction)
             return
-
         if not extra.get("review_text"):
-            await interaction.followup.send("Wybrana ocena nie ma recenzji.", ephemeral=True)
+            await interaction.followup.send("Wybrana pozycja nie ma recenzji.", ephemeral=True)
             return
-
         await interaction.message.edit(
             embed=build_review_embed(self.username, item, extra),
             view=self,
         )
 
-    async def _tracks(self, interaction: discord.Interaction):
+    async def _details(self, interaction: discord.Interaction):
         item = self._selected_item()
         if not item:
-            await interaction.response.send_message("Brak oceny na tej stronie.", ephemeral=True)
+            await interaction.response.send_message("Brak wybranej pozycji.", ephemeral=True)
             return
-
         await interaction.response.defer()
-        extra = await self._extra(item)
-
-        if extra.get("rate_limited"):
-            await interaction.followup.send(
-                "⚠️ AOTY chwilowo ogranicza liczbę zapytań. Spróbuj ponownie za chwilę.",
-                ephemeral=True,
-            )
-            return
-
-        if _track_detail_temporarily_unavailable(extra):
-            await _send_tracks_unavailable(interaction)
-            return
-
-        if not extra.get("has_track_ratings"):
-            await interaction.followup.send("Wybrana ocena nie ma ocen tracklisty.", ephemeral=True)
-            return
-
-        await interaction.message.edit(
-            embed=build_track_ratings_embed(self.username, item, extra),
-            view=self,
+        embed = await build_release_details_embed(
+            item,
+            username=self.username if self.selected_source == "rating" else None,
         )
+        await interaction.message.edit(embed=embed, view=self)

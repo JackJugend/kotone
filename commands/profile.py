@@ -184,6 +184,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         view = ProfilePagerView(
             username=username,
             ratings=recent_ratings,
+            favorites=variables.favorites,
             build_page_embed=build_page_embed,
         )
 

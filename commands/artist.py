@@ -885,6 +885,27 @@ class ArtistSortView(TimedDisableView):
         )
 
 
+async def build_artist_response(
+    artist: str,
+) -> tuple[discord.Embed, ArtistSortView] | None:
+    """Build exactly the same interactive artist result used by /artist."""
+
+    artist_info, discography = await DATA.get_artist_discography(artist)
+    if not artist_info or not discography:
+        return None
+
+    releases = list(discography.get("releases", []))
+    if not releases:
+        return None
+
+    view = ArtistSortView(
+        discography=discography,
+        releases=releases,
+    )
+    embed = await view.build_embed()
+    return embed, view
+
+
 def setup_artist_command(
     tree: discord.app_commands.CommandTree
 ):
@@ -946,11 +967,8 @@ def setup_artist_command(
         await interaction.response.defer()
 
         try:
-            # The service loads SQLite first, attempts a live supplement, and
-            # falls back to the durable discography during AOTY outages.
-            artist_info, discography = await DATA.get_artist_discography(artist)
-
-            if not artist_info or not discography:
+            result = await build_artist_response(artist)
+            if result is None:
                 await interaction.followup.send(
                     f"❌ Nie znaleziono artysty **{artist}** na AOTY ani w SQLite."
                 )
@@ -974,33 +992,7 @@ def setup_artist_command(
             )
             return
 
-        releases = list(
-            discography.get(
-                "releases",
-                [],
-            )
-        )
-
-        if not releases:
-            await interaction.followup.send(
-                f"❌ Nie znaleziono wydań artysty "
-                f"**{discography['artist']}**."
-            )
-            return
-
-        view = ArtistSortView(
-            discography=discography,
-            releases=releases,
-        )
-
-        try:
-            embed = await view.build_embed()
-
-        except aoty.AOTYRateLimit:
-            await interaction.followup.send(
-                "⚠️ AOTY chwilowo ogranicza liczbę zapytań."
-            )
-            return
+        embed, view = result
 
         message = await interaction.followup.send(
             embed=embed,
