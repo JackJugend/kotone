@@ -51,7 +51,7 @@
         "release_detail_ttl": 43200,
         "local_database_backup_interval": 86400,
         "profile_rating_archive_interval": 86400,
-        "profile_rating_archive_formats_per_cycle": 1,
+        "profile_rating_archive_formats_per_cycle": 3,
         "profile_rating_archive_limit_per_format": 2000
     }
 }
