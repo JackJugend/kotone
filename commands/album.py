@@ -231,6 +231,12 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             color=score_color(variables.aoty_user_score),
         )
 
+        embed.add_field(
+                name="AOTY",
+                value=f"\{score_icon(variables.aoty_user_score)} {variables.aoty_user_score}",
+                inline=True,
+        )
+
         # Pełny zapis SQLite jest źródłem domyślnym. AOTY jest używane tylko,
         # gdy danego usera/wydania nie ma jeszcze w trwałym cache.
         rating_infos: dict[str, dict] = {}
@@ -262,11 +268,6 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             else:
                 rating_value = f"— **NR**{flags_text}"
 
-            embed.add_field(
-                name="AOTY",
-                value=f"\{score_icon(variables.aoty_user_score)}",
-                inline=True,
-            )
             embed.add_field(
                 name=username,
                 value=rating_value,
