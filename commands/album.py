@@ -211,7 +211,17 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             release_item,
         )
 
-        release_item["release_format"] = variables.album_format
+        # Keep the selected card hydrated for every shared action tab.  The
+        # main embed and its buttons must see the same SQLite-first values.
+        release_item.update(
+            {
+                "artist": variables.artist,
+                "album": variables.album,
+                "url": variables.album_url or release_item.get("url"),
+                "cover": variables.cover or release_item.get("cover"),
+                "release_format": variables.album_format,
+            }
+        )
         artist_url = (
             variables.artist_url
             or discography.get("url")
@@ -221,6 +231,13 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         if artist_url:
             release_item["artist_url"] = artist_url
 
+        secondary_genres_display = (
+            variables.secondary_genres_text
+            if variables.secondary_genres
+            else " "
+        )
+        vibes_display = variables.vibes_text if variables.vibes else " "
+
         embed = discord.Embed(
             title=(
                 f"**{variables.display_album}** "
@@ -228,8 +245,8 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             ),
             url=variables.url,
             description=f"{variables.all_genres_text}\n"
-                        f"{variables.secondary_genres_display}\n"
-                        f"{variables.vibes_display}",
+                        f"{secondary_genres_display}\n"
+                        f"{vibes_display}",
             color=score_color(variables.aoty_user_score),
         )
 
@@ -247,12 +264,12 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             try:
                 rating_info = await DATA.get_user_rating_for_album(
                     username,
-                    release["album_id"],
-                    release["url"],
+                    release_item["album_id"],
+                    release_item.get("url"),
                     variables.album_format,
                     fallback_limit=20,
                     user_release_url=None,
-                    album_title=release.get("title"),
+                    album_title=variables.album,
                     require_detail=False,
                 )
             except aoty.AOTYRateLimit:
@@ -266,7 +283,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             flags_text = f"  {flags}" if flags else ""
 
             if rating is not None:
-                rating_value = f"\\{score_icon(rating)} {rating}{flags_text}"
+                rating_value = f"{score_icon(rating)} {rating}{flags_text}"
             else:
                 rating_value = f"— **NR**{flags_text}"
 
