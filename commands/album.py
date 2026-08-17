@@ -118,7 +118,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
     @tree.command(
         name="album",
-        description="Pokazuje wydanie z AOTY i oceny userów z configu",
+        description="Pokazuje wydanie z AOTY.",
     )
     @discord.app_commands.describe(
         artist="Artysta na AOTY",
@@ -264,7 +264,11 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             embed.set_thumbnail(url=variables.cover)
 
         embed.set_footer(
-            text=f"•  {variables.release_date}  •  {variables.album_format}"
+            text=(
+                f"{variables.album_format}  •  {variables.release_date}  •  "
+                f"{variables.labels_text}{footer_flags}"
+            ),
+            icon_url=AOTY_ICON_ATTACHMENT,
         )
 
         view = AlbumRatingView(
