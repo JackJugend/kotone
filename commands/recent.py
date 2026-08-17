@@ -10,6 +10,7 @@ from shared import (
     rating_flags_text,
     score_color,
     score_icon,
+    set_aoty_footer,
     username_autocomplete,
 )
 from views import MultiRatingView
@@ -60,8 +61,9 @@ def _rating_embed(username, item, avatar, variables):
     if variables.cover:
         embed.set_thumbnail(url=variables.cover)
 
-    embed.set_footer(
-        text=f"•  {variables.date}  •  {variables.album_format}{footer_flags}"
+    set_aoty_footer(
+        embed,
+        f"•  {variables.date}  •  {variables.album_format}{footer_flags}",
     )
     return embed
 

@@ -5,12 +5,13 @@ import requests
 
 import aoty
 from services import DATA
-from settings import AOTY_ICON_ATTACHMENT, RATING_FORMATS
+from settings import RATING_FORMATS
 from shared import (
     load_release_variables,
     rating_flags_text,
     score_color,
     score_icon,
+    set_aoty_footer,
     username_autocomplete,
 )
 from views import SingleRatingView
@@ -203,12 +204,10 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         if variables.cover:
             embed.set_thumbnail(url=variables.cover)
 
-        embed.set_footer(
-            text=(
-                f"{variables.album_format}  •  {variables.release_date}  •  "
-                f"{variables.labels_text}{footer_flags}"
-            ),
-            icon_url=AOTY_ICON_ATTACHMENT,
+        set_aoty_footer(
+            embed,
+            f"{variables.album_format}  •  {variables.release_date}  •  "
+            f"{variables.labels_text}{footer_flags}",
         )
 
 
@@ -293,13 +292,9 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             icon_url=avatar if avatar else None,
         )
 
-        details_embed.set_footer(
-            text=(
-                f"AOTY • "
-                f"{score_icon(variables.score)} "
-                f"{variables.score}"
-            ),
-            icon_url=AOTY_ICON_ATTACHMENT,
+        set_aoty_footer(
+            details_embed,
+            f"AOTY • {score_icon(variables.score)} {variables.score}",
         )
 
         # Dodatkowy tab: publiczna tracklista.
@@ -349,12 +344,9 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             icon_url=avatar if avatar else None,
         )
 
-        tracklist_embed.set_footer(
-            text=(
-                "AOTY track scores • "
-                f"{variables.album_format}"
-            ),
-            icon_url=AOTY_ICON_ATTACHMENT,
+        set_aoty_footer(
+            tracklist_embed,
+            f"AOTY track scores • {variables.album_format}",
         )
 
         view = SingleRatingView(

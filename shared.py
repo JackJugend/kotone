@@ -14,7 +14,16 @@ from typing import Any
 import discord
 
 from display_utils import display_romanized_name
-from settings import USERS
+from settings import AOTY_ICON_ATTACHMENT, USERS
+
+
+def set_aoty_footer(embed: discord.Embed, text: str) -> None:
+    """Apply Kotone's shared AOTY footer asset consistently."""
+
+    embed.set_footer(
+        text=str(text),
+        icon_url=AOTY_ICON_ATTACHMENT,
+    )
 
 
 def score_color(score: Any) -> discord.Color:

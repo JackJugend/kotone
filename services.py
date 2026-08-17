@@ -65,6 +65,99 @@ class DataService:
     def is_monitored(self, username: str) -> bool:
         return DB.is_monitored(username)
 
+    def _rating_with_cached_detail(
+        self,
+        username: str,
+        item: dict | None,
+    ) -> dict:
+        """Overlay every available SQLite detail onto a command rating.
+
+        Rating-list rows intentionally stay compact in SQLite queries. Commands
+        should nevertheless receive cached review text, likes and scored Track
+        Ratings without making a live request. A newer live/list value still
+        wins for ordinary card fields such as score and date.
+        """
+
+        item = dict(item or {})
+        album_id = str(item.get("album_id") or "").strip()
+        if not album_id or not DB.is_monitored(username):
+            return item
+
+        cached = DB.get_rating_detail(username, album_id)
+        if cached is None:
+            return item
+
+        merged = dict(cached)
+        merged.update(
+            {
+                key: value
+                for key, value in item.items()
+                if value is not None
+            }
+        )
+
+        # Compact cards do not contain these rich values. Never let an absent
+        # list field erase detail that has already been persisted.
+        for key in ("review_url", "review_text"):
+            if not item.get(key) and cached.get(key):
+                merged[key] = cached[key]
+        if not item.get("track_ratings") and cached.get("track_ratings"):
+            merged["track_ratings"] = list(cached["track_ratings"])
+
+        # Once a detail page established a baseline, its flags are more
+        # authoritative than coarse rating-card markers.
+        if cached.get("detail_synced_at") is not None:
+            for key in ("has_review", "has_track_ratings", "liked"):
+                merged[key] = bool(cached.get(key))
+            merged["detail_complete"] = bool(cached.get("detail_complete"))
+            merged["detail_incomplete"] = bool(cached.get("detail_incomplete"))
+
+        merged["source"] = item.get("source") or cached.get("source")
+        return merged
+
+    def _profile_with_cached_details(
+        self,
+        username: str,
+        profile: dict | None,
+    ) -> dict | None:
+        if profile is None or not DB.is_monitored(username):
+            return profile
+        result = dict(profile)
+        result["recent_ratings"] = [
+            self._rating_with_cached_detail(username, item)
+            for item in result.get("recent_ratings") or []
+        ]
+        return result
+
+    def release_with_cached_details(self, item: dict | None) -> dict:
+        """Merge the public release cache into a compact release card."""
+
+        item = dict(item or {})
+        album_id = str(item.get("album_id") or "").strip()
+        cached = DB.get_release_details(album_id) if album_id else None
+        if cached is None:
+            return item
+
+        merged = dict(cached)
+        merged.update(
+            {
+                key: value
+                for key, value in item.items()
+                if value is not None
+            }
+        )
+        title = item.get("title") or item.get("album") or cached.get("album")
+        merged["title"] = title
+        merged["album"] = title
+        merged["release_format"] = (
+            item.get("release_format")
+            or item.get("album_format")
+            or cached.get("album_format")
+        )
+        merged["album_format"] = merged["release_format"]
+        merged["source"] = item.get("source") or "SQLite cache"
+        return merged
+
     def search_cached_artists(self, query: str, limit: int = 10) -> list[dict]:
         """Rank configured-user artists already stored in SQLite."""
 
@@ -190,6 +283,11 @@ class DataService:
                 artist_info["url"],
             )
             if discography and discography.get("releases"):
+                discography = dict(discography)
+                discography["releases"] = [
+                    self.release_with_cached_details(item)
+                    for item in discography.get("releases") or []
+                ]
                 return artist_info, discography
         except Exception:
             if cached_discography is not None:
@@ -378,7 +476,10 @@ class DataService:
                 recent_limit,
             )
 
-        cached = DB.get_profile(username, recent_limit=recent_limit)
+        cached = self._profile_with_cached_details(
+            username,
+            DB.get_profile(username, recent_limit=recent_limit),
+        )
         timestamps = DB.sync_timestamps(username)
         fresh = self._age(timestamps.get("profile_synced_at")) <= PROFILE_SYNC_INTERVAL
 
@@ -387,7 +488,10 @@ class DataService:
 
         try:
             await self.sync_profile(username, priority=PRIORITY_INTERACTIVE)
-            refreshed = DB.get_profile(username, recent_limit=recent_limit)
+            refreshed = self._profile_with_cached_details(
+                username,
+                DB.get_profile(username, recent_limit=recent_limit),
+            )
             if refreshed is not None:
                 return refreshed
         except (
@@ -549,11 +653,14 @@ class DataService:
         if format_key and format_key != "all":
             format_label = RATING_FORMATS.get(format_key, {}).get("label")
 
-        cached = DB.get_recent_ratings(
-            username,
-            count,
-            release_format=format_label,
-        )
+        cached = [
+            self._rating_with_cached_detail(username, item)
+            for item in DB.get_recent_ratings(
+                username,
+                count,
+                release_format=format_label,
+            )
+        ]
         timestamps = DB.sync_timestamps(username)
         # The monitor is the primary live updater. Commands normally hit only
         # SQLite and therefore do not multiply AOTY traffic.
@@ -593,7 +700,10 @@ class DataService:
             # a new persistence/notification decision. Prefer SQLite when it
             # already has the configured user's durable state.
             if getattr(live, "stale", False):
-                return cached or live[:count]
+                return cached or [
+                    self._rating_with_cached_detail(username, item)
+                    for item in live[:count]
+                ]
 
             if not live and cached:
                 # Empty partial reads are not authoritative for removals; the
@@ -608,7 +718,10 @@ class DataService:
                 list(live),
                 requested_format_key=format_key,
             )
-            return live[:count]
+            return [
+                self._rating_with_cached_detail(username, item)
+                for item in live[:count]
+            ]
         except (
             aoty.AOTYRateLimit,
             aoty.AOTYPageIncomplete,
@@ -619,7 +732,14 @@ class DataService:
             raise
 
     def cached_rating(self, username: str, album_id: str) -> dict | None:
-        return DB.get_rating(username, album_id) if DB.is_monitored(username) else None
+        if not DB.is_monitored(username):
+            return None
+        cached = DB.get_rating_detail(username, album_id)
+        return (
+            self._rating_with_cached_detail(username, cached)
+            if cached is not None
+            else None
+        )
 
     async def get_user_rating_for_album(
         self,
@@ -637,11 +757,10 @@ class DataService:
 
         monitored = DB.is_monitored(username)
         if monitored:
-            cached = (
-                DB.get_rating_detail(username, album_id)
-                if require_detail
-                else DB.get_rating(username, album_id)
-            )
+            # Even compact command cards receive every detail already stored in
+            # SQLite. ``require_detail`` only decides whether missing/stale
+            # detail should trigger a live refresh.
+            cached = DB.get_rating_detail(username, album_id)
         else:
             cached = None
 

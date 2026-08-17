@@ -7,7 +7,6 @@ import requests
 import aoty
 
 from services import DATA
-from settings import AOTY_ICON_ATTACHMENT, RATING_FORMATS
 from display_utils import display_romanized_name
 from settings import USERS
 from shared import (
@@ -15,9 +14,9 @@ from shared import (
     rating_flags_text,
     score_color,
     score_icon,
+    set_aoty_footer,
 )
 from views import AlbumRatingView
-from views import SingleRatingView
 
 DISCOGRAPHY_CACHE_TTL = 900
 
@@ -225,8 +224,8 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             color=score_color(variables.aoty_user_score),
         )
 
-        # Zawsze live. Każda pozycja zawiera też informację o review,
-        # track ratings i like, jeśli AOTY udostępnia ją na stronie usera.
+        # Pełny zapis SQLite jest źródłem domyślnym. AOTY jest używane tylko,
+        # gdy danego usera/wydania nie ma jeszcze w trwałym cache.
         rating_infos: dict[str, dict] = {}
 
         for username in USERS[:25]:
@@ -266,12 +265,10 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         if variables.cover:
             embed.set_thumbnail(url=variables.cover)
 
-        embed.set_footer(
-            text=(
-                f"{variables.album_format}  •  {variables.release_date}  •  "
-                f"{variables.labels_text}{footer_flags}"
-            ),
-            icon_url=AOTY_ICON_ATTACHMENT,
+        set_aoty_footer(
+            embed,
+            f"{variables.album_format}  •  {variables.release_date}  •  "
+            f"{variables.labels_text}",
         )
 
         view = AlbumRatingView(

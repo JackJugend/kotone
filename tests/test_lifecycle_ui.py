@@ -42,6 +42,7 @@ try:
     import background as background_module  # noqa: E402
     import bot as bot_module  # noqa: E402
     import health as health_module  # noqa: E402
+    import shared as shared_module  # noqa: E402
     import views as views_module  # noqa: E402
 except ModuleNotFoundError as exc:  # pragma: no cover - exercised in minimal local runtime
     PROJECT_IMPORT_ERROR = exc
@@ -232,6 +233,22 @@ class BackgroundFairnessTests(unittest.IsolatedAsyncioTestCase):
             await worker._run_once()
 
         self.assertEqual(enrich_calls, ["a", "b", "c"])
+
+
+@unittest.skipIf(
+    PROJECT_IMPORT_ERROR is not None,
+    f"project dependencies unavailable: {PROJECT_IMPORT_ERROR}",
+)
+class SharedAssetTests(unittest.TestCase):
+    def test_aoty_footer_asset_is_applied_by_shared_helper(self):
+        embed = discord.Embed()
+        shared_module.set_aoty_footer(embed, "SQLite cache")
+
+        self.assertEqual(embed.footer.text, "SQLite cache")
+        self.assertEqual(
+            embed.footer.icon_url,
+            shared_module.AOTY_ICON_ATTACHMENT,
+        )
 
 
 @unittest.skipIf(

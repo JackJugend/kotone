@@ -285,6 +285,107 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["source"], "SQLite cache")
         self.assertEqual(result["track_ratings"][0]["score"], "87")
 
+    async def test_compact_commands_receive_every_cached_rating_detail(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "full-command-cache",
+                "score": "93",
+                "artist": "Artist",
+                "album": "Full Cache",
+                "has_review": True,
+                "has_track_ratings": True,
+                "liked": True,
+            },
+        )
+        self.db.save_rating_detail(
+            "enso",
+            "full-command-cache",
+            {
+                "review_text": "Cached review",
+                "has_review": True,
+                "has_track_ratings": True,
+                "liked": True,
+                "track_ratings": [
+                    {"number": 1, "title": "Opening", "score": "96"},
+                ],
+                "detail_complete": True,
+            },
+        )
+        self.db.mark_sync_success("enso")
+        self.db.save_profile(
+            "enso",
+            {
+                "username": "enso",
+                "url": "https://www.albumoftheyear.org/user/enso/",
+                "favorites": [],
+            },
+        )
+        self.service._age = lambda _timestamp: 0.0
+
+        original_recent = aoty.get_recent_ratings
+        original_detail = aoty.get_user_rating_for_album
+        aoty.get_recent_ratings = lambda *_args, **_kwargs: self.fail(
+            "fresh configured-user commands must not query AOTY"
+        )
+        aoty.get_user_rating_for_album = lambda *_args, **_kwargs: self.fail(
+            "compact detail must come from SQLite"
+        )
+        try:
+            recent = await self.service.get_recent_ratings("enso", 1)
+            profile = await self.service.get_profile("enso", recent_limit=1)
+            compact = await self.service.get_user_rating_for_album(
+                "enso",
+                "full-command-cache",
+                None,
+                None,
+                require_detail=False,
+            )
+        finally:
+            aoty.get_recent_ratings = original_recent
+            aoty.get_user_rating_for_album = original_detail
+
+        for item in (recent[0], profile["recent_ratings"][0], compact):
+            self.assertEqual(item["review_text"], "Cached review")
+            self.assertTrue(item["liked"])
+            self.assertEqual(item["track_ratings"][0]["score"], "96")
+
+    def test_compact_artist_release_is_enriched_from_public_sqlite_cache(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "cached-release",
+                "score": "88",
+                "artist": "Artist",
+                "album": "Album",
+                "url": "https://www.albumoftheyear.org/album/1-album.php",
+            },
+        )
+        self.db.save_release_details(
+            "cached-release",
+            {
+                "artist": "Artist",
+                "album": "Album",
+                "year": "2025",
+                "labels": ["Cached Label"],
+                "genres": ["Art Pop"],
+                "album_format": "LP",
+            },
+        )
+
+        merged = self.service.release_with_cached_details(
+            {
+                "album_id": "cached-release",
+                "title": "Album",
+                "url": "https://www.albumoftheyear.org/album/1-album.php",
+            }
+        )
+
+        self.assertEqual(merged["year"], "2025")
+        self.assertEqual(merged["labels"], ["Cached Label"])
+        self.assertEqual(merged["genres"], ["Art Pop"])
+        self.assertEqual(merged["album_format"], "LP")
+
     async def test_stale_cached_track_scores_survive_challenge(self):
         self.db.upsert_rating(
             "enso",

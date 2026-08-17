@@ -3,19 +3,9 @@ import requests
 
 import aoty
 from services import DATA
-from settings import AOTY_ICON_ATTACHMENT, RATING_FORMATS
 from display_utils import display_romanized_name
-from settings import USERS
-from shared import (
-    load_release_variables,
-    rating_flags_text,
-    score_color,
-    score_icon,
-)
-from views import AlbumRatingView
-from views import SingleRatingView
 from settings import RATING_FORMATS
-from shared import build_release_variables
+from shared import build_release_variables, set_aoty_footer
 from views import TimedDisableView, VIEW_TIMEOUT_SECONDS
 
 
@@ -777,9 +767,7 @@ class ArtistSortView(TimedDisableView):
                 f"{len(shown)} wydań."
             )
 
-        embed.set_footer(
-            text=footer
-        )
+        set_aoty_footer(embed, footer)
 
         return embed
 

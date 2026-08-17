@@ -6,16 +6,15 @@ import requests
 import aoty
 from services import DATA
 from display_utils import display_romanized_name
-from settings import AOTY_ICON_ATTACHMENT
 from shared import (
     build_profile_variables,
     rating_flags_text,
     score_color,
     score_icon,
+    set_aoty_footer,
     username_autocomplete,
 )
 from views import ProfilePagerView
-from views import AlbumRatingView
 
 
 def _favorite_line(item: dict) -> str:
@@ -175,9 +174,9 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
                 inline=False,
             )
 
-            embed.set_footer(
-                text="AOTY.org • średnia jest przybliżona z Rating Distribution",
-                icon_url=AOTY_ICON_ATTACHMENT,
+            set_aoty_footer(
+                embed,
+                "AOTY.org • średnia jest przybliżona z Rating Distribution",
             )
             return embed
 
