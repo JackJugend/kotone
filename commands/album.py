@@ -215,8 +215,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
         embed = discord.Embed(
             title=(
-                f"{score_icon(variables.aoty_user_score)} "
-                f"{variables.display_artist} • **{variables.display_album}** "
+                f"{variables.display_artist} — **{variables.display_album}** "
                 f"({variables.year})"
             ),
             url=variables.url,
@@ -251,7 +250,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             flags_text = f"  {flags}" if flags else ""
 
             if rating is not None:
-                rating_value = f"{score_icon(rating)} **{rating}**{flags_text}"
+                rating_value = f"\{score_icon(rating)} **{rating}**{flags_text}"
             else:
                 rating_value = f"— **NR**{flags_text}"
 
@@ -261,6 +260,15 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 inline=True,
             )
             await asyncio.sleep(0.15)
+
+        if icon_url:
+            embed.set_author(
+                name=artist_name,
+                url=artist_url,
+                icon_url=artist_url,
+            )
+        else:
+            embed.set_author(name=artist_name)
 
         if variables.cover:
             embed.set_thumbnail(url=variables.cover)
