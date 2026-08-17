@@ -5,7 +5,9 @@ import discord
 import requests
 
 import aoty
+
 from services import DATA
+from settings import AOTY_ICON_ATTACHMENT, RATING_FORMATS
 from display_utils import display_romanized_name
 from settings import USERS
 from shared import (
@@ -15,6 +17,7 @@ from shared import (
     score_icon,
 )
 from views import AlbumRatingView
+from views import SingleRatingView
 
 DISCOGRAPHY_CACHE_TTL = 900
 

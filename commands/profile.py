@@ -15,6 +15,7 @@ from shared import (
     username_autocomplete,
 )
 from views import ProfilePagerView
+from views import AlbumRatingView
 
 
 def _favorite_line(item: dict) -> str:
