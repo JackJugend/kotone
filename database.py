@@ -2272,7 +2272,25 @@ class Database:
         if rating is None:
             return None
 
-        canonical = self._require_monitored(username)
+        rating["track_ratings"] = self.get_user_track_ratings(
+            username,
+            album_id,
+        )
+        rating["source"] = "SQLite cache"
+        rating["detail_incomplete"] = not rating.get("detail_complete", False)
+        return rating
+
+    def get_user_track_ratings(self, username: str, album_id: str) -> list[dict]:
+        """Return stored personal track scores even if the rating card is stale.
+
+        The tracklist UI must be able to render durable ``user_track_ratings``
+        directly; it should not lose them merely because a compact rating card
+        is temporarily incomplete or no longer present in the current list.
+        """
+
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return []
         with self._lock:
             rows = self.connection.execute(
                 """
@@ -2284,7 +2302,7 @@ class Database:
                 (canonical, str(album_id)),
             ).fetchall()
 
-        rating["track_ratings"] = [
+        return [
             {
                 "number": row["track_number"],
                 "title": row["title"],
@@ -2292,9 +2310,6 @@ class Database:
             }
             for row in rows
         ]
-        rating["source"] = "SQLite cache"
-        rating["detail_incomplete"] = not rating.get("detail_complete", False)
-        return rating
 
     # ------------------------------------------------------------------
     # Release cache (only releases belonging to monitored-user ratings)

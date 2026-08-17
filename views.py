@@ -220,8 +220,16 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
 
     for username in USERS[:25]:
         cached = DATA.cached_rating(username, album_id) if album_id else None
+        stored_tracks = (
+            DATA.cached_user_track_ratings(username, album_id)
+            if album_id
+            else []
+        )
         if cached is None:
-            personal[username] = []
+            # Keep the tracklist SQLite-first even if its parent compact card
+            # is stale/missing. This also makes manually recovered rows
+            # visible instead of silently rendering dashes for every user.
+            personal[username] = stored_tracks
             continue
 
         selected = cached
@@ -248,7 +256,12 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
                 )
             except Exception:
                 selected = cached
-        personal[username] = list(selected.get("track_ratings") or [])
+        selected_tracks = list(selected.get("track_ratings") or [])
+        personal[username] = (
+            selected_tracks
+            if selected_tracks or selected.get("detail_complete")
+            else stored_tracks
+        )
 
     personal_maps = {
         username: _rating_track_maps(rows)

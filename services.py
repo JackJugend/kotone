@@ -753,6 +753,13 @@ class DataService:
             else None
         )
 
+    def cached_user_track_ratings(self, username: str, album_id: str) -> list[dict]:
+        """Read durable personal Track Ratings without an AOTY request."""
+
+        if not DB.is_monitored(username):
+            return []
+        return DB.get_user_track_ratings(username, album_id)
+
     def cached_release_details(self, album_id: str) -> dict | None:
         """Return public release detail from SQLite without touching AOTY."""
         return DB.get_release_details(str(album_id or ""))

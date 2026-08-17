@@ -50,13 +50,13 @@ def _rating_embed(username, item, avatar, variables):
 
     if avatar:
         embed.set_author(
-            name=username,
+            name=f"{username}  •  {variables.date}",
             url=f"https://www.albumoftheyear.org/user/{username}",
             icon_url=avatar,
         )
     else:
         embed.set_author(
-            name=username,
+            name=f"{username}  •  {variables.date}",
             url=f"https://www.albumoftheyear.org/user/{username}",
         )
 
