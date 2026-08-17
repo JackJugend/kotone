@@ -8,7 +8,7 @@ The database is intentionally richer than the old data.json state:
 - full profile summary + favorites + rating distribution;
 - all monitored ratings and their flags;
 - review / track-rating details once fetched;
-- score-change history;
+- append-only change history for ratings, reviews, likes, Track Ratings, profile/Favorites;
 - public release metadata only for releases rated by monitored users;
 - sync timestamps/errors so commands can decide whether cached data is fresh.
 
@@ -36,7 +36,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def _json_dump(value) -> str:
@@ -178,6 +178,135 @@ class Database:
         self.connection.execute(
             f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
         )
+
+    def _import_legacy_rating_history_locked(self) -> None:
+        """Copy the old score-only audit trail into the unified history once.
+
+        Existing Railway volumes may already contain rating_history entries.
+        Importing them preserves that history when /history starts reading the
+        new change_history table. A meta flag makes the migration idempotent.
+        """
+        done = self.connection.execute(
+            "SELECT value FROM meta WHERE key = 'change_history_legacy_imported'"
+        ).fetchone()
+        if done and str(done[0]) == "1":
+            return
+
+        rows = self.connection.execute(
+            """
+            SELECT username, album_id, event_type,
+                   old_score, new_score, changed_at
+            FROM rating_history
+            ORDER BY id
+            """
+        ).fetchall()
+
+        event_map = {
+            "new": "rating_added",
+            "score": "score_changed",
+            "removed": "rating_removed",
+            "restored": "rating_restored",
+        }
+
+        for row in rows:
+            event_type = event_map.get(str(row["event_type"]), "rating_changed")
+            self.connection.execute(
+                """
+                INSERT INTO change_history(
+                    username, album_id, entity_type, event_type,
+                    field_name, item_key, old_value_json,
+                    new_value_json, source, detected_at
+                ) VALUES(?, ?, 'rating', ?, 'score', NULL, ?, ?, 'legacy', ?)
+                """,
+                (
+                    row["username"],
+                    row["album_id"],
+                    event_type,
+                    _json_dump(row["old_score"]) if row["old_score"] is not None else None,
+                    _json_dump(row["new_score"]) if row["new_score"] is not None else None,
+                    row["changed_at"],
+                ),
+            )
+
+        self.connection.execute(
+            """
+            INSERT INTO meta(key, value)
+            VALUES('change_history_legacy_imported', '1')
+            ON CONFLICT(key) DO UPDATE SET value='1'
+            """
+        )
+
+    def _record_change_locked(
+        self,
+        username: str,
+        *,
+        entity_type: str,
+        event_type: str,
+        old_value=None,
+        new_value=None,
+        album_id: str | None = None,
+        field_name: str | None = None,
+        item_key: str | None = None,
+        source: str = "unknown",
+        detected_at: float | None = None,
+    ) -> None:
+        """Append one normalized change event inside the current transaction."""
+        self.connection.execute(
+            """
+            INSERT INTO change_history(
+                username, album_id, entity_type, event_type,
+                field_name, item_key, old_value_json,
+                new_value_json, source, detected_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                username,
+                str(album_id) if album_id is not None else None,
+                str(entity_type),
+                str(event_type),
+                field_name,
+                item_key,
+                _json_dump(old_value) if old_value is not None else None,
+                _json_dump(new_value) if new_value is not None else None,
+                str(source or "unknown")[:80],
+                float(detected_at if detected_at is not None else _now()),
+            ),
+        )
+
+    @staticmethod
+    def _normalized_track_map(items: Iterable[dict]) -> dict[str, dict]:
+        """Canonical scored-track map used for stable diffing.
+
+        AOTY sometimes omits track numbers.  Number is preferred when present;
+        otherwise normalized title is used. Unrated public tracks (NR/None) are
+        ignored because they are not user Track Ratings.
+        """
+        result: dict[str, dict] = {}
+        collisions: dict[str, int] = {}
+
+        for raw in items:
+            item = dict(raw or {})
+            score = item.get("score")
+            if score in (None, "", "NR", "N/R"):
+                continue
+
+            number = item.get("number")
+            title = str(item.get("title") or "").strip()
+            if number not in (None, ""):
+                base = f"n:{number}"
+            else:
+                base = f"t:{title.casefold()}"
+
+            count = collisions.get(base, 0) + 1
+            collisions[base] = count
+            key = base if count == 1 else f"{base}#{count}"
+            result[key] = {
+                "number": number,
+                "title": title or None,
+                "score": str(score),
+            }
+
+        return result
 
     def _create_or_upgrade_schema(self) -> None:
         with self._lock, self.connection:
@@ -325,6 +454,32 @@ class Database:
                 """
             )
 
+            # Unified, append-only audit log.  rating_history stays in place
+            # for backward compatibility, while every new mutable user datum
+            # (score, review, like, track rating, profile/favorites) can be
+            # represented here without adding another one-off history table.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS change_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL COLLATE NOCASE,
+                    album_id TEXT,
+                    entity_type TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    field_name TEXT,
+                    item_key TEXT,
+                    old_value_json TEXT,
+                    new_value_json TEXT,
+                    source TEXT NOT NULL DEFAULT 'unknown',
+                    detected_at REAL NOT NULL,
+                    FOREIGN KEY (username)
+                        REFERENCES users(username)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE
+                )
+                """
+            )
+
             # Per-format archive progress. This is deliberately separate from
             # notification monitoring: formats disabled for notifications are
             # still slowly archived for configured users.
@@ -406,6 +561,16 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_history_user_time "
                 "ON rating_history(username, changed_at DESC)"
             )
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_change_history_user_time "
+                "ON change_history(username, detected_at DESC)"
+            )
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_change_history_album_time "
+                "ON change_history(username, album_id, detected_at DESC)"
+            )
+
+            self._import_legacy_rating_history_locked()
 
             self.connection.execute(
                 """
@@ -550,6 +715,12 @@ class Database:
     # ------------------------------------------------------------------
 
     def save_profile(self, username: str, profile: dict) -> None:
+        """Persist one profile snapshot and append meaningful profile diffs.
+
+        The first successful snapshot establishes a baseline and intentionally
+        produces no history flood. Later snapshots record counters/average,
+        distribution and Favorites changes in the unified change_history log.
+        """
         username = self._require_monitored(username)
         profile = dict(profile or {})
         now = _now()
@@ -557,31 +728,59 @@ class Database:
         favorites = list(profile.get("favorites") or [])
         distribution = dict(profile.get("rating_distribution") or {})
 
-        # Store a structured snapshot too. Recent ratings live in their own
-        # table and would unnecessarily duplicate data here.
         profile_snapshot = {
             key: value
             for key, value in profile.items()
-            if key not in {"recent_ratings", "favorites", "favorite_albums", "favorite_artists"}
+            if key not in {
+                "recent_ratings",
+                "favorites",
+                "favorite_albums",
+                "favorite_artists",
+            }
         }
 
         with self._lock, self.connection:
+            previous = self.connection.execute(
+                "SELECT * FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            had_baseline = bool(
+                previous is not None
+                and previous["profile_synced_at"] is not None
+            )
+
+            previous_favorite_rows = self.connection.execute(
+                """
+                SELECT item_type, name, artist, album, url
+                FROM favorites
+                WHERE username = ?
+                ORDER BY position
+                """,
+                (username,),
+            ).fetchall()
+            previous_favorites = [dict(row) for row in previous_favorite_rows]
+
+            # None from a temporarily incomplete parser must not erase a known
+            # value. Explicit 0/"0" values are still stored normally.
             self.connection.execute(
                 """
                 UPDATE users
                 SET
-                    display_username = ?,
-                    profile_url = ?,
-                    avatar_url = ?,
-                    ratings_count = ?,
-                    reviews_count = ?,
-                    lists_count = ?,
-                    following_count = ?,
-                    followers_count = ?,
-                    average_rating = ?,
-                    average_rating_text = ?,
-                    favorite_kind = ?,
-                    rating_distribution_json = ?,
+                    display_username = COALESCE(?, display_username),
+                    profile_url = COALESCE(?, profile_url),
+                    avatar_url = COALESCE(?, avatar_url),
+                    ratings_count = COALESCE(?, ratings_count),
+                    reviews_count = COALESCE(?, reviews_count),
+                    lists_count = COALESCE(?, lists_count),
+                    following_count = COALESCE(?, following_count),
+                    followers_count = COALESCE(?, followers_count),
+                    average_rating = COALESCE(?, average_rating),
+                    average_rating_text = COALESCE(?, average_rating_text),
+                    favorite_kind = COALESCE(?, favorite_kind),
+                    rating_distribution_json = CASE
+                        WHEN ? IS NOT NULL THEN ?
+                        ELSE rating_distribution_json
+                    END,
                     profile_json = ?,
                     profile_synced_at = ?,
                     last_success_at = ?,
@@ -601,7 +800,8 @@ class Database:
                     profile.get("average_rating"),
                     profile.get("average_rating_text"),
                     profile.get("favorite_kind"),
-                    _json_dump(distribution),
+                    _json_dump(distribution) if distribution else None,
+                    _json_dump(distribution) if distribution else None,
                     _json_dump(profile_snapshot),
                     now,
                     now,
@@ -615,7 +815,16 @@ class Database:
                 (username,),
             )
 
+            normalized_favorites: list[dict] = []
             for position, item in enumerate(favorites):
+                normalized = {
+                    "item_type": item.get("type"),
+                    "name": item.get("name"),
+                    "artist": item.get("artist"),
+                    "album": item.get("album"),
+                    "url": item.get("url"),
+                }
+                normalized_favorites.append(normalized)
                 self.connection.execute(
                     """
                     INSERT INTO favorites(
@@ -628,12 +837,71 @@ class Database:
                         username,
                         position,
                         profile.get("favorite_kind"),
-                        item.get("type"),
-                        item.get("name"),
-                        item.get("artist"),
-                        item.get("album"),
-                        item.get("url"),
+                        normalized["item_type"],
+                        normalized["name"],
+                        normalized["artist"],
+                        normalized["album"],
+                        normalized["url"],
                     ),
+                )
+
+            if not had_baseline or previous is None:
+                return
+
+            profile_fields = {
+                "ratings_count": profile.get("ratings_count"),
+                "reviews_count": profile.get("reviews_count"),
+                "lists_count": profile.get("lists_count"),
+                "following_count": profile.get("following_count"),
+                "followers_count": profile.get("followers_count"),
+                "average_rating": profile.get("average_rating"),
+                "favorite_kind": profile.get("favorite_kind"),
+            }
+
+            for field_name, new_value in profile_fields.items():
+                if new_value is None:
+                    continue
+                old_value = previous[field_name]
+                if old_value == new_value:
+                    continue
+                self._record_change_locked(
+                    username,
+                    entity_type="profile",
+                    event_type="profile_field_changed",
+                    field_name=field_name,
+                    old_value=old_value,
+                    new_value=new_value,
+                    source="profile_sync",
+                    detected_at=now,
+                )
+
+            if distribution:
+                old_distribution = _json_load(
+                    previous["rating_distribution_json"],
+                    {},
+                )
+                if old_distribution != distribution:
+                    self._record_change_locked(
+                        username,
+                        entity_type="profile",
+                        event_type="rating_distribution_changed",
+                        field_name="rating_distribution",
+                        old_value=old_distribution,
+                        new_value=distribution,
+                        source="profile_sync",
+                        detected_at=now,
+                    )
+
+            if previous_favorites != normalized_favorites:
+                self._record_change_locked(
+                    username,
+                    entity_type="favorites",
+                    event_type="favorites_changed",
+                    field_name="favorites",
+                    old_value=previous_favorites,
+                    new_value=normalized_favorites,
+                    source="profile_sync",
+                    detected_at=now,
                 )
 
     def get_profile(self, username: str, *, recent_limit: int = 50) -> dict | None:
@@ -730,6 +998,24 @@ class Database:
             "notify_pending": bool(row["notify_pending"]),
         }
 
+    def set_notify_pending(
+        self,
+        username: str,
+        album_id: str,
+        pending: bool = True,
+    ) -> None:
+        """Mark a cached new rating as still awaiting monitor delivery."""
+        canonical = self._require_monitored(username)
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                UPDATE ratings
+                SET notify_pending = ?
+                WHERE username = ? AND album_id = ?
+                """,
+                (_bool_int(pending), canonical, str(album_id)),
+            )
+
     def get_ratings_map(self, username: str, *, include_inactive: bool = False) -> dict[str, dict]:
         canonical = self.canonical_username(username)
         if canonical is None:
@@ -805,22 +1091,40 @@ class Database:
         *,
         record_history: bool,
         active: bool,
+        record_changes: bool = False,
+        source: str = "sync",
+        record_new_change: bool = True,
     ) -> tuple[bool, str | None]:
+        """Insert/update one rating without losing richer detail state.
+
+        Rating cards know score and coarse flags, while the dedicated user
+        release page is authoritative for review text, like and Track Ratings.
+        Once such a detail baseline exists, a changed card flag marks the row
+        dirty instead of overwriting the trusted detail immediately. The
+        background detail worker then confirms the change and records a diff.
+        """
         album_id = str(item.get("album_id") or "").strip()
         if not album_id:
             raise ValueError("Rating bez album_id")
 
         existing = self.connection.execute(
             """
-            SELECT score, active, first_seen_at
+            SELECT score, active, first_seen_at, notify_pending,
+                   has_review, has_track_ratings, liked,
+                   detail_complete, detail_synced_at
             FROM ratings
             WHERE username = ? AND album_id = ?
             """,
             (username, album_id),
         ).fetchone()
 
-        old_score = str(existing["score"] or "") if existing else None
-        new_score = str(item.get("score") or "")
+        old_score = (
+            str(existing["score"])
+            if existing is not None and existing["score"] is not None
+            else None
+        )
+        incoming_score = item.get("score")
+        new_score = str(incoming_score) if incoming_score is not None else ""
         now = _now()
         is_new = existing is None
 
@@ -829,6 +1133,83 @@ class Database:
             if existing and existing["first_seen_at"] is not None
             else now
         )
+
+        incoming_flags = {
+            "has_review": _bool_int(item.get("has_review")),
+            "has_track_ratings": _bool_int(item.get("has_track_ratings")),
+            "liked": _bool_int(item.get("liked")),
+        }
+        stored_flags = dict(incoming_flags)
+        detail_dirty = False
+
+        # If we already fetched a real user-release detail page, do not allow
+        # a coarse card/parser result to destructively replace that state.
+        # A mismatch merely schedules a detail recheck.
+        if existing is not None and existing["detail_synced_at"] is not None:
+            for field_name in incoming_flags:
+                old_flag = int(existing[field_name] or 0)
+                if old_flag != incoming_flags[field_name]:
+                    detail_dirty = True
+                    stored_flags[field_name] = old_flag
+
+        # Before a rich detail baseline exists, the repeated rating-card state
+        # is still useful evidence. First bootstrap never enables
+        # record_changes, so this records only a later observed transition.
+        # Once a detail baseline exists, the block above defers to the actual
+        # user-release page instead and avoids card/parser false positives.
+        if (
+            existing is not None
+            and existing["detail_synced_at"] is None
+            and record_changes
+        ):
+            old_review = bool(existing["has_review"])
+            new_review = bool(incoming_flags["has_review"])
+            if old_review != new_review:
+                self._record_change_locked(
+                    username,
+                    entity_type="review",
+                    event_type="review_added" if new_review else "review_removed",
+                    album_id=album_id,
+                    field_name="has_review",
+                    old_value=old_review,
+                    new_value=new_review,
+                    source=f"{source}_card",
+                    detected_at=now,
+                )
+
+            old_like = bool(existing["liked"])
+            new_like = bool(incoming_flags["liked"])
+            if old_like != new_like:
+                self._record_change_locked(
+                    username,
+                    entity_type="like",
+                    event_type="like_added" if new_like else "like_removed",
+                    album_id=album_id,
+                    field_name="liked",
+                    old_value=old_like,
+                    new_value=new_like,
+                    source=f"{source}_card",
+                    detected_at=now,
+                )
+
+            old_tracks = bool(existing["has_track_ratings"])
+            new_tracks = bool(incoming_flags["has_track_ratings"])
+            if old_tracks != new_tracks:
+                self._record_change_locked(
+                    username,
+                    entity_type="track_rating",
+                    event_type=(
+                        "track_ratings_added"
+                        if new_tracks
+                        else "track_ratings_removed"
+                    ),
+                    album_id=album_id,
+                    field_name="has_track_ratings",
+                    old_value=old_tracks,
+                    new_value=new_tracks,
+                    source=f"{source}_card",
+                    detected_at=now,
+                )
 
         self.connection.execute(
             """
@@ -868,9 +1249,9 @@ class Database:
                 item.get("url"),
                 item.get("cover"),
                 item.get("release_format") or item.get("album_format"),
-                _bool_int(item.get("has_review")),
-                _bool_int(item.get("has_track_ratings")),
-                _bool_int(item.get("liked")),
+                stored_flags["has_review"],
+                stored_flags["has_track_ratings"],
+                stored_flags["liked"],
                 item.get("review_url"),
                 first_seen,
                 now,
@@ -878,26 +1259,61 @@ class Database:
             ),
         )
 
-        if record_history:
-            event_type = None
-            if is_new:
-                event_type = "new"
-            elif old_score != new_score:
-                event_type = "score"
-            elif existing and not bool(existing["active"]) and active:
-                event_type = "restored"
+        if detail_dirty:
+            self.connection.execute(
+                """
+                UPDATE ratings
+                SET detail_complete = 0
+                WHERE username = ? AND album_id = ?
+                """,
+                (username, album_id),
+            )
 
-            if event_type:
-                self.connection.execute(
-                    """
-                    INSERT INTO rating_history(
-                        username, album_id, event_type,
-                        old_score, new_score, changed_at
-                    )
-                    VALUES(?, ?, ?, ?, ?, ?)
-                    """,
-                    (username, album_id, event_type, old_score, new_score, now),
+        legacy_event = None
+        unified_event = None
+
+        pending_before = bool(existing and existing["notify_pending"])
+        if (is_new and record_new_change) or (pending_before and record_new_change):
+            legacy_event = "new"
+            unified_event = "rating_added"
+        elif old_score != new_score:
+            legacy_event = "score"
+            unified_event = "score_changed"
+        elif existing and not bool(existing["active"]) and active:
+            legacy_event = "restored"
+            unified_event = "rating_restored"
+
+        if record_history and legacy_event:
+            self.connection.execute(
+                """
+                INSERT INTO rating_history(
+                    username, album_id, event_type,
+                    old_score, new_score, changed_at
                 )
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    username,
+                    album_id,
+                    legacy_event,
+                    old_score,
+                    new_score,
+                    now,
+                ),
+            )
+
+        if record_changes and unified_event:
+            self._record_change_locked(
+                username,
+                entity_type="rating",
+                event_type=unified_event,
+                album_id=album_id,
+                field_name="score",
+                old_value=old_score,
+                new_value=new_score,
+                source=source,
+                detected_at=now,
+            )
 
         return is_new, old_score
 
@@ -908,14 +1324,21 @@ class Database:
         *,
         record_history: bool = False,
         active: bool = True,
+        record_changes: bool | None = None,
+        source: str = "sync",
     ) -> tuple[bool, str | None]:
         username = self._require_monitored(username)
+        if record_changes is None:
+            record_changes = bool(record_history)
+
         with self._lock, self.connection:
             result = self._upsert_rating_locked(
                 username,
                 item,
                 record_history=record_history,
                 active=active,
+                record_changes=bool(record_changes),
+                source=source,
             )
             self.connection.execute(
                 "UPDATE ratings SET notify_pending = 0 "
@@ -935,10 +1358,14 @@ class Database:
         *,
         record_history: bool = False,
         mark_missing_inactive: bool = False,
+        record_changes: bool | None = None,
+        source: str = "sync",
     ) -> None:
         username = self._require_monitored(username)
         ratings = list(ratings)
         seen_ids: set[str] = set()
+        if record_changes is None:
+            record_changes = bool(record_history)
 
         with self._lock, self.connection:
             for item in ratings:
@@ -951,6 +1378,8 @@ class Database:
                     item,
                     record_history=record_history,
                     active=True,
+                    record_changes=bool(record_changes),
+                    source=source,
                 )
                 self.connection.execute(
                     "UPDATE ratings SET notify_pending = 0 "
@@ -979,6 +1408,7 @@ class Database:
                         """,
                         (username, album_id),
                     )
+                    changed_at = _now()
                     if record_history:
                         self.connection.execute(
                             """
@@ -987,7 +1417,19 @@ class Database:
                                 old_score, new_score, changed_at
                             ) VALUES(?, ?, 'removed', ?, NULL, ?)
                             """,
-                            (username, album_id, row["score"], _now()),
+                            (username, album_id, row["score"], changed_at),
+                        )
+                    if record_changes:
+                        self._record_change_locked(
+                            username,
+                            entity_type="rating",
+                            event_type="rating_removed",
+                            album_id=album_id,
+                            field_name="score",
+                            old_value=row["score"],
+                            new_value=None,
+                            source=source,
+                            detected_at=changed_at,
                         )
 
             self.connection.execute(
@@ -1002,12 +1444,10 @@ class Database:
         live_album_ids: Iterable[str],
         *,
         record_history: bool = True,
+        record_changes: bool = True,
+        source: str = "full_sync",
     ) -> None:
-        """Mark ratings absent from a *full* live sync as inactive.
-
-        We keep the row/history instead of deleting it, so an AOTY un-rate and
-        later re-rate can be represented without losing old information.
-        """
+        """Mark ratings absent from a trusted full snapshot as inactive."""
         canonical = self._require_monitored(username)
         live_ids = {str(value) for value in live_album_ids}
 
@@ -1025,6 +1465,7 @@ class Database:
                 if album_id in live_ids:
                     continue
 
+                changed_at = _now()
                 self.connection.execute(
                     "UPDATE ratings SET active = 0 WHERE username = ? AND album_id = ?",
                     (canonical, album_id),
@@ -1036,54 +1477,140 @@ class Database:
                             username, album_id, event_type, old_score, new_score, changed_at
                         ) VALUES(?, ?, 'removed', ?, NULL, ?)
                         """,
-                        (canonical, album_id, row["score"], _now()),
+                        (canonical, album_id, row["score"], changed_at),
+                    )
+                if record_changes:
+                    self._record_change_locked(
+                        canonical,
+                        entity_type="rating",
+                        event_type="rating_removed",
+                        album_id=album_id,
+                        field_name="score",
+                        old_value=row["score"],
+                        source=source,
+                        detected_at=changed_at,
                     )
 
             self._cleanup_orphan_release_cache_locked()
 
-    def save_rating_detail(self, username: str, album_id: str, detail: dict) -> None:
+    def save_rating_detail(
+        self,
+        username: str,
+        album_id: str,
+        detail: dict,
+        *,
+        record_changes: bool = True,
+        source: str = "detail_sync",
+    ) -> bool:
+        """Persist a trusted user-release detail snapshot and diff it.
+
+        Incomplete/partially parsed pages are explicitly non-destructive: they
+        can mark the row dirty for retry, but never erase a known review, like
+        or Track Ratings. A first complete fetch establishes the baseline.
+        Every later complete fetch appends precise changes to change_history.
+
+        The score itself is *not* updated here. The notification monitor / full
+        rating archive owns score state so a background detail refresh can
+        never swallow a Discord score-change notification.
+        """
         username = self._require_monitored(username)
         album_id = str(album_id)
+        detail = dict(detail or {})
         now = _now()
         track_ratings = list(detail.get("track_ratings") or [])
 
         with self._lock, self.connection:
-            # If a detail was fetched before the rating row exists, ignore it.
-            # This enforces the "only configured users" / monitored-data scope.
-            exists = self.connection.execute(
+            existing = self.connection.execute(
                 """
-                SELECT 1 FROM ratings
+                SELECT * FROM ratings
                 WHERE username = ? AND album_id = ?
                 """,
                 (username, album_id),
             ).fetchone()
-            if exists is None:
-                return
+            if existing is None:
+                return False
+
+            old_track_rows = self.connection.execute(
+                """
+                SELECT track_number AS number, title, score
+                FROM user_track_ratings
+                WHERE username = ? AND album_id = ?
+                ORDER BY COALESCE(track_number, 99999), rowid
+                """,
+                (username, album_id),
+            ).fetchall()
+            old_tracks = [dict(row) for row in old_track_rows]
+
+            # A rate-limit/interstitial/parser hiccup must never turn a known
+            # review/like/track set into an empty one.
+            if detail.get("detail_incomplete"):
+                self.connection.execute(
+                    """
+                    UPDATE ratings
+                    SET
+                        date = COALESCE(?, date),
+                        review_url = COALESCE(?, review_url),
+                        detail_complete = 0,
+                        last_seen_at = COALESCE(last_seen_at, ?)
+                    WHERE username = ? AND album_id = ?
+                    """,
+                    (
+                        detail.get("date"),
+                        detail.get("review_url"),
+                        now,
+                        username,
+                        album_id,
+                    ),
+                )
+                return False
+
+            review_text_raw = detail.get("review_text")
+            review_text = (
+                str(review_text_raw).strip()
+                if review_text_raw not in (None, "")
+                else None
+            )
+
+            new_has_review = bool(detail.get("has_review") or review_text)
+            new_has_track_ratings = bool(
+                detail.get("has_track_ratings")
+                or self._normalized_track_map(track_ratings)
+            )
+            new_liked = bool(detail.get("liked"))
+            had_baseline = existing["detail_synced_at"] is not None
+
+            old_review_text = (
+                str(existing["review_text"]).strip()
+                if existing["review_text"] not in (None, "")
+                else None
+            )
+            old_has_review = bool(existing["has_review"])
+            old_has_track_ratings = bool(existing["has_track_ratings"])
+            old_liked = bool(existing["liked"])
 
             self.connection.execute(
                 """
                 UPDATE ratings
                 SET
-                    score = COALESCE(?, score),
                     date = COALESCE(?, date),
                     has_review = ?,
                     has_track_ratings = ?,
                     liked = ?,
                     review_url = COALESCE(?, review_url),
                     review_text = ?,
-                    detail_complete = ?,
-                    detail_synced_at = ?
+                    detail_complete = 1,
+                    detail_synced_at = ?,
+                    last_seen_at = COALESCE(last_seen_at, ?)
                 WHERE username = ? AND album_id = ?
                 """,
                 (
-                    detail.get("score"),
                     detail.get("date"),
-                    _bool_int(detail.get("has_review")),
-                    _bool_int(detail.get("has_track_ratings")),
-                    _bool_int(detail.get("liked")),
+                    _bool_int(new_has_review),
+                    _bool_int(new_has_track_ratings),
+                    _bool_int(new_liked),
                     detail.get("review_url"),
-                    detail.get("review_text"),
-                    _bool_int(not detail.get("detail_incomplete")),
+                    review_text,
+                    now,
                     now,
                     username,
                     album_id,
@@ -1118,6 +1645,116 @@ class Database:
                         track.get("score"),
                     ),
                 )
+
+            if had_baseline and record_changes:
+                if old_has_review != new_has_review:
+                    self._record_change_locked(
+                        username,
+                        entity_type="review",
+                        event_type=(
+                            "review_added"
+                            if new_has_review
+                            else "review_removed"
+                        ),
+                        album_id=album_id,
+                        field_name="review",
+                        old_value=old_review_text,
+                        new_value=review_text,
+                        source=source,
+                        detected_at=now,
+                    )
+                elif old_review_text != review_text:
+                    self._record_change_locked(
+                        username,
+                        entity_type="review",
+                        event_type="review_edited",
+                        album_id=album_id,
+                        field_name="review",
+                        old_value=old_review_text,
+                        new_value=review_text,
+                        source=source,
+                        detected_at=now,
+                    )
+
+                if old_liked != new_liked:
+                    self._record_change_locked(
+                        username,
+                        entity_type="like",
+                        event_type="like_added" if new_liked else "like_removed",
+                        album_id=album_id,
+                        field_name="liked",
+                        old_value=old_liked,
+                        new_value=new_liked,
+                        source=source,
+                        detected_at=now,
+                    )
+
+                old_map = self._normalized_track_map(old_tracks)
+                new_map = self._normalized_track_map(track_ratings)
+                for track_key in sorted(set(old_map) | set(new_map)):
+                    old_track = old_map.get(track_key)
+                    new_track = new_map.get(track_key)
+                    if old_track == new_track:
+                        continue
+
+                    if old_track is None:
+                        event_type = "track_rating_added"
+                    elif new_track is None:
+                        event_type = "track_rating_removed"
+                    else:
+                        event_type = "track_rating_changed"
+
+                    display_track = new_track or old_track or {}
+                    number = display_track.get("number")
+                    title = display_track.get("title") or "Unknown track"
+                    item_key = (
+                        f"{number}. {title}"
+                        if number not in (None, "")
+                        else str(title)
+                    )
+
+                    self._record_change_locked(
+                        username,
+                        entity_type="track_rating",
+                        event_type=event_type,
+                        album_id=album_id,
+                        field_name="track_score",
+                        item_key=item_key,
+                        old_value=old_track,
+                        new_value=new_track,
+                        source=source,
+                        detected_at=now,
+                    )
+
+                # The broad flag can change even if the parser could not map
+                # a concrete scored track. Preserve that fact too.
+                if (
+                    old_has_track_ratings != new_has_track_ratings
+                    and self._normalized_track_map(old_tracks)
+                    == self._normalized_track_map(track_ratings)
+                ):
+                    self._record_change_locked(
+                        username,
+                        entity_type="track_rating",
+                        event_type=(
+                            "track_ratings_added"
+                            if new_has_track_ratings
+                            else "track_ratings_removed"
+                        ),
+                        album_id=album_id,
+                        field_name="has_track_ratings",
+                        old_value=old_has_track_ratings,
+                        new_value=new_has_track_ratings,
+                        source=source,
+                        detected_at=now,
+                    )
+
+            self.connection.execute(
+                "UPDATE users SET updated_at = ? WHERE username = ?",
+                (now, username),
+            )
+
+        return True
 
     def get_rating_detail(self, username: str, album_id: str) -> dict | None:
         rating = self.get_rating(username, album_id)
@@ -1331,23 +1968,73 @@ class Database:
             """
         )
 
-    def detail_enrichment_candidates(self, username: str, limit: int) -> list[dict]:
+    def detail_enrichment_candidates(
+        self,
+        username: str,
+        limit: int,
+        *,
+        stale_before: float | None = None,
+    ) -> list[dict]:
+        """Rows whose user-release detail should be fetched/rechecked.
+
+        Dirty/incomplete rows always come first. Successfully enriched rows are
+        revisited only when they are old *and* contain mutable detail worth
+        tracking (review, like, Track Ratings, or cached detail residue). This
+        catches edits/removals without crawling every plain rating forever.
+        """
         canonical = self.canonical_username(username)
         if canonical is None or limit <= 0:
             return []
 
+        if stale_before is None:
+            stale_before = -1.0
+
         with self._lock:
             rows = self.connection.execute(
                 """
-                SELECT * FROM ratings
-                WHERE username = ?
-                  AND active = 1
-                  AND (has_review = 1 OR has_track_ratings = 1)
-                  AND detail_complete = 0
-                ORDER BY COALESCE(sort_timestamp, first_seen_at, 0) DESC
+                SELECT r.*
+                FROM ratings r
+                WHERE r.username = ?
+                  AND r.active = 1
+                  AND (
+                        r.detail_complete = 0
+                        AND (
+                            r.detail_synced_at IS NOT NULL
+                            OR r.has_review = 1
+                            OR r.has_track_ratings = 1
+                            OR r.liked = 1
+                            OR NULLIF(TRIM(COALESCE(r.review_text, '')), '') IS NOT NULL
+                            OR EXISTS (
+                                SELECT 1
+                                FROM user_track_ratings utr
+                                WHERE utr.username = r.username
+                                  AND utr.album_id = r.album_id
+                            )
+                        )
+                        OR (
+                            r.detail_synced_at IS NOT NULL
+                            AND r.detail_synced_at <= ?
+                            AND (
+                                r.has_review = 1
+                                OR r.has_track_ratings = 1
+                                OR r.liked = 1
+                                OR NULLIF(TRIM(COALESCE(r.review_text, '')), '') IS NOT NULL
+                                OR EXISTS (
+                                    SELECT 1
+                                    FROM user_track_ratings utr2
+                                    WHERE utr2.username = r.username
+                                      AND utr2.album_id = r.album_id
+                                )
+                            )
+                        )
+                  )
+                ORDER BY
+                    CASE WHEN r.detail_complete = 0 THEN 0 ELSE 1 END,
+                    COALESCE(r.detail_synced_at, 0) ASC,
+                    COALESCE(r.sort_timestamp, r.first_seen_at, 0) DESC
                 LIMIT ?
                 """,
-                (canonical, int(limit)),
+                (canonical, float(stale_before), int(limit)),
             ).fetchall()
         return [self._row_to_rating(row) for row in rows]
 
@@ -1484,22 +2171,17 @@ class Database:
         preserve_existing_state: bool = False,
         deactivate_missing: bool = True,
         mark_new_pending: bool = False,
+        record_history: bool = False,
+        record_changes: bool = False,
+        source: str = "archive",
     ) -> None:
-        """Persist one comprehensive AOTY format snapshot silently.
+        """Persist one comprehensive AOTY format snapshot safely.
 
-        ``preserve_existing_state`` is used for notification-enabled formats.
-        Their older/missing ratings may be added to the archive, but an archive
-        pass must not overwrite the saved score/active state *before* the
-        monitor compares it and sends a change notification.
-
-        Missing rows are deactivated only for snapshots that own that format
-        and only when at least one row was parsed. An unexpected empty parser
-        result can therefore never wipe a previously healthy cache.
-
-        ``mark_new_pending`` is enabled only after a notification-enabled format
-        has completed its first archive. A newly discovered row is then cached
-        immediately but flagged for the monitor, preventing the background
-        crawler from silently consuming a new-rating notification.
+        A successful non-empty full-format snapshot owns membership for that
+        format, so missing rows may be marked inactive. Empty parses remain
+        non-destructive. Notification-enabled formats can preserve score/active
+        until the monitor announces a new/changed rating, while review/like/
+        Track Rating flag mismatches merely dirty the richer detail cache.
         """
         canonical = self._require_monitored(username)
         ratings = list(ratings)
@@ -1530,8 +2212,14 @@ class Database:
                 is_new, _ = self._upsert_rating_locked(
                     canonical,
                     item,
-                    record_history=False,
+                    record_history=record_history,
                     active=active,
+                    record_changes=record_changes,
+                    source=source,
+                    # A newly discovered monitored-format row is announced by
+                    # the monitor first. Do not create its "added" history in
+                    # the low-priority archive before Discord delivery.
+                    record_new_change=not mark_new_pending,
                 )
 
                 if is_new and mark_new_pending:
@@ -1544,10 +2232,11 @@ class Database:
                         (canonical, album_id),
                     )
 
+            # An unexpected empty page/parser result must never wipe a format.
             if deactivate_missing and seen_ids:
                 rows = self.connection.execute(
                     """
-                    SELECT album_id
+                    SELECT album_id, score
                     FROM ratings
                     WHERE username = ? AND active = 1
                       AND lower(COALESCE(release_format, '')) = lower(?)
@@ -1559,14 +2248,40 @@ class Database:
                     album_id = str(row["album_id"])
                     if album_id in seen_ids:
                         continue
+
+                    changed_at = _now()
                     self.connection.execute(
                         """
                         UPDATE ratings
-                        SET active = 0
+                        SET active = 0, notify_pending = 0
                         WHERE username = ? AND album_id = ?
                         """,
                         (canonical, album_id),
                     )
+
+                    if record_history:
+                        self.connection.execute(
+                            """
+                            INSERT INTO rating_history(
+                                username, album_id, event_type,
+                                old_score, new_score, changed_at
+                            ) VALUES(?, ?, 'removed', ?, NULL, ?)
+                            """,
+                            (canonical, album_id, row["score"], changed_at),
+                        )
+
+                    if record_changes:
+                        self._record_change_locked(
+                            canonical,
+                            entity_type="rating",
+                            event_type="rating_removed",
+                            album_id=album_id,
+                            field_name="score",
+                            old_value=row["score"],
+                            new_value=None,
+                            source=source,
+                            detected_at=changed_at,
+                        )
 
             self.connection.execute(
                 "UPDATE users SET updated_at = ? WHERE username = ?",
@@ -1677,6 +2392,7 @@ class Database:
         new_score: str | None,
     ) -> None:
         canonical = self._require_monitored(username)
+        changed_at = _now()
         with self._lock, self.connection:
             self.connection.execute(
                 """
@@ -1685,8 +2401,81 @@ class Database:
                     old_score, new_score, changed_at
                 ) VALUES(?, ?, 'score', ?, ?, ?)
                 """,
-                (canonical, str(album_id), old_score, new_score, _now()),
+                (canonical, str(album_id), old_score, new_score, changed_at),
             )
+            self._record_change_locked(
+                canonical,
+                entity_type="rating",
+                event_type="score_changed",
+                album_id=str(album_id),
+                field_name="score",
+                old_value=old_score,
+                new_value=new_score,
+                source="manual",
+                detected_at=changed_at,
+            )
+
+    def get_change_history(
+        self,
+        username: str,
+        *,
+        limit: int = 20,
+        category: str = "all",
+        album_id: str | None = None,
+    ) -> list[dict]:
+        """Read newest unified change events for /history."""
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return []
+
+        limit = max(1, min(100, int(limit)))
+        category = str(category or "all").strip().casefold()
+        category_map = {
+            "ratings": ("rating",),
+            "reviews": ("review",),
+            "likes": ("like",),
+            "tracks": ("track_rating",),
+            "profile": ("profile", "favorites"),
+            "favorites": ("favorites",),
+        }
+
+        sql = """
+            SELECT
+                ch.*,
+                r.artist,
+                r.album,
+                r.album_url
+            FROM change_history ch
+            LEFT JOIN ratings r
+              ON r.username = ch.username
+             AND r.album_id = ch.album_id
+            WHERE ch.username = ?
+        """
+        params: list = [canonical]
+
+        if category in category_map:
+            types = category_map[category]
+            placeholders = ",".join("?" for _ in types)
+            sql += f" AND ch.entity_type IN ({placeholders})"
+            params.extend(types)
+
+        if album_id:
+            sql += " AND ch.album_id = ?"
+            params.append(str(album_id))
+
+        sql += " ORDER BY ch.detected_at DESC, ch.id DESC LIMIT ?"
+        params.append(limit)
+
+        with self._lock:
+            rows = self.connection.execute(sql, params).fetchall()
+
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["old_value"] = _json_load(item.pop("old_value_json"), None)
+            item["new_value"] = _json_load(item.pop("new_value_json"), None)
+            result.append(item)
+        return result
 
     def health(self) -> bool:
         try:
@@ -1817,6 +2606,21 @@ class Database:
                     WHERE NULLIF(TRIM(COALESCE(review_text, '')), '') IS NOT NULL
                     """
                 ),
+                "likes": scalar(
+                    "SELECT COUNT(*) FROM ratings WHERE liked = 1"
+                ),
+                "detail_complete": scalar(
+                    "SELECT COUNT(*) FROM ratings WHERE detail_complete = 1"
+                ),
+                "detail_dirty": scalar(
+                    """
+                    SELECT COUNT(*)
+                    FROM ratings
+                    WHERE active = 1
+                      AND detail_complete = 0
+                      AND detail_synced_at IS NOT NULL
+                    """
+                ),
                 "track_rating_albums": scalar(
                     """
                     SELECT COUNT(*)
@@ -1831,6 +2635,9 @@ class Database:
                     "SELECT COUNT(*) FROM favorites"
                 ),
                 "history": scalar(
+                    "SELECT COUNT(*) FROM change_history"
+                ),
+                "legacy_rating_history": scalar(
                     "SELECT COUNT(*) FROM rating_history"
                 ),
                 "notify_pending": scalar(
@@ -1930,6 +2737,35 @@ class Database:
                         """,
                         (username,),
                     ),
+                    "likes": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM ratings
+                        WHERE username = ?
+                          AND liked = 1
+                        """,
+                        (username,),
+                    ),
+                    "detail_complete": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM ratings
+                        WHERE username = ?
+                          AND detail_complete = 1
+                        """,
+                        (username,),
+                    ),
+                    "detail_dirty": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM ratings
+                        WHERE username = ?
+                          AND active = 1
+                          AND detail_complete = 0
+                          AND detail_synced_at IS NOT NULL
+                        """,
+                        (username,),
+                    ),
                     "track_rating_albums": scalar(
                         """
                         SELECT COUNT(*)
@@ -1951,6 +2787,14 @@ class Database:
                         """
                         SELECT COUNT(*)
                         FROM favorites
+                        WHERE username = ?
+                        """,
+                        (username,),
+                    ),
+                    "changes": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM change_history
                         WHERE username = ?
                         """,
                         (username,),

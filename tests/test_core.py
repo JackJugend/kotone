@@ -191,6 +191,68 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("notify_pending", rating_columns)
         db.close()
 
+    def test_existing_rating_history_is_imported_into_unified_history_once(self):
+        import sqlite3
+
+        path = self.tmp / "kotone.sqlite3"
+        connection = sqlite3.connect(path)
+        connection.executescript(
+            """
+            CREATE TABLE meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE users (
+                username TEXT PRIMARY KEY COLLATE NOCASE,
+                format_monitor_version INTEGER
+            );
+            CREATE TABLE ratings (
+                username TEXT NOT NULL COLLATE NOCASE,
+                album_id TEXT NOT NULL,
+                score TEXT,
+                date TEXT,
+                artist TEXT,
+                album TEXT,
+                release_format TEXT,
+                has_review INTEGER NOT NULL DEFAULT 0,
+                has_track_ratings INTEGER NOT NULL DEFAULT 0,
+                liked INTEGER NOT NULL DEFAULT 0,
+                review_url TEXT,
+                PRIMARY KEY (username, album_id)
+            );
+            CREATE TABLE rating_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL COLLATE NOCASE,
+                album_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                old_score TEXT,
+                new_score TEXT,
+                changed_at REAL NOT NULL
+            );
+            INSERT INTO users(username) VALUES('enso');
+            INSERT INTO ratings(username, album_id, score, artist, album)
+            VALUES('enso', 'legacy-history', '90', 'A', 'B');
+            INSERT INTO rating_history(
+                username, album_id, event_type, old_score, new_score, changed_at
+            ) VALUES('enso', 'legacy-history', 'score', '80', '90', 12345);
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        db = self.make_db(("enso",))
+        events = db.get_change_history("enso")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "score_changed")
+        self.assertEqual(events[0]["old_value"], "80")
+        self.assertEqual(events[0]["new_value"], "90")
+        db.close()
+
+        # Reopening must not duplicate the imported event.
+        reopened = self.make_db(("enso",))
+        self.assertEqual(len(reopened.get_change_history("enso")), 1)
+        reopened.close()
+
     def test_corrupt_database_restores_local_backup(self):
         db = self.make_db(("enso",))
         db.upsert_rating(
@@ -444,6 +506,282 @@ class DatabaseTests(unittest.TestCase):
                 "notify_pending"
             ]
         )
+        db.close()
+
+    def test_detail_change_history_review_like_and_tracks_is_precise(self):
+        db = self.make_db(("enso",))
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "changes-1",
+                "score": "88",
+                "artist": "Artist",
+                "album": "Album",
+                "has_review": True,
+                "has_track_ratings": True,
+            },
+        )
+
+        # First complete detail fetch is the baseline, not a fake "change".
+        self.assertTrue(
+            db.save_rating_detail(
+                "enso",
+                "changes-1",
+                {
+                    "review_text": "old review",
+                    "has_review": True,
+                    "liked": False,
+                    "has_track_ratings": True,
+                    "track_ratings": [
+                        {"number": 1, "title": "One", "score": "80"},
+                    ],
+                    "detail_incomplete": False,
+                },
+            )
+        )
+        self.assertEqual(db.get_change_history("enso"), [])
+
+        # Known mutable details are periodically revisited for edits even when
+        # no card flag changed. A far-future cutoff makes this row due now.
+        stale_candidates = db.detail_enrichment_candidates(
+            "enso",
+            10,
+            stale_before=10**20,
+        )
+        self.assertEqual(stale_candidates[0]["album_id"], "changes-1")
+
+        # A broken/interstitial page cannot erase the known baseline.
+        self.assertFalse(
+            db.save_rating_detail(
+                "enso",
+                "changes-1",
+                {
+                    "review_text": None,
+                    "has_review": False,
+                    "liked": False,
+                    "has_track_ratings": False,
+                    "track_ratings": [],
+                    "detail_incomplete": True,
+                },
+            )
+        )
+        preserved = db.get_rating_detail("enso", "changes-1")
+        self.assertEqual(preserved["review_text"], "old review")
+        self.assertEqual(preserved["track_ratings"][0]["score"], "80")
+
+        # Next trusted snapshot is diffed against the preserved baseline.
+        self.assertTrue(
+            db.save_rating_detail(
+                "enso",
+                "changes-1",
+                {
+                    "review_text": "new review",
+                    "has_review": True,
+                    "liked": True,
+                    "has_track_ratings": True,
+                    "track_ratings": [
+                        {"number": 1, "title": "One", "score": "90"},
+                        {"number": 2, "title": "Two", "score": "70"},
+                    ],
+                    "detail_incomplete": False,
+                },
+            )
+        )
+
+        events = db.get_change_history("enso", limit=20)
+        event_types = {event["event_type"] for event in events}
+        self.assertIn("review_edited", event_types)
+        self.assertIn("like_added", event_types)
+        self.assertIn("track_rating_changed", event_types)
+        self.assertIn("track_rating_added", event_types)
+
+        # Removals are also persisted, not represented as silent DELETEs.
+        db.save_rating_detail(
+            "enso",
+            "changes-1",
+            {
+                "review_text": None,
+                "has_review": False,
+                "liked": False,
+                "has_track_ratings": False,
+                "track_ratings": [],
+                "detail_incomplete": False,
+            },
+        )
+        event_types = {
+            event["event_type"]
+            for event in db.get_change_history("enso", limit=50)
+        }
+        self.assertIn("review_removed", event_types)
+        self.assertIn("like_removed", event_types)
+        self.assertIn("track_rating_removed", event_types)
+        db.close()
+
+    def test_card_transition_before_detail_baseline_is_not_lost(self):
+        db = self.make_db(("enso",))
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "card-before-detail",
+                "score": "66",
+                "artist": "A",
+                "album": "B",
+                "has_review": False,
+                "has_track_ratings": False,
+                "liked": False,
+            },
+        )
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "card-before-detail",
+                "score": "66",
+                "artist": "A",
+                "album": "B",
+                "has_review": True,
+                "has_track_ratings": True,
+                "liked": True,
+            },
+            record_changes=True,
+            source="monitor",
+        )
+
+        event_types = {
+            event["event_type"]
+            for event in db.get_change_history("enso", limit=20)
+        }
+        self.assertIn("review_added", event_types)
+        self.assertIn("like_added", event_types)
+        self.assertIn("track_ratings_added", event_types)
+        db.close()
+
+    def test_card_flag_change_dirties_trusted_detail_and_schedules_recheck(self):
+        db = self.make_db(("enso",))
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "dirty-1",
+                "score": "75",
+                "artist": "Artist",
+                "album": "Clean",
+                "has_review": False,
+                "has_track_ratings": False,
+                "liked": False,
+            },
+        )
+        db.save_rating_detail(
+            "enso",
+            "dirty-1",
+            {
+                "has_review": False,
+                "review_text": None,
+                "has_track_ratings": False,
+                "track_ratings": [],
+                "liked": False,
+                "detail_incomplete": False,
+            },
+        )
+
+        # A card now says a review exists. The old trusted state stays intact
+        # until the detail page confirms it, but the row becomes immediately due.
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "dirty-1",
+                "score": "75",
+                "artist": "Artist",
+                "album": "Clean",
+                "has_review": True,
+                "has_track_ratings": False,
+                "liked": False,
+            },
+            record_changes=True,
+        )
+        rating = db.get_rating("enso", "dirty-1")
+        self.assertFalse(rating["has_review"])
+        self.assertFalse(rating["detail_complete"])
+        candidates = db.detail_enrichment_candidates(
+            "enso",
+            10,
+            stale_before=0,
+        )
+        self.assertEqual(candidates[0]["album_id"], "dirty-1")
+        db.close()
+
+    def test_unified_history_tracks_scores_archive_removals_and_profile_changes(self):
+        db = self.make_db(("enso",))
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "score-1",
+                "score": "70",
+                "artist": "A",
+                "album": "B",
+                "release_format": "LP",
+            },
+        )
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "score-1",
+                "score": "90",
+                "artist": "A",
+                "album": "B",
+                "release_format": "LP",
+            },
+            record_history=True,
+            record_changes=True,
+            source="monitor",
+        )
+
+        # A complete later LP snapshot owns membership and can persist removal.
+        db.upsert_format_snapshot(
+            "enso",
+            "LP",
+            [
+                {
+                    "album_id": "score-2",
+                    "score": "80",
+                    "artist": "A",
+                    "album": "C",
+                    "release_format": "LP",
+                }
+            ],
+            deactivate_missing=True,
+            record_history=True,
+            record_changes=True,
+        )
+
+        db.save_profile(
+            "enso",
+            {
+                "username": "enso",
+                "followers_count": "10",
+                "favorite_kind": "artists",
+                "favorites": [
+                    {"type": "artist", "name": "A", "artist": "A", "url": "/a"}
+                ],
+            },
+        )
+        db.save_profile(
+            "enso",
+            {
+                "username": "enso",
+                "followers_count": "11",
+                "favorite_kind": "artists",
+                "favorites": [
+                    {"type": "artist", "name": "B", "artist": "B", "url": "/b"}
+                ],
+            },
+        )
+
+        events = db.get_change_history("enso", limit=50)
+        event_types = {event["event_type"] for event in events}
+        self.assertIn("score_changed", event_types)
+        self.assertIn("rating_removed", event_types)
+        self.assertIn("profile_field_changed", event_types)
+        self.assertIn("favorites_changed", event_types)
+        self.assertGreaterEqual(db.diagnostics()["counts"]["history"], 4)
         db.close()
 
     def test_release_cache_requires_monitored_rating(self):

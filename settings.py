@@ -187,6 +187,16 @@ AOTY_REQUEST_TIMEOUT_READ = _runtime_float("aoty_read_timeout", 25.0, 5.0)
 
 # Po jakim czasie cached detail konkretnego ratingu warto sprawdzić ponownie.
 RATING_DETAIL_TTL = _runtime_int("rating_detail_ttl", 60 * 60, 5 * 60)
+
+# Background change tracker revisits already-known reviews/likes/Track Ratings
+# much more slowly than interactive cache TTL. Dirty card/detail mismatches are
+# still checked immediately; this interval only controls periodic verification.
+DETAIL_CHANGE_SCAN_INTERVAL = _runtime_int(
+    "detail_change_scan_interval",
+    12 * 60 * 60,
+    60 * 60,
+)
+
 RELEASE_DETAIL_TTL = _runtime_int("release_detail_ttl", 12 * 60 * 60, 10 * 60)
 
 # Lokalny backup SQLite na tym samym volume. Railway backups nadal są mocno

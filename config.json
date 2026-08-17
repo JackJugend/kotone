@@ -59,6 +59,7 @@
         "archive_worker_idle_seconds": 300,
         "aoty_archive_max_pages": 500,
         "aoty_maintenance_min_request_interval": 2.0,
-        "enrich_worker_rest_seconds": 12
+        "enrich_worker_rest_seconds": 12,
+        "detail_change_scan_interval": 43200
     }
 }

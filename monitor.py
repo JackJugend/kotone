@@ -299,6 +299,8 @@ class RatingMonitor:
                     username,
                     ratings,
                     record_history=False,
+                    record_changes=False,
+                    source="monitor_seed",
                     mark_missing_inactive=False,
                 )
                 # Do not globally deactivate unseen rows here. Full monitor
@@ -355,6 +357,8 @@ class RatingMonitor:
                 username,
                 unchanged_items,
                 record_history=False,
+                record_changes=True,
+                source="monitor",
             )
 
             for item in reversed(new_items):
@@ -363,7 +367,13 @@ class RatingMonitor:
                 sent = await self.send_new_rating(username, item, avatar)
                 if not sent:
                     continue
-                DB.upsert_rating(username, item, record_history=True)
+                DB.upsert_rating(
+                    username,
+                    item,
+                    record_history=True,
+                    record_changes=True,
+                    source="monitor",
+                )
                 sent_new += 1
                 await self._sleep(0.5)
 
@@ -378,7 +388,13 @@ class RatingMonitor:
                 )
                 if not sent:
                     continue
-                DB.upsert_rating(username, item, record_history=True)
+                DB.upsert_rating(
+                    username,
+                    item,
+                    record_history=True,
+                    record_changes=True,
+                    source="monitor",
+                )
                 sent_changed += 1
                 await self._sleep(0.5)
 

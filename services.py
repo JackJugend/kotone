@@ -28,6 +28,7 @@ from http_client import (
 )
 from settings import (
     CHECK_INTERVAL,
+    DETAIL_CHANGE_SCAN_INTERVAL,
     FULL_SYNC_INTERVAL,
     PROFILE_SYNC_INTERVAL,
     PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
@@ -389,10 +390,43 @@ class DataService:
                         "liked": live.get("liked"),
                         "review_url": live.get("review_url"),
                     }
-                    DB.upsert_rating(username, seed, record_history=False)
+
+                    monitor_initialized = bool(
+                        DB.sync_timestamps(username).get("ratings_synced_at")
+                    )
+                    enabled_labels = {
+                        str(RATING_FORMATS[key]["label"]).casefold()
+                        for key, value in RATING_FETCH_LIMITS.items()
+                        if int(value or 0) > 0 and key in RATING_FORMATS
+                    }
+                    notification_enabled = bool(
+                        release_format
+                        and str(release_format).casefold() in enabled_labels
+                    )
+
+                    # Interactive discovery must never consume a later monitor
+                    # notification. Enabled formats become pending after the
+                    # cache seed; disabled formats can safely enter history now.
+                    DB.upsert_rating(
+                        username,
+                        seed,
+                        record_history=False,
+                        record_changes=(
+                            monitor_initialized and not notification_enabled
+                        ),
+                        source="interactive_discovery",
+                    )
+                    if monitor_initialized and notification_enabled:
+                        DB.set_notify_pending(username, album_id, True)
 
                 if DB.get_rating(username, album_id) is not None:
-                    DB.save_rating_detail(username, album_id, live)
+                    DB.save_rating_detail(
+                        username,
+                        album_id,
+                        live,
+                        record_changes=True,
+                        source="interactive_detail",
+                    )
 
             return live
 
@@ -530,10 +564,20 @@ class DataService:
                     info["label"],
                     ratings,
                     preserve_existing_state=notification_enabled,
-                    deactivate_missing=not notification_enabled,
+                    # The per-format route is comprehensive. A non-empty
+                    # successful snapshot therefore owns membership even for
+                    # notification-enabled formats. Empty parser results stay
+                    # non-destructive inside Database.upsert_format_snapshot.
+                    deactivate_missing=True,
                     mark_new_pending=(
                         notification_enabled and was_bootstrapped
                     ),
+                    # First bootstrap establishes historical baseline only.
+                    # Every later full-format snapshot becomes part of the
+                    # persistent change audit trail.
+                    record_history=was_bootstrapped,
+                    record_changes=was_bootstrapped,
+                    source="archive",
                 )
                 DB.mark_format_sync(
                     canonical,
@@ -639,6 +683,7 @@ class DataService:
         detail_candidates = DB.detail_enrichment_candidates(
             username,
             max(int(detail_limit) * 5, int(detail_limit)),
+            stale_before=time.time() - DETAIL_CHANGE_SCAN_INTERVAL,
         )
 
         for item in detail_candidates:
@@ -662,9 +707,20 @@ class DataService:
                     item.get("review_url"),
                     item.get("album"),
                 )
-                DB.save_rating_detail(username, album_id, detail)
-                self._detail_retry_after.pop(key, None)
-                detail_done += 1
+                complete = DB.save_rating_detail(
+                    username,
+                    album_id,
+                    detail,
+                    record_changes=True,
+                    source="background_detail",
+                )
+                if complete:
+                    self._detail_retry_after.pop(key, None)
+                    detail_done += 1
+                else:
+                    # Incomplete pages are intentionally non-destructive, but
+                    # without a cooldown they would stay candidate #1 forever.
+                    self._detail_retry_after[key] = time.time() + 60 * 60
             except (aoty.AOTYRateLimit, requests.RequestException):
                 errors += 1
                 break
