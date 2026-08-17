@@ -20,47 +20,6 @@ def _trim_description(text: str, limit: int = 4000) -> str:
 
 
 
-def _release_links_line(
-    item: dict,
-) -> str:
-    artist = display_romanized_name(
-        item.get("artist")
-        or "Nieznany artysta"
-    )
-
-    album = display_romanized_name(
-        item.get("album")
-        or item.get("title")
-        or "Nieznane wydanie"
-    )
-
-    artist_url = item.get(
-        "artist_url"
-    )
-
-    album_url = item.get(
-        "url"
-    )
-
-    artist_text = (
-        f"[{artist}]({artist_url})"
-        if artist_url
-        else artist
-    )
-
-    album_text = (
-        f"[{album}]({album_url})"
-        if album_url
-        else album
-    )
-
-    return (
-        f"**{artist_text}**  •  "
-        f"**{album_text}**"
-    )
-
-
-
 def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
     artist = display_romanized_name(item.get("artist") or "Nieznany artysta")
     album = display_romanized_name(item.get("album") or item.get("title") or "Nieznane wydanie")
@@ -70,9 +29,7 @@ def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
     embed = discord.Embed(
         title=f"✎ {artist} — {album}",
         url=extra.get("review_url") or item.get("url"),
-        description=_trim_description(
-            f"{_release_links_line(item)}\n\n{review_text}"
-        ),
+        description=_trim_description(review_text),
         color=score_color(score),
     )
 
@@ -102,12 +59,7 @@ def build_track_ratings_embed(username: str, item: dict, extra: dict) -> discord
         track_score = track.get("score") or "NR"
         lines.append(f"**{number}.** {title} — **{track_score}**")
 
-    tracks_text = "\n".join(lines) if lines else "Brak ocen tracklisty."
-
-    description = (
-        f"{_release_links_line(item)}\n\n"
-        f"{tracks_text}"
-    )
+    description = "\n".join(lines) if lines else "Brak ocen tracklisty."
 
     embed = discord.Embed(
         title=f"☷ {artist} — {album}",
@@ -206,6 +158,82 @@ async def _load_live_extra(
 
 
 
+def _has_review_available(
+    item: dict | None,
+    extra: dict | None = None,
+) -> bool:
+    """True tylko wtedy, gdy ocena ma recenzję."""
+    item = item or {}
+
+    if (
+        extra is not None
+        and not extra.get("rate_limited")
+        and not extra.get("detail_incomplete")
+    ):
+        return bool(
+            extra.get("review_text")
+            or extra.get("has_review")
+        )
+
+    return bool(
+        item.get("review_text")
+        or item.get("has_review")
+    )
+
+
+def _has_track_ratings_available(
+    item: dict | None,
+    extra: dict | None = None,
+) -> bool:
+    """True tylko wtedy, gdy ocena ma przynajmniej jeden Track Rating."""
+    item = item or {}
+
+    if (
+        extra is not None
+        and not extra.get("rate_limited")
+        and not extra.get("detail_incomplete")
+    ):
+        track_ratings = list(
+            extra.get("track_ratings")
+            or []
+        )
+
+        has_actual_score = any(
+            track.get("score") not in (
+                None,
+                "",
+                "NR",
+            )
+            for track in track_ratings
+        )
+
+        return bool(
+            has_actual_score
+            or extra.get("has_track_ratings")
+        )
+
+    return bool(
+        item.get("track_ratings")
+        or item.get("has_track_ratings")
+    )
+
+
+def _set_button_visible(
+    view: discord.ui.View,
+    button: discord.ui.Item,
+    visible: bool,
+) -> None:
+    """Ukrywa button całkowicie zamiast tylko go disable'ować."""
+    present = button in view.children
+
+    if visible and not present:
+        view.add_item(button)
+
+    elif not visible and present:
+        view.remove_item(button)
+
+
+
 class RatingDetailsMixin:
     username: str
     item: dict
@@ -270,6 +298,25 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         self.tracklist_embed = tracklist_embed
 
         self._extra_cache = extra
+
+        # Jeśli nie ma Recenzji albo Track Ratings, button w ogóle nie istnieje.
+        _set_button_visible(
+            self,
+            self.review_button,
+            _has_review_available(
+                self.item,
+                extra,
+            ),
+        )
+
+        _set_button_visible(
+            self,
+            self.tracks_button,
+            _has_track_ratings_available(
+                self.item,
+                extra,
+            ),
+        )
 
         # Extended /last controls only.
         if self.details_embed is None:
@@ -496,7 +543,11 @@ class RatingSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         self.owner.selected_index = int(self.values[0])
         self.owner._selected_extra = None
-        await interaction.response.defer()
+        self.owner._refresh_detail_buttons()
+
+        await interaction.response.edit_message(
+            view=self.owner,
+        )
 
 
 class MultiRatingView(TimedDisableView):
@@ -516,7 +567,38 @@ class MultiRatingView(TimedDisableView):
         self.main_embeds = main_embeds
         self.selected_index = 0
         self._selected_extra = None
-        self.add_item(RatingSelect(self, self.items))
+        self.add_item(
+            RatingSelect(
+                self,
+                self.items,
+            )
+        )
+        self._refresh_detail_buttons()
+
+    def _refresh_detail_buttons(self):
+        item = (
+            self.items[self.selected_index]
+            if self.items
+            else {}
+        )
+
+        _set_button_visible(
+            self,
+            self.review_button,
+            _has_review_available(
+                item,
+                self._selected_extra,
+            ),
+        )
+
+        _set_button_visible(
+            self,
+            self.tracks_button,
+            _has_track_ratings_available(
+                item,
+                self._selected_extra,
+            ),
+        )
 
     async def _extra(self):
         if self._selected_extra is not None:
@@ -626,7 +708,11 @@ class UserRatingSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         self.owner.selected_username = self.values[0]
-        await interaction.response.defer()
+        self.owner._refresh_detail_buttons()
+
+        await interaction.response.edit_message(
+            view=self.owner,
+        )
 
 
 class AlbumRatingView(TimedDisableView):
@@ -649,7 +735,45 @@ class AlbumRatingView(TimedDisableView):
         self.selected_username = usernames[0] if usernames else ""
 
         if usernames:
-            self.add_item(UserRatingSelect(self, usernames, rating_infos))
+            self.add_item(
+                UserRatingSelect(
+                    self,
+                    usernames,
+                    rating_infos,
+                )
+            )
+
+        self._refresh_detail_buttons()
+
+    def _selected_rating_info(self) -> dict:
+        if not self.selected_username:
+            return {}
+
+        return self.rating_infos.get(
+            self.selected_username,
+            {},
+        )
+
+    def _refresh_detail_buttons(self):
+        info = self._selected_rating_info()
+
+        _set_button_visible(
+            self,
+            self.review_button,
+            _has_review_available(
+                info,
+                info,
+            ),
+        )
+
+        _set_button_visible(
+            self,
+            self.tracks_button,
+            _has_track_ratings_available(
+                info,
+                info,
+            ),
+        )
 
     async def _extra_for_selected(self) -> dict:
         username = self.selected_username
@@ -799,7 +923,11 @@ class ProfileRatingSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         self.owner.selected_index = int(self.values[0])
         self.owner._selected_extra = None
-        await interaction.response.defer()
+        self.owner._rebuild_components()
+
+        await interaction.response.edit_message(
+            view=self.owner,
+        )
 
 
 class ProfilePagerView(TimedDisableView):
@@ -851,13 +979,31 @@ class ProfilePagerView(TimedDisableView):
         main.callback = self._main
         self.add_item(main)
 
-        review = discord.ui.Button(label="Recenzja", style=discord.ButtonStyle.secondary, row=2)
-        review.callback = self._review
-        self.add_item(review)
+        selected_item = self._selected_item() or {}
 
-        tracks = discord.ui.Button(label="Track ratings", style=discord.ButtonStyle.secondary, row=2)
-        tracks.callback = self._tracks
-        self.add_item(tracks)
+        if _has_review_available(
+            selected_item,
+            self._selected_extra,
+        ):
+            review = discord.ui.Button(
+                label="Recenzja",
+                style=discord.ButtonStyle.secondary,
+                row=2,
+            )
+            review.callback = self._review
+            self.add_item(review)
+
+        if _has_track_ratings_available(
+            selected_item,
+            self._selected_extra,
+        ):
+            tracks = discord.ui.Button(
+                label="Track ratings",
+                style=discord.ButtonStyle.secondary,
+                row=2,
+            )
+            tracks.callback = self._tracks
+            self.add_item(tracks)
 
     async def _previous(self, interaction: discord.Interaction):
         if self.page_index <= 0:
