@@ -1893,10 +1893,25 @@ class Database:
                 (username, album_id),
             ).fetchall()
             old_tracks = [dict(row) for row in old_track_rows]
+            old_track_map = self._normalized_track_map(old_tracks)
+            new_track_map = self._normalized_track_map(track_ratings)
+            old_has_track_ratings = bool(existing["has_track_ratings"])
+
+            # A card-level Track Ratings flag means at least one real user
+            # score exists. Until the detail parser returns such a score, an
+            # empty/NR-only snapshot is not authoritative enough to clear the
+            # flag or complete the row. The next background pass will retry.
+            unverified_track_claim = bool(
+                not new_track_map
+                and (
+                    detail.get("has_track_ratings")
+                    or (old_has_track_ratings and not old_track_map)
+                )
+            )
 
             # A rate-limit/interstitial/parser hiccup must never turn a known
             # review/like/track set into an empty one.
-            if detail.get("detail_incomplete"):
+            if detail.get("detail_incomplete") or unverified_track_claim:
                 self.connection.execute(
                     """
                     UPDATE ratings
@@ -1927,7 +1942,7 @@ class Database:
             new_has_review = bool(detail.get("has_review") or review_text)
             new_has_track_ratings = bool(
                 detail.get("has_track_ratings")
-                or self._normalized_track_map(track_ratings)
+                or new_track_map
             )
             new_liked = bool(detail.get("liked"))
             had_baseline = existing["detail_synced_at"] is not None
@@ -1938,7 +1953,6 @@ class Database:
                 else None
             )
             old_has_review = bool(existing["has_review"])
-            old_has_track_ratings = bool(existing["has_track_ratings"])
             old_liked = bool(existing["liked"])
 
             self.connection.execute(
@@ -2042,8 +2056,8 @@ class Database:
                         detected_at=now,
                     )
 
-                old_map = self._normalized_track_map(old_tracks)
-                new_map = self._normalized_track_map(track_ratings)
+                old_map = old_track_map
+                new_map = new_track_map
                 for track_key in sorted(set(old_map) | set(new_map)):
                     old_track = old_map.get(track_key)
                     new_track = new_map.get(track_key)
@@ -2398,6 +2412,22 @@ class Database:
                 WHERE r.username = ?
                   AND r.active = 1
                   AND (
+                        (
+                            r.has_track_ratings = 1
+                            AND NOT EXISTS (
+                                SELECT 1
+                                FROM user_track_ratings utr_missing
+                                WHERE utr_missing.username = r.username
+                                  AND utr_missing.album_id = r.album_id
+                                  AND NULLIF(
+                                      TRIM(COALESCE(utr_missing.score, '')),
+                                      ''
+                                  ) IS NOT NULL
+                                  AND UPPER(TRIM(utr_missing.score))
+                                      NOT IN ('NR', 'N/R')
+                            )
+                        )
+                        OR
                         r.detail_complete = 0
                         AND (
                             r.detail_synced_at IS NOT NULL
@@ -2430,7 +2460,23 @@ class Database:
                         )
                   )
                 ORDER BY
-                    CASE WHEN r.detail_complete = 0 THEN 0 ELSE 1 END,
+                    CASE
+                        WHEN r.has_track_ratings = 1
+                         AND NOT EXISTS (
+                            SELECT 1
+                            FROM user_track_ratings utr_priority
+                            WHERE utr_priority.username = r.username
+                              AND utr_priority.album_id = r.album_id
+                              AND NULLIF(
+                                  TRIM(COALESCE(utr_priority.score, '')),
+                                  ''
+                              ) IS NOT NULL
+                              AND UPPER(TRIM(utr_priority.score))
+                                  NOT IN ('NR', 'N/R')
+                         ) THEN 0
+                        WHEN r.detail_complete = 0 THEN 1
+                        ELSE 2
+                    END,
                     COALESCE(r.detail_synced_at, 0) ASC,
                     COALESCE(r.sort_timestamp, r.first_seen_at, 0) DESC
                 LIMIT ?
@@ -3036,7 +3082,12 @@ class Database:
                     """
                 ),
                 "user_track_ratings": scalar(
-                    "SELECT COUNT(*) FROM user_track_ratings"
+                    """
+                    SELECT COUNT(*)
+                    FROM user_track_ratings
+                    WHERE NULLIF(TRIM(COALESCE(score, '')), '') IS NOT NULL
+                      AND UPPER(TRIM(score)) NOT IN ('NR', 'N/R')
+                    """
                 ),
                 "favorites": scalar(
                     "SELECT COUNT(*) FROM favorites"
@@ -3187,6 +3238,11 @@ class Database:
                         SELECT COUNT(*)
                         FROM user_track_ratings
                         WHERE username = ?
+                          AND NULLIF(
+                              TRIM(COALESCE(score, '')),
+                              ''
+                          ) IS NOT NULL
+                          AND UPPER(TRIM(score)) NOT IN ('NR', 'N/R')
                         """,
                         (username,),
                     ),

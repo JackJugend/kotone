@@ -190,8 +190,143 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         finally:
             aoty.get_profile_summary = original
 
+    async def test_cached_track_scores_are_database_first(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "cached-tracks",
+                "score": "91",
+                "album": "Cached Tracks",
+                "has_track_ratings": True,
+            },
+        )
+        self.db.save_rating_detail(
+            "enso",
+            "cached-tracks",
+            {
+                "has_track_ratings": True,
+                "track_ratings": [
+                    {"number": 1, "title": "One", "score": "87"}
+                ],
+                "detail_incomplete": False,
+            },
+        )
+        self.service._age = lambda _timestamp: 0.0
+        original = aoty.get_user_rating_for_album
+        aoty.get_user_rating_for_album = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fresh SQLite detail must not call AOTY")
+        )
+        try:
+            result = await self.service.get_user_rating_for_album(
+                "enso",
+                "cached-tracks",
+                None,
+                None,
+                require_detail=True,
+            )
+        finally:
+            aoty.get_user_rating_for_album = original
+
+        self.assertEqual(result["source"], "SQLite cache")
+        self.assertEqual(result["track_ratings"][0]["score"], "87")
+
+    async def test_stale_cached_track_scores_survive_challenge(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "stale-tracks",
+                "score": "90",
+                "album": "Stale Tracks",
+                "has_track_ratings": True,
+            },
+        )
+        self.db.save_rating_detail(
+            "enso",
+            "stale-tracks",
+            {
+                "has_track_ratings": True,
+                "track_ratings": [
+                    {"number": 1, "title": "One", "score": "86"}
+                ],
+                "detail_incomplete": False,
+            },
+        )
+        original = aoty.get_user_rating_for_album
+
+        def challenge(*_args, **_kwargs):
+            raise aoty.AOTYChallengeCooldown("challenge", retry_after=3600)
+
+        aoty.get_user_rating_for_album = challenge
+        try:
+            result = await self.service.get_user_rating_for_album(
+                "enso",
+                "stale-tracks",
+                None,
+                None,
+                require_detail=True,
+            )
+        finally:
+            aoty.get_user_rating_for_album = original
+
+        self.assertEqual(result["source"], "SQLite cache")
+        self.assertEqual(result["track_ratings"][0]["score"], "86")
+
+    async def test_enrichment_stops_after_one_global_challenge(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "challenge-1",
+                "score": "80",
+                "album": "Challenge",
+                "url": "https://example.test/album/1",
+                "has_track_ratings": True,
+            },
+        )
+        calls = []
+        original = services._thread_call
+
+        async def challenge(*args, **_kwargs):
+            calls.append(args)
+            raise aoty.AOTYChallengeCooldown("challenge", retry_after=3600)
+
+        services._thread_call = challenge
+        try:
+            result = await self.service.enrich_user(
+                "enso",
+                detail_limit=2,
+                release_limit=2,
+            )
+        finally:
+            services._thread_call = original
+
+        self.assertEqual(result["errors"], 1)
+        self.assertEqual(len(calls), 1)
+
 
 class HTTPRetryTests(unittest.TestCase):
+    def test_user_detail_does_not_fallback_during_global_challenge(self):
+        original_fetch = aoty._fetch_user_release_page
+        original_route = aoty._get_ratings_from_route
+
+        def challenge(*_args, **_kwargs):
+            raise aoty.AOTYChallengeCooldown("challenge", retry_after=3600)
+
+        def forbidden_route(*_args, **_kwargs):
+            raise AssertionError("challenge must not start a fallback route")
+
+        aoty._fetch_user_release_page = challenge
+        aoty._get_ratings_from_route = forbidden_route
+        try:
+            with self.assertRaises(aoty.AOTYChallengeCooldown):
+                aoty.get_user_rating_for_album(
+                    "enso",
+                    "1",
+                    "https://www.albumoftheyear.org/album/1-test.php",
+                )
+        finally:
+            aoty._fetch_user_release_page = original_fetch
+            aoty._get_ratings_from_route = original_route
+
     def test_fetch_page_exposes_challenge_as_safe_incomplete_page(self):
         original = aoty.HTTP.get
 

@@ -4543,7 +4543,7 @@ def get_user_rating_for_album(
                 detail_complete,
             )
 
-    except AOTYRateLimit:
+    except (AOTYRateLimit, AOTYPageIncomplete):
         raise
     except requests.RequestException:
         pass
@@ -4620,7 +4620,7 @@ def get_user_rating_for_album(
 
                     return result
 
-            except AOTYRateLimit:
+            except (AOTYRateLimit, AOTYPageIncomplete):
                 raise
             except Exception:
                 pass

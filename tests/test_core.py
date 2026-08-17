@@ -825,6 +825,103 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNotNone(user["archive_last_success_at"])
         db.close()
 
+    def test_missing_flagged_track_scores_stay_due_and_are_prioritized(self):
+        db = self.make_db(("enso",))
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "review-pending",
+                "score": "70",
+                "album": "Review",
+                "has_review": True,
+            },
+        )
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "tracks-pending",
+                "score": "80",
+                "album": "Tracks",
+                "url": "https://example.test/album/1",
+                "has_track_ratings": True,
+            },
+        )
+
+        # Even an inconsistent legacy row marked complete must be retried when
+        # the card says Track Ratings exist but no scored rows were persisted.
+        with db._lock, db.connection:
+            db.connection.execute(
+                """
+                UPDATE ratings
+                SET detail_complete = 1, detail_synced_at = 9999999999
+                WHERE username = ? AND album_id = ?
+                """,
+                ("enso", "tracks-pending"),
+            )
+
+        candidates = db.detail_enrichment_candidates(
+            "enso",
+            10,
+            stale_before=0,
+        )
+        self.assertEqual(candidates[0]["album_id"], "tracks-pending")
+        db.close()
+
+    def test_empty_track_parse_cannot_complete_a_known_track_rating(self):
+        db = self.make_db(("enso",))
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "tracks-1",
+                "score": "90",
+                "album": "Tracks",
+                "has_track_ratings": True,
+            },
+        )
+
+        self.assertFalse(
+            db.save_rating_detail(
+                "enso",
+                "tracks-1",
+                {
+                    "has_track_ratings": False,
+                    "track_ratings": [
+                        {"number": 1, "title": "One", "score": None},
+                        {"number": 2, "title": "Two", "score": "NR"},
+                    ],
+                    "detail_incomplete": False,
+                },
+            )
+        )
+        pending = db.get_rating_detail("enso", "tracks-1")
+        self.assertTrue(pending["has_track_ratings"])
+        self.assertTrue(pending["detail_incomplete"])
+        self.assertEqual(pending["track_ratings"], [])
+
+        self.assertTrue(
+            db.save_rating_detail(
+                "enso",
+                "tracks-1",
+                {
+                    "has_track_ratings": True,
+                    "track_ratings": [
+                        {"number": 1, "title": "One", "score": "88"},
+                        {"number": 2, "title": "Two", "score": None},
+                    ],
+                    "detail_incomplete": False,
+                },
+            )
+        )
+        stored = db.get_rating_detail("enso", "tracks-1")
+        self.assertEqual(stored["track_ratings"][0]["score"], "88")
+        self.assertFalse(stored["detail_incomplete"])
+
+        # /dbstats says "track scores", so NR tracklist rows do not inflate it.
+        stats = db.diagnostics()
+        self.assertEqual(stats["counts"]["user_track_ratings"], 1)
+        self.assertEqual(stats["users"][0]["track_rating_rows"], 1)
+        db.close()
+
 
 class HTTPClientTests(unittest.TestCase):
     def test_fresh_cache_avoids_duplicate_request(self):

@@ -856,9 +856,20 @@ class DataService:
                 DB.save_release_details(album_id, details)
                 self._release_retry_after.pop(album_id, None)
                 release_done += 1
-            except (aoty.AOTYRateLimit, requests.RequestException):
+            except (
+                aoty.AOTYChallengeCooldown,
+                aoty.AOTYRateLimit,
+                requests.RequestException,
+            ):
                 errors += 1
-                break
+                # Challenge/rate-limit/transport failures are global. Do not
+                # walk and log every later album locally during the shared
+                # cooldown, and do not start the user-detail phase either.
+                return {
+                    "releases": release_done,
+                    "details": detail_done,
+                    "errors": errors,
+                }
             except Exception as exc:
                 errors += 1
                 self._release_retry_after[album_id] = time.time() + 60 * 60
@@ -908,9 +919,17 @@ class DataService:
                     # Incomplete pages are intentionally non-destructive, but
                     # without a cooldown they would stay candidate #1 forever.
                     self._detail_retry_after[key] = time.time() + 60 * 60
-            except (aoty.AOTYRateLimit, requests.RequestException):
+            except (
+                aoty.AOTYChallengeCooldown,
+                aoty.AOTYRateLimit,
+                requests.RequestException,
+            ):
                 errors += 1
-                break
+                return {
+                    "releases": release_done,
+                    "details": detail_done,
+                    "errors": errors,
+                }
             except Exception as exc:
                 errors += 1
                 self._detail_retry_after[key] = time.time() + 60 * 60
