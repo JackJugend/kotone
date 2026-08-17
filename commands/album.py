@@ -253,7 +253,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
         embed.add_field(
                 name="AOTY",
-                value=f"\{score_icon(variables.aoty_user_score)} **{variables.aoty_user_score}**",
+                value=f"{score_icon(variables.aoty_user_score)} **{variables.aoty_user_score}**",
                 inline=True,
         )
 

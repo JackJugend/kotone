@@ -59,29 +59,29 @@ def score_icon(score: Any) -> str:
     try:
         value = int(score)
     except (TypeError, ValueError):
-        return "⚪"
+        return "\⚪"
 
     if value == 100:
-        return "💎"
+        return "\💎"
     if value >= 90:
-        return "💚"
+        return "\💚"
     if value >= 80:
-        return "🟢"
+        return "\🟢"
     if value >= 70:
-        return "🟢"
+        return "\🟢"
     if value >= 60:
-        return "🟡"
+        return "\🟡"
     if value >= 50:
-        return "🟡"
+        return "\🟡"
     if value >= 40:
-        return "🟠"
+        return "\🟠"
     if value >= 30:
-        return "🟠"
+        return "\🟠"
     if value >= 20:
-        return f"\🔴"
+        return "🔴"
     if value >= 10:
-        return "❓"
-    return "⚫"
+        return "\❓"
+    return "\⚫"
 
 
 @dataclass(slots=True)
