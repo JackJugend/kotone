@@ -180,15 +180,15 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         embed.add_field(
             name=(
-                f"\👥 **{variables.aoty_user_score}**/"
+                f"**{variables.aoty_user_score}**/"
                 f"{variables.ratings_count}"
             ),
-            value=" ",
+            value="AOTY",
             inline=True,
         )
         embed.add_field(
-            name=f"\📅 **{variables.year_ranking_text}**",
-            value=" ",
+            name=f"**{variables.year_ranking_text}**",
+            value=f"{variables.year}",
             inline=True,
         )
 
