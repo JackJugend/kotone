@@ -17,7 +17,12 @@ from urllib.parse import quote_plus, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from http_client import HTTP, ExternalRateLimit, ExternalUnavailable
+from http_client import (
+    HTTP,
+    ExternalChallenge,
+    ExternalRateLimit,
+    ExternalUnavailable,
+)
 from settings import (
     ALBUM_LOOKUP_FALLBACK_LIMIT,
     AOTY_ARCHIVE_MAX_PAGES,
@@ -52,6 +57,14 @@ class AOTYUserNotFound(Exception):
 
 class AOTYPageIncomplete(Exception):
     """A 200 response was not trustworthy enough to mutate durable state."""
+
+
+class AOTYChallengeCooldown(AOTYPageIncomplete):
+    """The shared transport paused AOTY after an anti-bot interstitial."""
+
+    def __init__(self, message: str, retry_after: float):
+        super().__init__(message)
+        self.retry_after = max(0.0, float(retry_after))
 
 
 class AOTYStalePage(AOTYPageIncomplete):
@@ -193,6 +206,11 @@ def fetch_page(url: str, expected_url: str | None = None) -> str:
     """Fetch one AOTY page through the central resilient transport."""
     try:
         result = HTTP.get(url)
+    except ExternalChallenge as exc:
+        raise AOTYChallengeCooldown(
+            str(exc),
+            retry_after=exc.retry_after,
+        ) from exc
     except ExternalRateLimit as exc:
         raise AOTYRateLimit(str(exc)) from exc
     except ExternalUnavailable as exc:
@@ -3421,6 +3439,11 @@ def _fetch_user_release_page(
                 candidate,
                 allow_stale=True,
             )
+        except ExternalChallenge as exc:
+            raise AOTYChallengeCooldown(
+                str(exc),
+                retry_after=exc.retry_after,
+            ) from exc
         except ExternalRateLimit as exc:
             raise AOTYRateLimit(str(exc)) from exc
         except requests.HTTPError as exc:

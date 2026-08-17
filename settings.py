@@ -219,6 +219,14 @@ AOTY_MAINTENANCE_MIN_REQUEST_INTERVAL = _runtime_float(
 AOTY_MAX_RETRIES = _runtime_int("aoty_max_retries", 2, 0)
 AOTY_CIRCUIT_FAILURES = _runtime_int("aoty_circuit_failures", 4, 2)
 AOTY_CIRCUIT_COOLDOWN = _runtime_float("aoty_circuit_cooldown", 90.0, 10.0)
+# A challenge/interstitial is a valid HTTP response but not a usable AOTY page.
+# One sighting therefore pauses every shared scraper path for two hours instead
+# of letting the monitor and maintenance worker keep the protection alive.
+AOTY_CHALLENGE_COOLDOWN = _runtime_float(
+    "aoty_challenge_cooldown",
+    2 * 60 * 60.0,
+    5 * 60.0,
+)
 AOTY_CACHE_MAX_ENTRIES = _runtime_int("aoty_cache_max_entries", 512, 32)
 AOTY_REQUEST_TIMEOUT_CONNECT = _runtime_float("aoty_connect_timeout", 8.0, 2.0)
 AOTY_REQUEST_TIMEOUT_READ = _runtime_float("aoty_read_timeout", 25.0, 5.0)

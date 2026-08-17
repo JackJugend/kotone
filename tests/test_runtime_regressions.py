@@ -25,7 +25,11 @@ sys.path.insert(0, str(ROOT))
 import aoty  # noqa: E402
 import services  # noqa: E402
 from database import Database  # noqa: E402
-from http_client import PageResult, ResilientHTTPClient  # noqa: E402
+from http_client import (  # noqa: E402
+    ExternalChallenge,
+    PageResult,
+    ResilientHTTPClient,
+)
 
 
 class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
@@ -188,6 +192,82 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HTTPRetryTests(unittest.TestCase):
+    def test_fetch_page_exposes_challenge_as_safe_incomplete_page(self):
+        original = aoty.HTTP.get
+
+        def challenge(_url):
+            raise ExternalChallenge("challenge cooldown", retry_after=321)
+
+        aoty.HTTP.get = challenge
+        try:
+            with self.assertRaises(aoty.AOTYChallengeCooldown) as raised:
+                aoty.fetch_page("https://www.albumoftheyear.org/user/enso/")
+        finally:
+            aoty.HTTP.get = original
+
+        self.assertIsInstance(raised.exception, aoty.AOTYPageIncomplete)
+        self.assertEqual(raised.exception.retry_after, 321)
+
+    def test_challenge_opens_global_cooldown_and_resumes_after_expiry(self):
+        class Response:
+            status_code = 200
+            url = "https://www.albumoftheyear.org/user/enso/"
+            headers = {}
+
+            def __init__(self, text):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        client = ResilientHTTPClient()
+        client._gate.min_interval = 0
+        client._gate.maintenance_interval = 0
+        responses = [
+            Response("<html><div id='challenge-platform'></div></html>"),
+            Response("<html><body>Album of the Year</body></html>"),
+        ]
+        calls = []
+
+        def fake_get(url, timeout):
+            calls.append((url, timeout))
+            return responses.pop(0)
+
+        client.session.get = fake_get
+
+        with self.assertRaises(ExternalChallenge):
+            client.get(
+                "https://www.albumoftheyear.org/user/enso/",
+                use_cache=False,
+                allow_stale=False,
+            )
+
+        status = client.status()
+        self.assertTrue(status["challenge_open"])
+        self.assertGreater(status["challenge_seconds"], 0)
+        self.assertEqual(status["consecutive_failures"], 0)
+
+        # A different worker/URL shares the same client and must fail fast
+        # without sending a second request during the cooldown.
+        with self.assertRaises(ExternalChallenge):
+            client.get(
+                "https://www.albumoftheyear.org/album/1-test.php",
+                use_cache=False,
+                allow_stale=False,
+            )
+        self.assertEqual(len(calls), 1)
+
+        # Simulate monotonic expiry without sleeping for the production delay.
+        client._challenge_open_until = 0.0
+        result = client.get(
+            "https://www.albumoftheyear.org/album/1-test.php",
+            use_cache=False,
+            allow_stale=False,
+        )
+        self.assertIn("Album of the Year", result.text)
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(client.status()["challenge_open"])
+
     def test_invalid_url_is_rejected_without_retry_or_circuit_failure(self):
         client = ResilientHTTPClient()
         calls = []

@@ -12,6 +12,7 @@ Design goals:
 - Retry-After + exponential backoff for 429/5xx/network errors;
 - a small in-memory stale cache so repeated button clicks do not refetch pages;
 - a circuit breaker so an outage does not turn into an endless retry storm.
+- a global challenge cooldown shared by commands, monitor and maintenance.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ import requests
 
 from settings import (
     AOTY_CACHE_MAX_ENTRIES,
+    AOTY_CHALLENGE_COOLDOWN,
     AOTY_CIRCUIT_COOLDOWN,
     AOTY_CIRCUIT_FAILURES,
     AOTY_MAX_RETRIES,
@@ -59,6 +61,14 @@ class ExternalRateLimit(RuntimeError):
 
 class ExternalUnavailable(RuntimeError):
     """Remote site is temporarily unavailable and no usable stale page exists."""
+
+
+class ExternalChallenge(ExternalUnavailable):
+    """AOTY returned an anti-bot interstitial instead of requested content."""
+
+    def __init__(self, message: str, retry_after: float):
+        super().__init__(message)
+        self.retry_after = max(0.0, float(retry_after))
 
 
 @dataclass(slots=True)
@@ -200,6 +210,8 @@ class ResilientHTTPClient:
         self._circuit_lock = threading.RLock()
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
+        self._challenge_open_until = 0.0
+        self._challenge_last_error: str | None = None
         self._last_error: str | None = None
         self._request_count = 0
         self._cache_hits = 0
@@ -291,10 +303,56 @@ class ResilientHTTPClient:
         with self._circuit_lock:
             return time.monotonic() < self._circuit_open_until
 
+    def _challenge_seconds(self) -> float:
+        with self._circuit_lock:
+            return max(0.0, self._challenge_open_until - time.monotonic())
+
+    @staticmethod
+    def _challenge_issue(text: str) -> str | None:
+        """Return a reason when a response is an anti-bot interstitial."""
+
+        body = str(text or "").casefold()
+        markers = (
+            "cf-chl-",
+            "challenge-platform",
+            "verify you are human",
+            "checking your browser before accessing",
+            "attention required! | cloudflare",
+        )
+        if any(marker in body for marker in markers):
+            return "interstitial/challenge page"
+        return None
+
+    def _record_challenge(self, issue: str) -> ExternalChallenge:
+        seconds = max(0.0, float(AOTY_CHALLENGE_COOLDOWN))
+        message = (
+            f"AOTY zwróciło {issue}; globalny cooldown "
+            f"{seconds / 3600:.1f} h."
+        )
+        with self._circuit_lock:
+            self._challenge_open_until = max(
+                self._challenge_open_until,
+                time.monotonic() + seconds,
+            )
+            self._challenge_last_error = message
+        return ExternalChallenge(message, retry_after=seconds)
+
+    def _active_challenge(self) -> ExternalChallenge | None:
+        seconds = self._challenge_seconds()
+        if seconds <= 0:
+            return None
+        with self._circuit_lock:
+            message = self._challenge_last_error or (
+                "AOTY challenge cooldown jest nadal aktywny."
+            )
+        return ExternalChallenge(message, retry_after=seconds)
+
     def _record_success(self) -> None:
         with self._circuit_lock:
             self._consecutive_failures = 0
             self._circuit_open_until = 0.0
+            self._challenge_open_until = 0.0
+            self._challenge_last_error = None
             self._last_error = None
 
     def _record_failure(self, message: str) -> None:
@@ -360,6 +418,12 @@ class ResilientHTTPClient:
 
         stale_result = self._cache_get(url, stale=True) if allow_stale else None
 
+        active_challenge = self._active_challenge()
+        if active_challenge is not None:
+            if stale_result is not None:
+                return stale_result
+            raise active_challenge
+
         if self._circuit_open():
             if stale_result is not None:
                 return stale_result
@@ -384,6 +448,12 @@ class ResilientHTTPClient:
                             "Obwód ochronny HTTP jest chwilowo otwarty po serii błędów."
                         )
 
+                    active_challenge = self._active_challenge()
+                    if active_challenge is not None:
+                        if stale_result is not None:
+                            return stale_result
+                        raise active_challenge
+
                     # Another worker may have fetched the same URL while this
                     # request waited in the priority queue. Re-checking here
                     # gives us single-flight-like behavior without a second
@@ -401,6 +471,13 @@ class ResilientHTTPClient:
                             AOTY_REQUEST_TIMEOUT_READ,
                         ),
                     )
+
+                    challenge_issue = self._challenge_issue(response.text)
+                    if challenge_issue is not None:
+                        challenge = self._record_challenge(challenge_issue)
+                        if stale_result is not None:
+                            return stale_result
+                        raise challenge
 
                 if response.status_code == 429:
                     retry_after = self._retry_after_seconds(response)
@@ -455,6 +532,8 @@ class ResilientHTTPClient:
 
             except ExternalRateLimit:
                 raise
+            except ExternalChallenge:
+                raise
             except requests.HTTPError:
                 # 429 has its dedicated branch above and 5xx retries were
                 # already handled before raise_for_status().  What remains is
@@ -493,20 +572,39 @@ class ResilientHTTPClient:
             pass
 
     def status(self) -> dict:
-        with self._circuit_lock, self._cache_lock:
-            return {
-                "circuit_open": time.monotonic() < self._circuit_open_until,
-                "circuit_seconds": max(
-                    0.0,
-                    self._circuit_open_until - time.monotonic(),
-                ),
-                "blocked_seconds": self._gate.blocked_seconds,
-                "consecutive_failures": self._consecutive_failures,
-                "last_error": self._last_error,
-                "cache_entries": len(self._cache),
-                "requests": self._request_count,
-                "cache_hits": self._cache_hits,
-            }
+        # Snapshot independent locks separately. Request code may hold the
+        # priority gate while updating circuit/challenge state, so acquiring
+        # the gate again under ``_circuit_lock`` would invert that order.
+        with self._circuit_lock:
+            now = time.monotonic()
+            circuit_open = now < self._circuit_open_until
+            circuit_seconds = max(0.0, self._circuit_open_until - now)
+            challenge_seconds = max(
+                0.0,
+                self._challenge_open_until - now,
+            )
+            challenge_last_error = self._challenge_last_error
+            consecutive_failures = self._consecutive_failures
+            last_error = self._last_error
+            requests_count = self._request_count
+
+        with self._cache_lock:
+            cache_entries = len(self._cache)
+            cache_hits = self._cache_hits
+
+        return {
+            "circuit_open": circuit_open,
+            "circuit_seconds": circuit_seconds,
+            "blocked_seconds": self._gate.blocked_seconds,
+            "challenge_open": challenge_seconds > 0,
+            "challenge_seconds": challenge_seconds,
+            "challenge_last_error": challenge_last_error,
+            "consecutive_failures": consecutive_failures,
+            "last_error": last_error,
+            "cache_entries": cache_entries,
+            "requests": requests_count,
+            "cache_hits": cache_hits,
+        }
 
 
 HTTP = ResilientHTTPClient()

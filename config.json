@@ -44,6 +44,7 @@
         "aoty_max_retries": 2,
         "aoty_circuit_failures": 4,
         "aoty_circuit_cooldown": 90,
+        "aoty_challenge_cooldown": 7200,
         "aoty_cache_max_entries": 512,
         "aoty_connect_timeout": 8,
         "aoty_read_timeout": 25,
