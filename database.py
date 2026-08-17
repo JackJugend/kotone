@@ -1715,6 +1715,305 @@ class Database:
             "path": self.path,
         }
 
+    def diagnostics(self) -> dict:
+        """Return safe, read-only database statistics for /dbstats.
+
+        Keeping the SQL here makes the Discord command intentionally dumb.
+        Future schema changes only need to be handled in this repository
+        layer instead of being duplicated in commands/dbstats.py.
+        """
+        with self._lock:
+            quick_check_row = self.connection.execute(
+                "PRAGMA quick_check"
+            ).fetchone()
+
+            quick_check = (
+                str(quick_check_row[0])
+                if quick_check_row
+                else "unknown"
+            )
+
+            schema_row = self.connection.execute(
+                """
+                SELECT value
+                FROM meta
+                WHERE key = 'schema_version'
+                """
+            ).fetchone()
+
+            try:
+                schema_version = int(
+                    schema_row["value"]
+                    if schema_row
+                    else SCHEMA_VERSION
+                )
+            except (TypeError, ValueError):
+                schema_version = SCHEMA_VERSION
+
+            def scalar(query: str, params=()) -> int:
+                row = self.connection.execute(
+                    query,
+                    params,
+                ).fetchone()
+
+                if row is None or row[0] is None:
+                    return 0
+
+                return int(row[0])
+
+            counts = {
+                "users": scalar(
+                    "SELECT COUNT(*) FROM users"
+                ),
+                "ratings_active": scalar(
+                    "SELECT COUNT(*) FROM ratings WHERE active = 1"
+                ),
+                "ratings_total": scalar(
+                    "SELECT COUNT(*) FROM ratings"
+                ),
+                "reviews": scalar(
+                    """
+                    SELECT COUNT(*)
+                    FROM ratings
+                    WHERE has_review = 1
+                       OR NULLIF(TRIM(COALESCE(review_text, '')), '') IS NOT NULL
+                    """
+                ),
+                "review_texts_cached": scalar(
+                    """
+                    SELECT COUNT(*)
+                    FROM ratings
+                    WHERE NULLIF(TRIM(COALESCE(review_text, '')), '') IS NOT NULL
+                    """
+                ),
+                "track_rating_albums": scalar(
+                    """
+                    SELECT COUNT(*)
+                    FROM ratings
+                    WHERE has_track_ratings = 1
+                    """
+                ),
+                "user_track_ratings": scalar(
+                    "SELECT COUNT(*) FROM user_track_ratings"
+                ),
+                "favorites": scalar(
+                    "SELECT COUNT(*) FROM favorites"
+                ),
+                "history": scalar(
+                    "SELECT COUNT(*) FROM rating_history"
+                ),
+                "releases": scalar(
+                    "SELECT COUNT(*) FROM releases"
+                ),
+                "release_tracks": scalar(
+                    "SELECT COUNT(*) FROM release_tracks"
+                ),
+                "format_sync_rows": scalar(
+                    "SELECT COUNT(*) FROM rating_format_sync"
+                ),
+            }
+
+            users = []
+
+            for configured_username in self.monitored_users:
+                row = self.connection.execute(
+                    """
+                    SELECT
+                        username,
+                        ratings_count,
+                        reviews_count,
+                        lists_count,
+                        following_count,
+                        followers_count,
+                        profile_synced_at,
+                        ratings_synced_at,
+                        full_ratings_synced_at,
+                        last_success_at,
+                        last_error,
+                        last_error_at
+                    FROM users
+                    WHERE username = ?
+                    """,
+                    (configured_username,),
+                ).fetchone()
+
+                if row is None:
+                    continue
+
+                username = str(row["username"])
+
+                user_stats = {
+                    "username": username,
+                    "profile_ratings_count": row["ratings_count"],
+                    "profile_reviews_count": row["reviews_count"],
+                    "profile_lists_count": row["lists_count"],
+                    "following_count": row["following_count"],
+                    "followers_count": row["followers_count"],
+                    "profile_synced_at": row["profile_synced_at"],
+                    "ratings_synced_at": row["ratings_synced_at"],
+                    "full_ratings_synced_at": row["full_ratings_synced_at"],
+                    "last_success_at": row["last_success_at"],
+                    "last_error": row["last_error"],
+                    "last_error_at": row["last_error_at"],
+                    "ratings_active": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM ratings
+                        WHERE username = ?
+                          AND active = 1
+                        """,
+                        (username,),
+                    ),
+                    "ratings_total": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM ratings
+                        WHERE username = ?
+                        """,
+                        (username,),
+                    ),
+                    "reviews": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM ratings
+                        WHERE username = ?
+                          AND (
+                              has_review = 1
+                              OR NULLIF(
+                                  TRIM(COALESCE(review_text, '')),
+                                  ''
+                              ) IS NOT NULL
+                          )
+                        """,
+                        (username,),
+                    ),
+                    "track_rating_albums": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM ratings
+                        WHERE username = ?
+                          AND has_track_ratings = 1
+                        """,
+                        (username,),
+                    ),
+                    "track_rating_rows": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM user_track_ratings
+                        WHERE username = ?
+                        """,
+                        (username,),
+                    ),
+                    "favorites": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM favorites
+                        WHERE username = ?
+                        """,
+                        (username,),
+                    ),
+                    "archive_formats_seen": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM rating_format_sync
+                        WHERE username = ?
+                        """,
+                        (username,),
+                    ),
+                    "archive_formats_ok": scalar(
+                        """
+                        SELECT COUNT(*)
+                        FROM rating_format_sync
+                        WHERE username = ?
+                          AND last_success_at IS NOT NULL
+                        """,
+                        (username,),
+                    ),
+                    "archive_items": scalar(
+                        """
+                        SELECT COALESCE(SUM(item_count), 0)
+                        FROM rating_format_sync
+                        WHERE username = ?
+                        """,
+                        (username,),
+                    ),
+                }
+
+                users.append(
+                    user_stats
+                )
+
+            page_count = scalar(
+                "PRAGMA page_count"
+            )
+            page_size = scalar(
+                "PRAGMA page_size"
+            )
+            freelist_count = scalar(
+                "PRAGMA freelist_count"
+            )
+
+        def file_size(path: str | None) -> int:
+            if not path or not os.path.exists(path):
+                return 0
+            try:
+                return int(
+                    os.path.getsize(path)
+                )
+            except OSError:
+                return 0
+
+        database_size = file_size(
+            self.path
+        )
+        wal_size = file_size(
+            self.path + "-wal"
+        )
+        shm_size = file_size(
+            self.path + "-shm"
+        )
+        backup_size = file_size(
+            self.backup_path
+        )
+
+        backup_mtime = None
+
+        if (
+            self.backup_path
+            and os.path.exists(self.backup_path)
+        ):
+            try:
+                backup_mtime = float(
+                    os.path.getmtime(
+                        self.backup_path
+                    )
+                )
+            except OSError:
+                backup_mtime = None
+
+        return {
+            "healthy": quick_check.casefold() == "ok",
+            "quick_check": quick_check,
+            "schema_version": schema_version,
+            "path": self.path,
+            "backup_path": self.backup_path,
+            "database_size": database_size,
+            "wal_size": wal_size,
+            "shm_size": shm_size,
+            "disk_size": (
+                database_size
+                + wal_size
+                + shm_size
+            ),
+            "backup_size": backup_size,
+            "backup_mtime": backup_mtime,
+            "page_count": page_count,
+            "page_size": page_size,
+            "freelist_count": freelist_count,
+            "counts": counts,
+            "users": users,
+        }
+
     def close(self) -> None:
         if self._closed:
             return

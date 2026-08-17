@@ -15,6 +15,7 @@ import discord
 from commands.album import setup_album_command
 from commands.artist import setup_artist_command
 from commands.check import setup_check_command
+from commands.dbstats import setup_dbstats_command
 from commands.last import setup_last_command
 from commands.profile import setup_profile_command
 from commands.recent import setup_recent_command
@@ -49,6 +50,7 @@ setup_artist_command(tree)
 setup_album_command(tree)
 setup_profile_command(tree)
 setup_check_command(tree, monitor)
+setup_dbstats_command(tree)
 
 
 async def setup_hook() -> None:

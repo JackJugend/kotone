@@ -100,6 +100,37 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(reopened.summary()["users"], 1)
         reopened.close()
 
+    def test_database_diagnostics_counts_only_configured_users(self):
+        db = self.make_db(("enso",))
+
+        db.upsert_rating(
+            "enso",
+            {
+                "album_id": "diag-1",
+                "score": "92",
+                "artist": "Artist",
+                "album": "Album",
+                "has_review": True,
+                "has_track_ratings": True,
+            },
+        )
+
+        stats = db.diagnostics()
+
+        self.assertTrue(stats["healthy"])
+        self.assertEqual(stats["quick_check"], "ok")
+        self.assertEqual(stats["counts"]["users"], 1)
+        self.assertEqual(stats["counts"]["ratings_active"], 1)
+        self.assertEqual(stats["counts"]["ratings_total"], 1)
+        self.assertEqual(stats["counts"]["reviews"], 1)
+        self.assertEqual(stats["counts"]["track_rating_albums"], 1)
+
+        self.assertEqual(len(stats["users"]), 1)
+        self.assertEqual(stats["users"][0]["username"], "enso")
+        self.assertEqual(stats["users"][0]["ratings_total"], 1)
+
+        db.close()
+
     def test_existing_old_sqlite_schema_upgrades_in_place(self):
         import sqlite3
 
