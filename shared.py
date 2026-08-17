@@ -382,7 +382,7 @@ def rating_flags_text(item_or_variables: dict | ReleaseVariables | None) -> str:
     if has_track_ratings:
         flags.append("☰")
     if liked:
-        flags.append("♥︎")
+        flags.append("❤⁠")
 
     return " ".join(flags)
 
