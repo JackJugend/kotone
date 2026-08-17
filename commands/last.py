@@ -172,8 +172,8 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             description=(
                 f"# — \⭐ **{variables.score}** \⭐ — \n"
                 f"{variables.all_genres_text}\n"
-                f"{secondary_genres_display}\n"
-                f"{vibes_display}"
+                f"*{secondary_genres_display}*\n"
+                f"-# {vibes_display}"
             ),
             color=score_color(variables.score),
         )
