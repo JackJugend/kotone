@@ -78,7 +78,7 @@ def score_icon(score: Any) -> str:
     if value >= 30:
         return "\🟠"
     if value >= 20:
-        return "🔴"
+        return "\🔴"
     if value >= 10:
         return "\❓"
     return "\⚫"

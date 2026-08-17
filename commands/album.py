@@ -284,7 +284,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             flags_text = f"  {flags}" if flags else ""
 
             if rating is not None:
-                rating_value = f"\{score_icon(rating)} {rating}{flags_text}"
+                rating_value = f"{score_icon(rating)} {rating}{flags_text}"
             else:
                 rating_value = f"— **NR**{flags_text}"
 
