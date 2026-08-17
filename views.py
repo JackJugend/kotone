@@ -386,7 +386,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
                     label="𝄞",
                     style=discord.ButtonStyle.link,
                     url=artist_url,
-                    row=1,
+                    row=0,
                 )
             )
 
@@ -402,7 +402,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
 
     @discord.ui.button(
         label="🏠︎",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.primary,
         row=0,
     )
     async def main_button(
@@ -417,7 +417,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
 
     @discord.ui.button(
         label="🛈",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.primary,
         row=0,
     )
     async def details_button(
@@ -439,7 +439,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
 
     @discord.ui.button(
         label="☰",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.primary,
         row=0,
     )
     async def tracklist_button(
@@ -461,7 +461,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
 
     @discord.ui.button(
         label="✎",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.primary,
         row=0,
     )
     async def review_button(
@@ -507,7 +507,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
 
     @discord.ui.button(
         label="☷",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.primary,
         row=0,
     )
     async def tracks_button(
