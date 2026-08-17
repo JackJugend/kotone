@@ -383,25 +383,25 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         if artist_url:
             self.add_item(
                 discord.ui.Button(
-                    label="Artysta",
+                    label="",
                     style=discord.ButtonStyle.link,
                     url=artist_url,
                     row=1,
                 )
             )
 
-        if album_url:
-            self.add_item(
-                discord.ui.Button(
-                    label="Album",
-                    style=discord.ButtonStyle.link,
-                    url=album_url,
-                    row=1,
-                )
-            )
+        # if album_url:
+        #     self.add_item(
+        #         discord.ui.Button(
+        #             label="Album",
+        #             style=discord.ButtonStyle.link,
+        #             url=album_url,
+        #             row=1,
+        #         )
+        #     )
 
     @discord.ui.button(
-        label="Główne",
+        label="🏠︎",
         style=discord.ButtonStyle.secondary,
         row=0,
     )
@@ -416,7 +416,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         )
 
     @discord.ui.button(
-        label="Szczegóły",
+        label="ⓘ",
         style=discord.ButtonStyle.secondary,
         row=0,
     )
@@ -438,7 +438,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         )
 
     @discord.ui.button(
-        label="Tracklista",
+        label="☰",
         style=discord.ButtonStyle.secondary,
         row=0,
     )
@@ -460,7 +460,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         )
 
     @discord.ui.button(
-        label="Recenzja",
+        label="✎",
         style=discord.ButtonStyle.secondary,
         row=0,
     )
@@ -506,7 +506,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         )
 
     @discord.ui.button(
-        label="Track ratings",
+        label="☷",
         style=discord.ButtonStyle.secondary,
         row=0,
     )
