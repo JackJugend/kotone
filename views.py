@@ -383,7 +383,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         if artist_url:
             self.add_item(
                 discord.ui.Button(
-                    label=" ",
+                    label="𝄞",
                     style=discord.ButtonStyle.link,
                     url=artist_url,
                     row=1,
@@ -416,7 +416,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         )
 
     @discord.ui.button(
-        label="ⓘ",
+        label="🛈",
         style=discord.ButtonStyle.secondary,
         row=0,
     )
