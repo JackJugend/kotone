@@ -572,7 +572,7 @@ class RatingSelect(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="Wybierz ocenę dla Recenzji / Track ratings",
+            placeholder="Wybierz pozycję",
             options=options or [discord.SelectOption(label="Brak ocen", value="0")],
             min_values=1,
             max_values=1,
@@ -659,11 +659,11 @@ class MultiRatingView(TimedDisableView):
 
         return extra
 
-    @discord.ui.button(label="Główne", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="🏠︎", style=discord.ButtonStyle.secondary, row=0)
     async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embeds=self.main_embeds, view=self)
 
-    @discord.ui.button(label="Recenzja", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="✎", style=discord.ButtonStyle.secondary, row=0)
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         extra = await self._extra()
@@ -689,7 +689,7 @@ class MultiRatingView(TimedDisableView):
             view=self,
         )
 
-    @discord.ui.button(label="Track ratings", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="☷", style=discord.ButtonStyle.secondary, row=0)
     async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         extra = await self._extra()
@@ -738,7 +738,7 @@ class UserRatingSelect(discord.ui.Select):
             options=options,
             min_values=1,
             max_values=1,
-            row=1,
+            row=0,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -872,11 +872,11 @@ class AlbumRatingView(TimedDisableView):
 
         return extra
 
-    @discord.ui.button(label="Główne", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="🏠︎", style=discord.ButtonStyle.secondary, row=0)
     async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=self.main_embed, view=self)
 
-    @discord.ui.button(label="Recenzja", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="✎", style=discord.ButtonStyle.secondary, row=0)
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_username:
             await interaction.response.send_message("Brak użytkowników w configu.", ephemeral=True)
@@ -908,7 +908,7 @@ class AlbumRatingView(TimedDisableView):
             view=self,
         )
 
-    @discord.ui.button(label="Track ratings", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="☷", style=discord.ButtonStyle.secondary, row=0)
     async def tracks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_username:
             await interaction.response.send_message("Brak użytkowników w configu.", ephemeral=True)
@@ -958,7 +958,7 @@ class ProfileRatingSelect(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder="Wybierz ocenę dla Recenzji / Track ratings",
+            placeholder="Wybierz pozycję",
             options=options or [discord.SelectOption(label="Brak ocen", value="0")],
             min_values=1,
             max_values=1,
@@ -1021,7 +1021,7 @@ class ProfilePagerView(TimedDisableView):
 
         self.add_item(ProfileRatingSelect(self, self.page_items()))
 
-        main = discord.ui.Button(label="Główne", style=discord.ButtonStyle.secondary, row=2)
+        main = discord.ui.Button(label="🏠︎", style=discord.ButtonStyle.secondary, row=2)
         main.callback = self._main
         self.add_item(main)
 
@@ -1032,7 +1032,7 @@ class ProfilePagerView(TimedDisableView):
             self._selected_extra,
         ):
             review = discord.ui.Button(
-                label="Recenzja",
+                label="✎",
                 style=discord.ButtonStyle.secondary,
                 row=2,
             )
@@ -1044,7 +1044,7 @@ class ProfilePagerView(TimedDisableView):
             self._selected_extra,
         ):
             tracks = discord.ui.Button(
-                label="Track ratings",
+                label="☷",
                 style=discord.ButtonStyle.secondary,
                 row=2,
             )
