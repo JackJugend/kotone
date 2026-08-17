@@ -20,21 +20,26 @@ def _rating_embed(username, item, avatar, variables):
     flags = rating_flags_text(item)
     footer_flags = f"  •  {flags}" if flags else ""
 
+    # /recent intentionally shares the primary-card language of /last.  It
+    # omits only Secondary Genres; all release flags remain attached to this
+    # exact rating in the shared footer.
+    vibes_display = variables.vibes_text if variables.vibes else " "
+
     embed = discord.Embed(
         title=(
-            f"{score_icon(variables.score)} {variables.display_artist} • "
+            f"{score_icon(variables.score)} "
+            f"{variables.display_artist} — "
             f"**{variables.display_album}** ({variables.year})"
         ),
         url=variables.url,
-        description=variables.all_genres_text,
+        description=(
+            f"# — \⭐ **{variables.score}** \⭐ — \n"
+            f"{variables.all_genres_text}\n"
+            f"{vibes_display}"
+        ),
         color=score_color(variables.score),
     )
 
-    embed.add_field(
-        name=f"\⭐ **{variables.score}**",
-        value=" ",
-        inline=True,
-    )
     embed.add_field(
         name=f"\👥 **{variables.aoty_user_score}**/{variables.ratings_count}",
         value=" ",
@@ -63,7 +68,8 @@ def _rating_embed(username, item, avatar, variables):
 
     set_aoty_footer(
         embed,
-        f"•  {variables.release_date}  •  {variables.album_format}{footer_flags}",
+        f"{variables.album_format}  •  {variables.release_date}  •  "
+        f"{variables.labels_text}{footer_flags}",
     )
     return embed
 
