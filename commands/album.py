@@ -223,7 +223,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
         embed = discord.Embed(
             title=(
-                f"{variables.display_artist} — **{variables.display_album}** "
+                f"**{variables.display_album}** "
                 f"({variables.year})"
             ),
             url=variables.url,
@@ -262,6 +262,11 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             else:
                 rating_value = f"— **NR**{flags_text}"
 
+            embed.add_field(
+                name="AOTY",
+                value=f"\{score_icon(variables.aoty_user_score)}",
+                inline=True,
+            )
             embed.add_field(
                 name=username,
                 value=rating_value,
