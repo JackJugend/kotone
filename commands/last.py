@@ -164,13 +164,13 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         # Wygląd zachowany z obecnej wersji /last.
         embed = discord.Embed(
             title=(
-                f"\\{score_icon(variables.score)} "
+                f"{score_icon(variables.score)} "
                 f"{variables.display_artist} — **{variables.display_album}** "
                 f"({variables.year})"
             ),
             url=variables.url,
             description=(
-                f"# — \\⭐ **{variables.score}** \\⭐ — \n"
+                f"# — \⭐ **{variables.score}** \⭐ — \n"
                 f"{variables.all_genres_text}\n"
                 f"{secondary_genres_display}\n"
                 f"{vibes_display}"
@@ -180,14 +180,14 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         embed.add_field(
             name=(
-                f"\\👥 **{variables.aoty_user_score}**/"
+                f"\👥 **{variables.aoty_user_score}**/"
                 f"{variables.ratings_count}"
             ),
             value=" ",
             inline=True,
         )
         embed.add_field(
-            name=f"\\📅 **{variables.year_ranking_text}**",
+            name=f"\📅 **{variables.year_ranking_text}**",
             value=" ",
             inline=True,
         )
