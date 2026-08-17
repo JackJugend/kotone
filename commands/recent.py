@@ -23,8 +23,6 @@ def _rating_embed(username, item, avatar, variables):
     # /recent intentionally shares the primary-card language of /last.  It
     # omits only Secondary Genres; all release flags remain attached to this
     # exact rating in the shared footer.
-    vibes_display = variables.vibes_text if variables.vibes else " "
-
     embed = discord.Embed(
         title=(
             f"{score_icon(variables.score)} "
@@ -34,8 +32,7 @@ def _rating_embed(username, item, avatar, variables):
         url=variables.url,
         description=(
             f"# — \⭐ **{variables.score}** \⭐ — \n"
-            f"{variables.all_genres_text}\n"
-            f"{vibes_display}"
+            f"{variables.all_genres_text}"
         ),
         color=score_color(variables.score),
     )
