@@ -31,17 +31,17 @@ def _rating_embed(username, item, avatar, variables):
     )
 
     embed.add_field(
-        name=f"⭐ **{variables.score}**",
+        name=f"\⭐ **{variables.score}**",
         value=" ",
         inline=True,
     )
     embed.add_field(
-        name=f"👥 **{variables.aoty_user_score}**/{variables.ratings_count}",
+        name=f"\👥 **{variables.aoty_user_score}**/{variables.ratings_count}",
         value=" ",
         inline=True,
     )
     embed.add_field(
-        name=f"📅 **{variables.year_ranking_text}**",
+        name=f"\📅 **{variables.year_ranking_text}**",
         value=" ",
         inline=True,
     )
@@ -63,7 +63,7 @@ def _rating_embed(username, item, avatar, variables):
 
     set_aoty_footer(
         embed,
-        f"•  {variables.date}  •  {variables.album_format}{footer_flags}",
+        f"•  {variables.release_date}  •  {variables.album_format}{footer_flags}",
     )
     return embed
 
