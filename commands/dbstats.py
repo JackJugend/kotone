@@ -167,7 +167,7 @@ def setup_dbstats_command(
                 f"✎ Reviews: **{counts['reviews']}**\n"
                 f"♥ Likes: **{counts['likes']}**\n"
                 f"↳ tekst recenzji w cache: **{counts['review_texts_cached']}**\n"
-                f"☷ Albums z Track Ratings: **{counts['track_rating_albums']}**\n"
+                f"☰ Albums z Track Ratings: **{counts['track_rating_albums']}**\n"
                 f"↳ zapisane oceny utworów: **{counts['user_track_ratings']}**\n"
                 f"✓ Details: **{counts['detail_complete']}** • dirty: **{counts['detail_dirty']}**\n"
                 f"♥ Favorites: **{counts['favorites']}**\n"

@@ -302,6 +302,8 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
 async def _show_artist_command(
     interaction: discord.Interaction,
     item: dict,
+    *,
+    source_view: discord.ui.View | None = None,
 ) -> None:
     artist = _artist_name(item)
     if not artist:
@@ -311,7 +313,9 @@ async def _show_artist_command(
         )
         return
 
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
+    if source_view is not None:
+        await interaction.message.edit(view=source_view)
     try:
         # Runtime import avoids a module cycle: commands.artist imports the
         # common TimedDisableView from this module.
@@ -321,27 +325,52 @@ async def _show_artist_command(
         if result is None:
             await interaction.followup.send(
                 f"❌ Nie znaleziono artysty **{artist}** na AOTY ani w SQLite.",
-                ephemeral=True,
+                ephemeral=False,
             )
             return
         embed, view = result
-        message = await interaction.followup.send(
-            embed=embed,
-            view=view,
-            ephemeral=True,
-            wait=True,
+        message = None
+        previous = (
+            getattr(source_view, "artist_message", None)
+            if source_view is not None
+            else None
         )
+        if previous is not None:
+            try:
+                message = await previous.edit(embed=embed, view=view)
+            except Exception:
+                message = None
+        if message is None:
+            message = await interaction.followup.send(
+                embed=embed,
+                view=view,
+                ephemeral=False,
+                wait=True,
+            )
+        if source_view is not None:
+            source_view.artist_message = message
         view.bind_message(message)
     except aoty.AOTYRateLimit:
         await interaction.followup.send(
             "⚠️ AOTY chwilowo ogranicza liczbę zapytań.",
-            ephemeral=True,
+            ephemeral=False,
         )
     except Exception as exc:
         await interaction.followup.send(
             f"❌ Nie udało się otworzyć artysty: `{type(exc).__name__}: {exc}`",
-            ephemeral=True,
+            ephemeral=False,
         )
+
+
+async def _clear_artist_result(view: discord.ui.View) -> None:
+    message = getattr(view, "artist_message", None)
+    if message is None:
+        return
+    view.artist_message = None
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 VIEW_TIMEOUT_SECONDS = 15 * 60
@@ -357,6 +386,7 @@ class TimedDisableView(discord.ui.View):
     ):
         super().__init__(timeout=timeout)
         self.message = None
+        self.artist_message = None
 
     def bind_message(self, message) -> None:
         """Remember the sent Discord message so on_timeout can edit it."""
@@ -482,6 +512,22 @@ def _set_button_enabled(
     button.disabled = not bool(enabled)
 
 
+def _set_active_action(
+    view: discord.ui.View,
+    active_label: str,
+) -> None:
+    for child in view.children:
+        if (
+            isinstance(child, discord.ui.Button)
+            and child.label in ACTION_BUTTON_ORDER
+        ):
+            child.style = (
+                discord.ButtonStyle.primary
+                if child.label == active_label
+                else discord.ButtonStyle.secondary
+            )
+
+
 def _order_action_buttons(
     view: discord.ui.View,
     *buttons: discord.ui.Button,
@@ -579,6 +625,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
             self.tracklist_button,
             self.review_button,
         )
+        _set_active_action(self, HOME_BUTTON)
 
     @discord.ui.button(
         label=ARTIST_BUTTON,
@@ -590,7 +637,12 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        await _show_artist_command(interaction, self.item)
+        _set_active_action(self, ARTIST_BUTTON)
+        await _show_artist_command(
+            interaction,
+            self.item,
+            source_view=self,
+        )
 
     @discord.ui.button(
         label=HOME_BUTTON,
@@ -602,10 +654,12 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _set_active_action(self, HOME_BUTTON)
         await interaction.response.edit_message(
             embed=self.main_embed,
             view=self,
         )
+        await _clear_artist_result(self)
 
     @discord.ui.button(
         label=TRACKLIST_BUTTON,
@@ -617,7 +671,9 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _set_active_action(self, TRACKLIST_BUTTON)
         await interaction.response.defer()
+        await _clear_artist_result(self)
         embed = await build_combined_tracklist_embed(self.item)
         await interaction.message.edit(
             embed=embed,
@@ -635,6 +691,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         button: discord.ui.Button,
     ):
         await interaction.response.defer()
+        await _clear_artist_result(self)
 
         extra = await self._load_extra()
 
@@ -661,6 +718,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
             )
             return
 
+        _set_active_action(self, REVIEW_BUTTON)
         await interaction.message.edit(
             embed=build_review_embed(
                 self.username,
@@ -680,14 +738,17 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
+        _set_active_action(self, DETAILS_BUTTON)
         if self.details_embed is not None:
             await interaction.response.edit_message(
                 embed=self.details_embed,
                 view=self,
             )
+            await _clear_artist_result(self)
             return
 
         await interaction.response.defer()
+        await _clear_artist_result(self)
         embed = await build_release_details_embed(
             self.item,
             username=self.username,
@@ -734,6 +795,7 @@ class RatingSelect(discord.ui.Select):
         await interaction.response.edit_message(
             view=self.owner,
         )
+        await _clear_artist_result(self.owner)
 
 
 class MultiRatingView(TimedDisableView):
@@ -768,6 +830,7 @@ class MultiRatingView(TimedDisableView):
             self.tracklist_button,
             self.review_button,
         )
+        _set_active_action(self, HOME_BUTTON)
 
     def _refresh_detail_buttons(self):
         item = (
@@ -806,22 +869,28 @@ class MultiRatingView(TimedDisableView):
     @discord.ui.button(label=ARTIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def artist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         item = self.items[self.selected_index] if self.items else {}
-        await _show_artist_command(interaction, item)
+        _set_active_action(self, ARTIST_BUTTON)
+        await _show_artist_command(interaction, item, source_view=self)
 
     @discord.ui.button(label=HOME_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        _set_active_action(self, HOME_BUTTON)
         await interaction.response.edit_message(embeds=self.main_embeds, view=self)
+        await _clear_artist_result(self)
 
     @discord.ui.button(label=TRACKLIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def tracklist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         item = self.items[self.selected_index] if self.items else {}
+        _set_active_action(self, TRACKLIST_BUTTON)
         await interaction.response.defer()
+        await _clear_artist_result(self)
         embed = await build_combined_tracklist_embed(item)
         await interaction.message.edit(embeds=[embed], view=self)
 
     @discord.ui.button(label=REVIEW_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
+        await _clear_artist_result(self)
         extra = await self._extra()
 
         if extra.get("rate_limited"):
@@ -840,6 +909,7 @@ class MultiRatingView(TimedDisableView):
             return
 
         item = self.items[self.selected_index]
+        _set_active_action(self, REVIEW_BUTTON)
         await interaction.message.edit(
             embeds=[build_review_embed(self.username, item, extra)],
             view=self,
@@ -848,7 +918,9 @@ class MultiRatingView(TimedDisableView):
     @discord.ui.button(label=DETAILS_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def details_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         item = self.items[self.selected_index] if self.items else {}
+        _set_active_action(self, DETAILS_BUTTON)
         await interaction.response.defer()
+        await _clear_artist_result(self)
         embed = await build_release_details_embed(item, username=self.username)
         await interaction.message.edit(
             embeds=[embed],
@@ -888,6 +960,7 @@ class UserRatingSelect(discord.ui.Select):
         await interaction.response.edit_message(
             view=self.owner,
         )
+        await _clear_artist_result(self.owner)
 
 
 class AlbumRatingView(TimedDisableView):
@@ -927,6 +1000,7 @@ class AlbumRatingView(TimedDisableView):
             self.tracklist_button,
             self.review_button,
         )
+        _set_active_action(self, HOME_BUTTON)
 
     def _selected_rating_info(self) -> dict:
         if not self.selected_username:
@@ -1021,15 +1095,24 @@ class AlbumRatingView(TimedDisableView):
 
     @discord.ui.button(label=ARTIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def artist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await _show_artist_command(interaction, self.release_item)
+        _set_active_action(self, ARTIST_BUTTON)
+        await _show_artist_command(
+            interaction,
+            self.release_item,
+            source_view=self,
+        )
 
     @discord.ui.button(label=HOME_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        _set_active_action(self, HOME_BUTTON)
         await interaction.response.edit_message(embed=self.main_embed, view=self)
+        await _clear_artist_result(self)
 
     @discord.ui.button(label=TRACKLIST_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def tracklist_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        _set_active_action(self, TRACKLIST_BUTTON)
         await interaction.response.defer()
+        await _clear_artist_result(self)
         embed = await build_combined_tracklist_embed(self.release_item)
         await interaction.message.edit(embed=embed, view=self)
 
@@ -1040,6 +1123,7 @@ class AlbumRatingView(TimedDisableView):
             return
 
         await interaction.response.defer()
+        await _clear_artist_result(self)
         extra = await self._extra_for_selected()
 
         if extra.get("rate_limited"):
@@ -1060,6 +1144,7 @@ class AlbumRatingView(TimedDisableView):
         item = dict(self.release_item)
         item["score"] = extra.get("score")
         item["date"] = extra.get("date")
+        _set_active_action(self, REVIEW_BUTTON)
         await interaction.message.edit(
             embed=build_review_embed(self.selected_username, item, extra),
             view=self,
@@ -1067,7 +1152,9 @@ class AlbumRatingView(TimedDisableView):
 
     @discord.ui.button(label=DETAILS_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def details_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        _set_active_action(self, DETAILS_BUTTON)
         await interaction.response.defer()
+        await _clear_artist_result(self)
         embed = await build_release_details_embed(self.release_item)
         await interaction.message.edit(
             embed=embed,
@@ -1169,6 +1256,7 @@ class ProfilePositionSelect(discord.ui.Select):
         self.owner._selected_extra = None
         self.owner._rebuild_components()
         await interaction.response.edit_message(view=self.owner)
+        await _clear_artist_result(self.owner)
 
 
 class ProfilePagerView(TimedDisableView):
@@ -1192,6 +1280,7 @@ class ProfilePagerView(TimedDisableView):
         ]
         self.build_page_embed = build_page_embed
         self.page_index = 0
+        self.current_tab = HOME_BUTTON
         self.selected_source = "rating" if self.ratings else "favorite"
         self.selected_index = 0
         self._selected_extra = None
@@ -1219,12 +1308,21 @@ class ProfilePagerView(TimedDisableView):
     def _rebuild_components(self):
         self.clear_items()
 
-        if self.page_index > 0:
-            previous = discord.ui.Button(label="←", style=discord.ButtonStyle.secondary, row=0)
+        if self.current_tab == HOME_BUTTON:
+            previous = discord.ui.Button(
+                label="←",
+                style=discord.ButtonStyle.secondary,
+                row=0,
+                disabled=self.page_index <= 0,
+            )
             previous.callback = self._previous
             self.add_item(previous)
-        if self.page_index < self.total_pages - 1:
-            next_button = discord.ui.Button(label="→", style=discord.ButtonStyle.secondary, row=0)
+            next_button = discord.ui.Button(
+                label="→",
+                style=discord.ButtonStyle.secondary,
+                row=0,
+                disabled=self.page_index >= self.total_pages - 1,
+            )
             next_button.callback = self._next
             self.add_item(next_button)
 
@@ -1246,7 +1344,11 @@ class ProfilePagerView(TimedDisableView):
         for label, callback, enabled in actions:
             button = discord.ui.Button(
                 label=label,
-                style=discord.ButtonStyle.secondary,
+                style=(
+                    discord.ButtonStyle.primary
+                    if label == self.current_tab
+                    else discord.ButtonStyle.secondary
+                ),
                 row=2,
                 disabled=not enabled,
             )
@@ -1266,6 +1368,7 @@ class ProfilePagerView(TimedDisableView):
             embed=self.build_page_embed(self.page_index),
             view=self,
         )
+        await _clear_artist_result(self)
 
     async def _next(self, interaction: discord.Interaction):
         if self.page_index >= self.total_pages - 1:
@@ -1280,12 +1383,16 @@ class ProfilePagerView(TimedDisableView):
             embed=self.build_page_embed(self.page_index),
             view=self,
         )
+        await _clear_artist_result(self)
 
     async def _main(self, interaction: discord.Interaction):
+        self.current_tab = HOME_BUTTON
+        self._rebuild_components()
         await interaction.response.edit_message(
             embed=self.build_page_embed(self.page_index),
             view=self,
         )
+        await _clear_artist_result(self)
 
     async def _extra(self, item: dict) -> dict:
         if self._selected_extra is not None:
@@ -1296,14 +1403,23 @@ class ProfilePagerView(TimedDisableView):
         return extra
 
     async def _artist(self, interaction: discord.Interaction):
-        await _show_artist_command(interaction, self._selected_item() or {})
+        self.current_tab = ARTIST_BUTTON
+        self._rebuild_components()
+        await _show_artist_command(
+            interaction,
+            self._selected_item() or {},
+            source_view=self,
+        )
 
     async def _tracklist(self, interaction: discord.Interaction):
         item = self._selected_item()
         if not item:
             await interaction.response.send_message("Brak wybranej pozycji.", ephemeral=True)
             return
+        self.current_tab = TRACKLIST_BUTTON
+        self._rebuild_components()
         await interaction.response.defer()
+        await _clear_artist_result(self)
         embed = await build_combined_tracklist_embed(item)
         await interaction.message.edit(embed=embed, view=self)
 
@@ -1318,6 +1434,7 @@ class ProfilePagerView(TimedDisableView):
             await interaction.response.send_message("Brak recenzji dla tej pozycji.", ephemeral=True)
             return
         await interaction.response.defer()
+        await _clear_artist_result(self)
         extra = await self._extra(item)
         if extra.get("rate_limited"):
             await interaction.followup.send(
@@ -1331,6 +1448,8 @@ class ProfilePagerView(TimedDisableView):
         if not extra.get("review_text"):
             await interaction.followup.send("Wybrana pozycja nie ma recenzji.", ephemeral=True)
             return
+        self.current_tab = REVIEW_BUTTON
+        self._rebuild_components()
         await interaction.message.edit(
             embed=build_review_embed(self.username, item, extra),
             view=self,
@@ -1341,7 +1460,10 @@ class ProfilePagerView(TimedDisableView):
         if not item:
             await interaction.response.send_message("Brak wybranej pozycji.", ephemeral=True)
             return
+        self.current_tab = DETAILS_BUTTON
+        self._rebuild_components()
         await interaction.response.defer()
+        await _clear_artist_result(self)
         embed = await build_release_details_embed(
             item,
             username=self.username if self.selected_source == "rating" else None,

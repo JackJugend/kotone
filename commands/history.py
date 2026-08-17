@@ -57,18 +57,18 @@ def _event_text(event: dict) -> str:
         return "♡ Usunięto like"
 
     if event_type == "track_rating_added":
-        return f"☷ **{item_key or 'Track'}** — dodano **{_score_from_track(new) or '?'}**"
+        return f"☰ **{item_key or 'Track'}** — dodano **{_score_from_track(new) or '?'}**"
     if event_type == "track_rating_changed":
         return (
-            f"☷ **{item_key or 'Track'}** — "
+            f"☰ **{item_key or 'Track'}** — "
             f"**{_score_from_track(old) or '?'} → {_score_from_track(new) or '?'}**"
         )
     if event_type == "track_rating_removed":
-        return f"☷ **{item_key or 'Track'}** — usunięto **{_score_from_track(old) or '?'}**"
+        return f"☰ **{item_key or 'Track'}** — usunięto **{_score_from_track(old) or '?'}**"
     if event_type == "track_ratings_added":
-        return "☷ Dodano Track Ratings"
+        return "☰ Dodano Track Ratings"
     if event_type == "track_ratings_removed":
-        return "☷ Usunięto Track Ratings"
+        return "☰ Usunięto Track Ratings"
 
     if event_type == "favorites_changed":
         old_count = len(old) if isinstance(old, list) else 0

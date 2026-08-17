@@ -400,6 +400,141 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             )
             review = next(button for button in buttons if button.label == "✎")
             self.assertTrue(review.disabled)
+            active = [
+                button.label
+                for button in buttons
+                if button.style == discord.ButtonStyle.primary
+            ]
+            self.assertEqual(active, ["🏠︎"])
+
+    async def test_profile_navigation_is_stable_only_on_home_tab(self):
+        ratings = [
+            {
+                "album_id": str(index),
+                "artist": "Artist",
+                "album": f"Album {index}",
+                "url": f"https://www.albumoftheyear.org/album/{index}-album/",
+            }
+            for index in range(1, 7)
+        ]
+        view = views_module.ProfilePagerView(
+            username="enso",
+            ratings=ratings,
+            build_page_embed=lambda page: discord.Embed(),
+        )
+
+        def arrows():
+            return [
+                child
+                for child in view.children
+                if isinstance(child, discord.ui.Button)
+                and child.label in {"←", "→"}
+            ]
+
+        first_page = arrows()
+        self.assertEqual([button.label for button in first_page], ["←", "→"])
+        self.assertTrue(first_page[0].disabled)
+        self.assertFalse(first_page[1].disabled)
+
+        view.page_index = 1
+        view.selected_index = 5
+        view._rebuild_components()
+        last_page = arrows()
+        self.assertFalse(last_page[0].disabled)
+        self.assertTrue(last_page[1].disabled)
+
+        view.current_tab = "☰"
+        view._rebuild_components()
+        self.assertEqual(arrows(), [])
+        tracklist = next(
+            child
+            for child in view.children
+            if isinstance(child, discord.ui.Button) and child.label == "☰"
+        )
+        self.assertEqual(tracklist.style, discord.ButtonStyle.primary)
+
+    async def test_artist_action_is_public_and_updates_source_view(self):
+        item = {
+            "artist": "Artist",
+            "album": "Album",
+            "album_id": "1",
+            "url": "https://www.albumoftheyear.org/album/1-album/",
+        }
+        source_view = views_module.SingleRatingView(
+            username="enso",
+            item=item,
+            main_embed=discord.Embed(),
+        )
+        result_view = SimpleNamespace(bind_message=Mock())
+        sent_message = SimpleNamespace()
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(
+                defer=AsyncMock(),
+                send_message=AsyncMock(),
+            ),
+            followup=SimpleNamespace(
+                send=AsyncMock(return_value=sent_message),
+            ),
+            message=SimpleNamespace(edit=AsyncMock()),
+        )
+
+        with patch(
+            "commands.artist.build_artist_response",
+            new=AsyncMock(return_value=(discord.Embed(), result_view)),
+        ):
+            await views_module._show_artist_command(
+                interaction,
+                item,
+                source_view=source_view,
+            )
+
+        interaction.response.defer.assert_awaited_once_with()
+        interaction.message.edit.assert_awaited_once_with(view=source_view)
+        self.assertFalse(interaction.followup.send.await_args.kwargs["ephemeral"])
+        result_view.bind_message.assert_called_once_with(sent_message)
+
+    async def test_artist_result_is_reused_once_and_cleared_on_tab_change(self):
+        item = {
+            "artist": "Artist",
+            "album": "Album",
+            "album_id": "1",
+            "url": "https://www.albumoftheyear.org/album/1-album/",
+        }
+        source_view = views_module.SingleRatingView(
+            username="enso",
+            item=item,
+            main_embed=discord.Embed(),
+        )
+        artist_message = SimpleNamespace(
+            edit=AsyncMock(),
+            delete=AsyncMock(),
+        )
+        artist_message.edit.return_value = artist_message
+        source_view.artist_message = artist_message
+        result_view = SimpleNamespace(bind_message=Mock())
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+            message=SimpleNamespace(edit=AsyncMock()),
+        )
+
+        with patch(
+            "commands.artist.build_artist_response",
+            new=AsyncMock(return_value=(discord.Embed(), result_view)),
+        ):
+            await views_module._show_artist_command(
+                interaction,
+                item,
+                source_view=source_view,
+            )
+
+        artist_message.edit.assert_awaited_once()
+        interaction.followup.send.assert_not_awaited()
+        self.assertIs(source_view.artist_message, artist_message)
+
+        await views_module._clear_artist_result(source_view)
+        artist_message.delete.assert_awaited_once_with()
+        self.assertIsNone(source_view.artist_message)
 
     async def test_profile_select_contains_ratings_and_favorites(self):
         rating = {
