@@ -227,11 +227,22 @@ def build_release_variables(
     artist = str(item.get("artist") or details.get("artist") or "Nieznany artysta")
     album = str(item.get("album") or item.get("title") or details.get("album") or "Nieznane wydanie")
 
-    genres = list(details.get("genres") or [])
-    secondary_genres = list(details.get("secondary_genres") or [])
-    vibes = list(details.get("vibes") or [])
-    labels = list(details.get("labels") or [])
-    tracklist = list(details.get("tracklist") or [])
+    # A compact rating card and ``releases`` cache deliberately overlap.  Do
+    # not treat a failed/partial AOTY enrichment as a blank release: the card
+    # (often already hydrated from SQLite) remains a valid fallback for every
+    # command and every tab.
+    def value(name: str, default=None):
+        candidate = details.get(name)
+        if candidate not in (None, "", [], {}):
+            return candidate
+        candidate = item.get(name)
+        return default if candidate in (None, "", [], {}) else candidate
+
+    genres = list(value("genres", []) or [])
+    secondary_genres = list(value("secondary_genres", []) or [])
+    vibes = list(value("vibes", []) or [])
+    labels = list(value("labels", []) or [])
+    tracklist = list(value("tracklist", []) or [])
 
     main_genre = genres[0] if genres else missing
 
@@ -248,7 +259,7 @@ def build_release_variables(
         other_genres_text = missing
         all_genres_text = missing
 
-    user_score = details.get("user_score") or missing
+    user_score = value("user_score", missing)
 
     return ReleaseVariables(
         score=item.get("score"),
@@ -273,34 +284,34 @@ def build_release_variables(
         ),
         user_score=user_score,
         aoty_user_score=user_score,
-        ratings_count=details.get("ratings_count") or missing,
-        release_date=details.get("release_date") or missing,
-        year=details.get("year") or item.get("year") or missing,
+        ratings_count=value("ratings_count", missing),
+        release_date=value("release_date", missing),
+        year=value("year", missing),
         album_format=(
             details.get("album_format")
             or item.get("release_format")
             or item.get("album_format")
             or missing
         ),
-        label=details.get("label") or missing,
+        label=value("label", missing),
         labels=labels,
-        labels_text=details.get("labels_text") or (", ".join(labels) if labels else missing),
+        labels_text=value("labels_text", ", ".join(labels) if labels else missing),
         genres=genres,
-        genres_text=details.get("genres_text") or (", ".join(genres) if genres else missing),
+        genres_text=value("genres_text", ", ".join(genres) if genres else missing),
         main_genre=main_genre,
         other_genres=other_genres,
         other_genres_text=other_genres_text,
         all_genres_text=all_genres_text,
         secondary_genres=secondary_genres,
         secondary_genres_text=(
-            details.get("secondary_genres_text")
+            value("secondary_genres_text")
             or (", ".join(secondary_genres) if secondary_genres else missing)
         ),
         vibes=vibes,
-        vibes_text=details.get("vibes_text") or (", ".join(vibes) if vibes else missing),
-        ranking_year=details.get("ranking_year") or missing,
-        year_ranking=details.get("year_ranking") or missing,
-        year_ranking_text=details.get("year_ranking_text") or missing,
+        vibes_text=value("vibes_text", ", ".join(vibes) if vibes else missing),
+        ranking_year=value("ranking_year", missing),
+        year_ranking=value("year_ranking", missing),
+        year_ranking_text=value("year_ranking_text", missing),
         tracklist=tracklist,
         tracklist_text=details.get("tracklist_text") or missing,
         has_review=bool(item.get("has_review")),
@@ -330,6 +341,10 @@ async def load_release_variables(
 
     try:
         from services import DATA
+
+        # Hydrate the compact card before attempting HTTP.  This makes SQLite
+        # the global default regardless of which command renders the release.
+        item = DATA.release_with_cached_details(item)
 
         details = await DATA.get_release_details(
             item,

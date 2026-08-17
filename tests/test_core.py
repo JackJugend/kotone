@@ -131,6 +131,33 @@ class DatabaseTests(unittest.TestCase):
 
         db.close()
 
+    def test_rating_average_uses_all_persisted_scores(self):
+        db = self.make_db(("enso",))
+        for album_id, score, active in (
+            ("mean-1", "80", True),
+            ("mean-2", "91", True),
+            # The profile wording promises the SQLite archive, not only the
+            # current AOTY page, so inactive saved rows count too.
+            ("mean-3", "74", False),
+            ("mean-nr", "NR", True),
+        ):
+            db.upsert_rating(
+                "enso",
+                {
+                    "album_id": album_id,
+                    "score": score,
+                    "artist": "Artist",
+                    "album": album_id,
+                    "active": active,
+                },
+            )
+
+        average, count = db.get_rating_average("enso")
+        self.assertEqual(count, 3)
+        self.assertAlmostEqual(average, 245 / 3)
+        self.assertEqual(db.get_rating_average("outside"), (None, 0))
+        db.close()
+
     def test_cached_artist_and_release_catalog_comes_from_ratings(self):
         db = self.make_db(("enso",))
         db.upsert_rating(

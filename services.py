@@ -480,6 +480,17 @@ class DataService:
             username,
             DB.get_profile(username, recent_limit=recent_limit),
         )
+
+        def with_sqlite_average(profile: dict | None) -> dict | None:
+            if profile is None:
+                return None
+            average, count = DB.get_rating_average(username)
+            result = dict(profile)
+            result["sqlite_average_rating"] = average
+            result["sqlite_average_count"] = count
+            return result
+
+        cached = with_sqlite_average(cached)
         timestamps = DB.sync_timestamps(username)
         fresh = self._age(timestamps.get("profile_synced_at")) <= PROFILE_SYNC_INTERVAL
 
@@ -492,6 +503,7 @@ class DataService:
                 username,
                 DB.get_profile(username, recent_limit=recent_limit),
             )
+            refreshed = with_sqlite_average(refreshed)
             if refreshed is not None:
                 return refreshed
         except (

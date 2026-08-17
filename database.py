@@ -1312,6 +1312,33 @@ class Database:
             "ratings_synced_at": row["ratings_synced_at"],
         }
 
+    def get_rating_average(self, username: str) -> tuple[float | None, int]:
+        """Return the exact mean of all persisted numeric scores for a user.
+
+        This intentionally does not use AOTY's rating distribution and does
+        not filter inactive historical rows: the profile UI promises the mean
+        of ratings stored in Kotone's SQLite archive.
+        """
+
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return None, 0
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT AVG(CAST(score AS REAL)) AS average_score,
+                       COUNT(score) AS score_count
+                FROM ratings
+                WHERE username = ?
+                  AND TRIM(CAST(score AS TEXT)) <> ''
+                  AND TRIM(CAST(score AS TEXT)) NOT GLOB '*[^0-9]*'
+                """,
+                (canonical,),
+            ).fetchone()
+        if row is None or not row["score_count"]:
+            return None, 0
+        return float(row["average_score"]), int(row["score_count"])
+
     def get_avatar(self, username: str) -> str | None:
         canonical = self.canonical_username(username)
         if canonical is None:

@@ -105,8 +105,21 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         lists_count = variables.lists_count
         following_count = variables.following_count
         followers_count = variables.followers_count
-        average_rating_text = variables.average_rating_text
-        average_rating = variables.average_rating
+        # The saved archive is the authoritative number for configured users.
+        # AOTY only exposes a distribution-based approximation; never show it
+        # in place of the exact SQLite average.
+        sqlite_average = profile.get("sqlite_average_rating")
+        sqlite_average_count = int(profile.get("sqlite_average_count") or 0)
+        average_rating = (
+            float(sqlite_average)
+            if sqlite_average is not None
+            else variables.average_rating
+        )
+        average_rating_text = (
+            f"{average_rating:.1f}"
+            if average_rating is not None
+            else "Brak danych"
+        )
         favorites = variables.favorites[:5]
         favorite_kind = variables.favorite_kind
 
@@ -176,7 +189,11 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
 
             set_aoty_footer(
                 embed,
-                "AOTY.org • średnia jest przybliżona z Rating Distribution",
+                (
+                    f"SQLite • średnia z {sqlite_average_count} zapisanych ocen"
+                    if sqlite_average is not None
+                    else "AOTY.org • średnia jest przybliżona z Rating Distribution"
+                ),
             )
             return embed
 

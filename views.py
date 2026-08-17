@@ -25,13 +25,16 @@ TRACKLIST_BUTTON = "☰"
 REVIEW_BUTTON = "✎"
 DETAILS_BUTTON = "🛈"
 ARTIST_BUTTON = "★"
-ACTION_BUTTON_ORDER = (
-    ARTIST_BUTTON,
-    DETAILS_BUTTON,
-    HOME_BUTTON,
-    TRACKLIST_BUTTON,
-    REVIEW_BUTTON,
-)
+# One declarative source for every interactive command.  Individual views only
+# provide callbacks and availability; changing order or symbols happens here.
+ACTION_TABS = {
+    "artist": ARTIST_BUTTON,
+    "details": DETAILS_BUTTON,
+    "home": HOME_BUTTON,
+    "tracklist": TRACKLIST_BUTTON,
+    "review": REVIEW_BUTTON,
+}
+ACTION_BUTTON_ORDER = tuple(ACTION_TABS.values())
 
 
 def _trim_description(text: str, limit: int = 4000) -> str:
@@ -559,6 +562,12 @@ def _order_action_buttons(
     *buttons: discord.ui.Button,
 ) -> None:
     """Apply the one canonical action order inside a Discord component row."""
+    by_label = {button.label: button for button in buttons}
+    buttons = tuple(
+        by_label[label]
+        for label in ACTION_BUTTON_ORDER
+        if label in by_label
+    )
     for button in buttons:
         if button in view.children:
             view.remove_item(button)
