@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def _json_dump(value) -> str:
@@ -860,6 +860,8 @@ class Database:
                     cover_url TEXT,
                     user_score TEXT,
                     ratings_count TEXT,
+                    critic_score TEXT,
+                    critic_reviews_count TEXT,
                     release_date TEXT,
                     year TEXT,
                     album_format TEXT,
@@ -882,6 +884,8 @@ class Database:
             # the background worker can offer them to MusicBrainz immediately.
             self._ensure_column("releases", "metadata_source", "TEXT")
             self._ensure_column("releases", "metadata_sources_json", "TEXT")
+            self._ensure_column("releases", "critic_score", "TEXT")
+            self._ensure_column("releases", "critic_reviews_count", "TEXT")
 
             self.connection.execute(
                 """
@@ -1376,6 +1380,8 @@ class Database:
                     COALESCE(r.cover_url, rel.cover_url) AS cover_url,
                     rel.user_score AS aoty_score,
                     rel.ratings_count AS aoty_ratings_count,
+                    rel.critic_score,
+                    rel.critic_reviews_count,
                     rel.release_date,
                     rel.year AS release_year,
                     rel.album_format,
@@ -1426,6 +1432,8 @@ class Database:
                     "track_score_count": int(row["track_score_count"] or 0),
                     "aoty_score": row["aoty_score"],
                     "aoty_ratings_count": row["aoty_ratings_count"],
+                    "critic_score": row["critic_score"],
+                    "critic_reviews_count": row["critic_reviews_count"],
                     "release_date": row["release_date"],
                     "release_year": row["release_year"],
                     "genres": _json_load(row["genres_json"], []),
@@ -1449,8 +1457,18 @@ class Database:
                 """
                 SELECT
                     utr.score,
+                    utr.track_number,
+                    utr.title AS track_title,
                     r.album_id,
-                    r.release_format,
+                    r.artist,
+                    r.album,
+                    COALESCE(r.release_format, rel.album_format)
+                        AS release_format,
+                    COALESCE(r.cover_url, rel.cover_url) AS cover_url,
+                    rel.user_score AS aoty_score,
+                    rel.ratings_count AS aoty_ratings_count,
+                    rel.critic_score,
+                    rel.critic_reviews_count,
                     rel.year AS release_year,
                     rel.release_date,
                     rel.genres_json
@@ -1469,8 +1487,17 @@ class Database:
         return [
             {
                 "score": str(row["score"]),
+                "track_number": row["track_number"],
+                "track_title": row["track_title"],
                 "album_id": str(row["album_id"]),
+                "artist": row["artist"],
+                "album": row["album"],
                 "release_format": row["release_format"],
+                "cover": row["cover_url"],
+                "aoty_score": row["aoty_score"],
+                "aoty_ratings_count": row["aoty_ratings_count"],
+                "critic_score": row["critic_score"],
+                "critic_reviews_count": row["critic_reviews_count"],
                 "release_year": row["release_year"],
                 "release_date": row["release_date"],
                 "genres": _json_load(row["genres_json"], []),
@@ -2595,7 +2622,12 @@ class Database:
                         for column in columns
                     )
 
-                if raw_present("user_score", "ratings_count"):
+                if raw_present(
+                    "user_score",
+                    "ratings_count",
+                    "critic_score",
+                    "critic_reviews_count",
+                ):
                     metadata_sources.setdefault("score", "aoty")
                 if raw_present("release_date", "year"):
                     metadata_sources.setdefault("release_date", inferred_source)
@@ -2619,7 +2651,12 @@ class Database:
                 ).fetchone():
                     metadata_sources.setdefault("tracklist", inferred_source)
             section_keys = {
-                "score": ("user_score", "ratings_count"),
+                "score": (
+                    "user_score",
+                    "ratings_count",
+                    "critic_score",
+                    "critic_reviews_count",
+                ),
                 "release_date": ("release_date", "year"),
                 "format": ("album_format",),
                 "labels": ("label", "labels"),
@@ -2644,12 +2681,13 @@ class Database:
                 """
                 INSERT INTO releases(
                     album_id, artist, artist_url, album, url, cover_url,
-                    user_score, ratings_count, release_date, year,
+                    user_score, ratings_count, critic_score,
+                    critic_reviews_count, release_date, year,
                     album_format, label, labels_json, genres_json,
                     secondary_genres_json, vibes_json, ranking_year,
                     year_ranking, year_ranking_text, metadata_source,
                     metadata_sources_json, fetched_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(album_id) DO UPDATE SET
                     artist = COALESCE(excluded.artist, releases.artist),
                     artist_url = COALESCE(excluded.artist_url, releases.artist_url),
@@ -2662,6 +2700,14 @@ class Database:
                     ratings_count = CASE WHEN ? THEN
                         COALESCE(excluded.ratings_count, releases.ratings_count)
                         ELSE releases.ratings_count END,
+                    critic_score = CASE WHEN ? THEN
+                        COALESCE(excluded.critic_score, releases.critic_score)
+                        ELSE releases.critic_score END,
+                    critic_reviews_count = CASE WHEN ? THEN
+                        COALESCE(
+                            excluded.critic_reviews_count,
+                            releases.critic_reviews_count
+                        ) ELSE releases.critic_reviews_count END,
                     release_date = CASE WHEN ? THEN
                         COALESCE(excluded.release_date, releases.release_date)
                         ELSE releases.release_date END,
@@ -2704,6 +2750,8 @@ class Database:
                     details.get("cover"),
                     details.get("user_score"),
                     details.get("ratings_count"),
+                    details.get("critic_score"),
+                    details.get("critic_reviews_count"),
                     details.get("release_date"),
                     details.get("year"),
                     details.get("album_format"),
@@ -2718,6 +2766,8 @@ class Database:
                     source or None,
                     _json_dump(metadata_sources),
                     now,
+                    section_complete("score"),
+                    section_complete("score"),
                     section_complete("score"),
                     section_complete("score"),
                     section_complete("release_date"),
@@ -2783,7 +2833,12 @@ class Database:
 
         if existing is not None:
             section_keys = {
-                "score": ("user_score", "ratings_count"),
+                "score": (
+                    "user_score",
+                    "ratings_count",
+                    "critic_score",
+                    "critic_reviews_count",
+                ),
                 "release_date": ("release_date", "year"),
                 "format": ("album_format",),
                 "labels": ("label", "labels"),
@@ -2840,7 +2895,12 @@ class Database:
         inferred_source = str(row["metadata_source"] or "aoty").casefold()
         if inferred_source not in {"aoty", "musicbrainz"}:
             inferred_source = "aoty"
-        if row["user_score"] or row["ratings_count"]:
+        if (
+            row["user_score"]
+            or row["ratings_count"]
+            or row["critic_score"]
+            or row["critic_reviews_count"]
+        ):
             metadata_sources.setdefault("score", "aoty")
         if row["release_date"] or row["year"]:
             metadata_sources.setdefault("release_date", inferred_source)
@@ -2866,6 +2926,8 @@ class Database:
             "cover": row["cover_url"],
             "user_score": row["user_score"],
             "ratings_count": row["ratings_count"],
+            "critic_score": row["critic_score"],
+            "critic_reviews_count": row["critic_reviews_count"],
             "release_date": row["release_date"],
             "year": row["year"],
             "album_format": row["album_format"],

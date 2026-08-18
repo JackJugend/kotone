@@ -219,6 +219,7 @@ class RatingDistributionView(TimedDisableView):
         self.active_category = "all"
         self.graphic_bytes: dict[str, bytes] = {}
         self.avatar_images: list[dict] | None = None
+        self.example_images: dict[str, list[dict]] = {}
         self.render_lock = asyncio.Lock()
 
         self.selector = discord.ui.Select(
@@ -266,14 +267,33 @@ class RatingDistributionView(TimedDisableView):
             cached = self.graphic_bytes.get(category)
             if cached is not None:
                 return cached
+            data = self.distributions[category]
+            example_items = list(data.get("best_examples") or []) + list(
+                data.get("worst_examples") or []
+            )
             if self.avatar_images is None:
-                self.avatar_images = await asyncio.to_thread(
-                    load_cover_images,
-                    self.avatar_items,
-                    limit=1,
+                self.avatar_images, example_images = await asyncio.gather(
+                    asyncio.to_thread(
+                        load_cover_images,
+                        self.avatar_items,
+                        limit=1,
+                    ),
+                    asyncio.to_thread(
+                        load_cover_images,
+                        example_items,
+                        limit=4,
+                    ),
                 )
-            payload = dict(self.distributions[category])
+            else:
+                example_images = await asyncio.to_thread(
+                    load_cover_images,
+                    example_items,
+                    limit=4,
+                )
+            self.example_images[category] = example_images
+            payload = dict(data)
             payload["_avatar_images"] = self.avatar_images
+            payload["_example_images"] = example_images
             buffer = await asyncio.to_thread(render_rating_distribution, payload)
             content = buffer.getvalue()
             self.graphic_bytes[category] = content

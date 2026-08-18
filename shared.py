@@ -14,6 +14,7 @@ from typing import Any
 import discord
 
 from display_utils import display_romanized_name
+from must_hear import marked_cover_url, must_hear_album
 from settings import AOTY_ICON_ATTACHMENT, USERS
 
 
@@ -124,6 +125,9 @@ class ReleaseVariables:
     user_score: Any = None
     aoty_user_score: Any = None
     ratings_count: Any = None
+    critic_score: Any = None
+    critic_reviews_count: Any = None
+    must_hear: bool = False
 
     # Wydanie.
     release_date: Any = None
@@ -280,6 +284,22 @@ def build_release_variables(
         all_genres_text = missing
 
     user_score = value("user_score", missing)
+    ratings_count = value("ratings_count", missing)
+    critic_score = value("critic_score", missing)
+    critic_reviews_count = value("critic_reviews_count", missing)
+    album_id = str(item.get("album_id") or details.get("album_id") or "")
+    raw_cover = item.get("cover") or details.get("cover")
+    must_hear = must_hear_album(
+        user_score,
+        ratings_count,
+        critic_score,
+        critic_reviews_count,
+    )
+    display_cover = (
+        marked_cover_url(album_id, raw_cover)
+        if must_hear and details.get("fetched_at") is not None
+        else None
+    ) or raw_cover
 
     def total_duration(tracklist_value: list[dict]) -> str | None:
         """Return an album runtime from cached track lengths when possible."""
@@ -317,9 +337,9 @@ def build_release_variables(
         display_album=display_romanized_name(album),
         date=str(item.get("date") or missing),
         url=str(item.get("url") or details.get("url") or ""),
-        cover=item.get("cover") or details.get("cover"),
+        cover=display_cover,
         release_format=item.get("release_format") or details.get("album_format"),
-        album_id=str(item.get("album_id") or ""),
+        album_id=album_id,
         artist_url=str(
             item.get("artist_url")
             or details.get("artist_url")
@@ -332,7 +352,10 @@ def build_release_variables(
         ),
         user_score=user_score,
         aoty_user_score=user_score,
-        ratings_count=value("ratings_count", missing),
+        ratings_count=ratings_count,
+        critic_score=critic_score,
+        critic_reviews_count=critic_reviews_count,
+        must_hear=must_hear,
         release_date=value("release_date", missing),
         year=value("year", missing),
         album_format=(

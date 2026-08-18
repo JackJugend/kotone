@@ -1101,6 +1101,19 @@ class RatingsArchiveTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_critic_score_block_is_parsed_separately_from_user_score(self):
+        soup = BeautifulSoup(
+            """
+            <section><div>Critic Score</div><strong>74</strong>
+            <span>Based on 18 critic reviews</span></section>
+            <section><div>User Score</div><strong>84</strong>
+            <span>Based on 2,204 ratings</span></section>
+            """,
+            "html.parser",
+        )
+        self.assertEqual(aoty._extract_aoty_critic_score(soup), "74")
+        self.assertEqual(aoty._extract_critic_reviews_count(soup), "18")
+
     def test_album_rating_count_ignores_unrelated_counts(self):
         soup = BeautifulSoup(
             """

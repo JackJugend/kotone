@@ -1872,6 +1872,36 @@ def _extract_aoty_user_score(soup: BeautifulSoup) -> str | None:
     return match.group(1) if match else None
 
 
+def _extract_aoty_critic_score(soup: BeautifulSoup) -> str | None:
+    """Read the headline Critic Score without confusing it with User Score."""
+
+    for string in soup.find_all(string=True):
+        if " ".join(str(string).split()).casefold() != "critic score":
+            continue
+        checked = 0
+        for next_string in string.parent.find_all_next(string=True):
+            text = " ".join(str(next_string).split())
+            lowered = text.casefold()
+            if not text or lowered == "critic score":
+                continue
+            if lowered == "user score":
+                break
+            match = re.fullmatch(r"(100|\d{1,2})", text)
+            if match:
+                return match.group(1)
+            checked += 1
+            if checked >= 20:
+                break
+
+    page_text = " ".join(soup.get_text(" ", strip=True).split())
+    match = re.search(
+        r"Critic\s*Score\s*(100|\d{1,2})(?!\d)",
+        page_text,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
 def _normalize_count(value: str | None) -> str | None:
     """Normalize the AOTY count while preserving commas / K / M."""
     if not value:
@@ -1881,6 +1911,34 @@ def _normalize_count(value: str | None) -> str | None:
     value = re.sub(r"\s+", "", value)
 
     return value or None
+
+
+def _extract_critic_reviews_count(soup: BeautifulSoup) -> str | None:
+    """Read the number of critic scores/reviews from the Critic Score block."""
+
+    patterns = (
+        r"(?:Based\s+on\s+)?([\d][\d,.]*(?:\s*[KM])?)\s+critic\s+(?:scores|reviews|ratings)",
+        r"(?:Based\s+on\s+)?([\d][\d,.]*(?:\s*[KM])?)\s+(?:scores|reviews|ratings)",
+    )
+    for string in soup.find_all(string=True):
+        if " ".join(str(string).split()).casefold() != "critic score":
+            continue
+        window: list[str] = []
+        for next_string in string.parent.find_all_next(string=True):
+            text = " ".join(str(next_string).split())
+            if not text:
+                continue
+            if text.casefold() == "user score":
+                break
+            window.append(text)
+            if len(window) >= 30:
+                break
+        block = " ".join(window)
+        for pattern in patterns:
+            match = re.search(pattern, block, flags=re.IGNORECASE)
+            if match:
+                return _normalize_count(match.group(1))
+    return None
 
 
 def _extract_ratings_count(
@@ -2264,6 +2322,8 @@ def get_album_details(album_url: str) -> dict:
 
     user_score = _extract_aoty_user_score(soup)
     ratings_count = _extract_ratings_count(soup)
+    critic_score = _extract_aoty_critic_score(soup)
+    critic_reviews_count = _extract_critic_reviews_count(soup)
 
     if ratings_count is None:
         try:
@@ -2430,7 +2490,12 @@ def get_album_details(album_url: str) -> dict:
     # change. A hand-built details dictionary without these flags keeps the
     # historical all-authoritative behaviour in Database.save_release_details.
     section_complete = {
-        "score": bool(user_score is not None or ratings_count is not None),
+        "score": bool(
+            user_score is not None
+            or ratings_count is not None
+            or critic_score is not None
+            or critic_reviews_count is not None
+        ),
         "release_date": bool(release_row is not None and release_date),
         "format": bool(format_row is not None and album_format),
         "labels": bool(label_row is not None and labels),
@@ -2447,6 +2512,8 @@ def get_album_details(album_url: str) -> dict:
         "artist_url": artist_url,
         "user_score": user_score,
         "ratings_count": ratings_count,
+        "critic_score": critic_score,
+        "critic_reviews_count": critic_reviews_count,
         "release_date": release_date,
         "year": year,
         "album_format": album_format,

@@ -8,6 +8,8 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 
+from must_hear import must_hear_album
+
 
 SCORE_BUCKETS = (
     ("100", 100, 100),
@@ -134,6 +136,12 @@ def summarize(username: str, rows: list[dict]) -> dict:
                 "album": row.get("album") or "Nieznane wydanie",
                 "score": score,
                 "cover": row.get("cover"),
+                "must_hear": must_hear_album(
+                    row.get("aoty_score"),
+                    row.get("aoty_ratings_count"),
+                    row.get("critic_score"),
+                    row.get("critic_reviews_count"),
+                ),
             }
             for row, score in top_ratings
         ],
@@ -195,6 +203,38 @@ def rating_distribution(
         filtered.append(row)
 
     summary = summarize(username, filtered)
+    example_rows = filtered
+    if category == "all":
+        example_rows = [row for row in filtered if not row.get("_track_score")]
+
+    def example(row: dict) -> dict:
+        is_track = bool(row.get("_track_score"))
+        return {
+            "album_id": row.get("album_id"),
+            "artist": row.get("artist") or "Nieznany artysta",
+            "album": row.get("album") or "Nieznane wydanie",
+            "title": (
+                row.get("track_title") if is_track else row.get("album")
+            ) or "Nieznana pozycja",
+            "score": _score(row.get("score")),
+            "cover": row.get("cover"),
+            "is_track": is_track,
+            "must_hear": must_hear_album(
+                row.get("aoty_score"),
+                row.get("aoty_ratings_count"),
+                row.get("critic_score"),
+                row.get("critic_reviews_count"),
+            ),
+        }
+
+    ranked = sorted(
+        example_rows,
+        key=lambda row: (
+            -(_score(row.get("score")) or 0),
+            str(row.get("artist") or "").casefold(),
+            str(row.get("album") or "").casefold(),
+        ),
+    )
     return {
         "username": username,
         "category": category,
@@ -203,6 +243,8 @@ def rating_distribution(
         "average": summary["average"],
         "median": summary["median"],
         "score_buckets": summary["score_buckets"],
+        "best_examples": [example(row) for row in ranked[:2]],
+        "worst_examples": [example(row) for row in reversed(ranked[-2:])],
         "year": year,
         "genre": genre,
         "score_min": score_min,
@@ -232,6 +274,18 @@ def compare(user_a: str, rows_a: list[dict], user_b: str, rows_b: list[dict]) ->
                 "artist": row_a.get("artist") or row_b.get("artist") or "Nieznany artysta",
                 "album": row_a.get("album") or row_b.get("album") or "Nieznane wydanie",
                 "cover": row_a.get("cover") or row_b.get("cover"),
+                "must_hear": bool(
+                    row_a.get("must_hear")
+                    or row_b.get("must_hear")
+                    or must_hear_album(
+                        row_a.get("aoty_score") or row_b.get("aoty_score"),
+                        row_a.get("aoty_ratings_count")
+                        or row_b.get("aoty_ratings_count"),
+                        row_a.get("critic_score") or row_b.get("critic_score"),
+                        row_a.get("critic_reviews_count")
+                        or row_b.get("critic_reviews_count"),
+                    )
+                ),
                 "score_a": score_a,
                 "score_b": score_b,
                 "gap": abs(score_a - score_b),
@@ -252,20 +306,31 @@ def compare(user_a: str, rows_a: list[dict], user_b: str, rows_b: list[dict]) ->
     )
     shared_genres = shared_genres_a + shared_genres_b
 
+    scores_a = [value[1] for value in map_a.values()]
+    scores_b = [value[1] for value in map_b.values()]
+    disagreements = sorted(
+        common,
+        key=lambda item: (-item["gap"], -item["mean"], item["album"].casefold()),
+    )
     return {
         "user_a": user_a,
         "user_b": user_b,
         "ratings_a": len(map_a),
         "ratings_b": len(map_b),
-        "average_a": statistics.fmean(value[1] for value in map_a.values()) if map_a else None,
-        "average_b": statistics.fmean(value[1] for value in map_b.values()) if map_b else None,
+        "average_a": statistics.fmean(scores_a) if scores_a else None,
+        "average_b": statistics.fmean(scores_b) if scores_b else None,
+        "median_a": statistics.median(scores_a) if scores_a else None,
+        "median_b": statistics.median(scores_b) if scores_b else None,
         "common_count": len(common),
         "mean_gap": statistics.fmean(gaps) if gaps else None,
         "agreement": max(0.0, 100.0 - statistics.fmean(gaps)) if gaps else None,
-        "disagreements": sorted(
-            common,
-            key=lambda item: (-item["gap"], -item["mean"], item["album"].casefold()),
-        )[:5],
+        "disagreements": disagreements[:5],
+        "ahead_a": [
+            item for item in disagreements if item["score_a"] > item["score_b"]
+        ][:3],
+        "ahead_b": [
+            item for item in disagreements if item["score_b"] > item["score_a"]
+        ][:3],
         "shared_favorites": sorted(
             common,
             key=lambda item: (-item["mean"], item["gap"], item["album"].casefold()),

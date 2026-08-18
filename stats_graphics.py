@@ -8,6 +8,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from cover_badges import add_must_hear_badge
+
 
 WIDTH = 1000
 HEIGHT = 900
@@ -19,6 +21,8 @@ MUTED = (190, 194, 202)
 BLUE = (88, 101, 242)
 GREEN = (82, 196, 122)
 GOLD = (245, 183, 66)
+USER_A_COLOR = (167, 139, 250)
+USER_B_COLOR = (45, 212, 191)
 RATING_COLORS = (
     (0, 224, 224),
     (0, 235, 167),
@@ -106,10 +110,10 @@ def _fit(draw: ImageDraw.ImageDraw, text: str, font, width: int) -> str:
     return text + suffix
 
 
-def _base(title: str, subtitle: str):
-    image = Image.new("RGB", (WIDTH, HEIGHT), BACKGROUND)
+def _base(title: str, subtitle: str, *, height: int = HEIGHT):
+    image = Image.new("RGB", (WIDTH, height), BACKGROUND)
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((24, 24, WIDTH - 24, HEIGHT - 24), 26, fill=PANEL)
+    draw.rounded_rectangle((24, 24, WIDTH - 24, height - 24), 26, fill=PANEL)
     title_font = _font(40, bold=True)
     subtitle_font = _font(22)
     draw.text(
@@ -212,13 +216,26 @@ def _save(image: Image.Image) -> io.BytesIO:
     return output
 
 
-def _cover_cards(draw: ImageDraw.ImageDraw, image: Image.Image, data: dict) -> None:
+def _must_hear_cover_badge(cover: Image.Image, item: dict) -> Image.Image:
+    """Add only the orange AOTY Must Hear corner to a rendered cover."""
+
+    if not item.get("must_hear"):
+        return cover
+    return add_must_hear_badge(cover)
+
+
+def _cover_cards(
+    draw: ImageDraw.ImageDraw,
+    image: Image.Image,
+    data: dict,
+    *,
+    y: int = 780,
+) -> None:
     """Add up to three compact cover cards from the persistent local cache."""
 
     covers = list(data.get("_cover_images") or [])[:3]
     if not covers:
         return
-    y = 780
     card_width = 286
     for index, item in enumerate(covers):
         x = 54 + index * 302
@@ -226,6 +243,7 @@ def _cover_cards(draw: ImageDraw.ImageDraw, image: Image.Image, data: dict) -> N
         try:
             cover = Image.open(io.BytesIO(item["image_bytes"])).convert("RGB")
             cover = ImageOps.fit(cover, (72, 72), method=Image.Resampling.LANCZOS)
+            cover = _must_hear_cover_badge(cover, item)
             mask = Image.new("L", (72, 72), 0)
             ImageDraw.Draw(mask).rounded_rectangle((0, 0, 71, 71), 9, fill=255)
             image.paste(cover, (x + 8, y + 8), mask)
@@ -307,6 +325,7 @@ def render_rating_distribution(data: dict) -> io.BytesIO:
     image, draw = _base(
         f"Rozkład ocen • {data['username']}",
         str(data.get("filter_text") or data.get("label") or "Wszystko"),
+        height=1220,
     )
     _avatar_badges(image, data)
 
@@ -337,69 +356,303 @@ def render_rating_distribution(data: dict) -> io.BytesIO:
     _bars(
         draw,
         data["score_buckets"],
-        (96, 360, 904, 832),
+        (96, 360, 904, 810),
         colors=RATING_COLORS,
         label_width=118,
         minimum_row_height=41,
         max_rows=11,
     )
+
+    example_images = list(data.get("_example_images") or [])
+
+    def example_panel(x1: int, title: str, examples: list[dict]) -> None:
+        x2 = x1 + 422
+        draw.rounded_rectangle((x1, 842, x2, 1184), 18, fill=PANEL_ALT)
+        title_font = _font(23, bold=True)
+        draw.text(
+            (_centered_x(draw, title, title_font, x1, x2), 862),
+            title,
+            font=title_font,
+            fill=TEXT,
+        )
+        if not examples:
+            empty = "Brak pozycji dla tych filtrów"
+            font = _font(19)
+            draw.text(
+                (_centered_x(draw, empty, font, x1, x2), 955),
+                empty,
+                font=font,
+                fill=MUTED,
+            )
+            return
+
+        card_width = 186
+        for index, item in enumerate(examples[:2]):
+            card_x = x1 + 17 + index * 202
+            cover_y = 908
+            cover_item = next(
+                (
+                    candidate
+                    for candidate in example_images
+                    if candidate.get("album_id") == item.get("album_id")
+                    and candidate.get("title") == item.get("title")
+                ),
+                None,
+            )
+            cover_size = 150
+            cover_loaded = False
+            if cover_item:
+                try:
+                    cover = Image.open(
+                        io.BytesIO(cover_item["image_bytes"])
+                    ).convert("RGB")
+                    cover = ImageOps.fit(
+                        cover,
+                        (cover_size, cover_size),
+                        method=Image.Resampling.LANCZOS,
+                    )
+                    cover = _must_hear_cover_badge(cover, item)
+                    mask = Image.new("L", (cover_size, cover_size), 0)
+                    ImageDraw.Draw(mask).rounded_rectangle(
+                        (0, 0, cover_size - 1, cover_size - 1), 10, fill=255
+                    )
+                    image.paste(cover, (card_x + 18, cover_y), mask)
+                    cover_loaded = True
+                except Exception:
+                    pass
+
+            if not cover_loaded:
+                draw.rounded_rectangle(
+                    (
+                        card_x + 18,
+                        cover_y,
+                        card_x + 18 + cover_size,
+                        cover_y + cover_size,
+                    ),
+                    10,
+                    fill=(66, 68, 77),
+                )
+                placeholder = "♪"
+                placeholder_font = _font(54, bold=True)
+                draw.text(
+                    (
+                        _centered_x(
+                            draw,
+                            placeholder,
+                            placeholder_font,
+                            card_x + 18,
+                            card_x + 18 + cover_size,
+                        ),
+                        cover_y + 42,
+                    ),
+                    placeholder,
+                    font=placeholder_font,
+                    fill=MUTED,
+                )
+
+            title_text = _fit(
+                draw,
+                str(item.get("title") or "Nieznana pozycja"),
+                _font(18, bold=True),
+                card_width - 8,
+            )
+            artist = _fit(
+                draw,
+                str(item.get("artist") or "Nieznany artysta"),
+                _font(16),
+                card_width - 8,
+            )
+            draw.text(
+                (card_x + 4, cover_y + 166),
+                title_text,
+                font=_font(18, bold=True),
+                fill=TEXT,
+            )
+            draw.text(
+                (card_x + 4, cover_y + 197),
+                artist,
+                font=_font(16),
+                fill=MUTED,
+            )
+            score = _number(item.get("score"), 0)
+            score_font = _font(24, bold=True)
+            score_width = draw.textlength(score, font=score_font)
+            draw.rounded_rectangle(
+                (
+                    card_x + 166 - score_width,
+                    cover_y + cover_size - 42,
+                    card_x + 178,
+                    cover_y + cover_size - 8,
+                ),
+                9,
+                fill=(32, 33, 38),
+            )
+            draw.text(
+                (
+                    card_x + 172 - score_width,
+                    cover_y + cover_size - 41,
+                ),
+                score,
+                font=score_font,
+                fill=_score_color(item.get("score")),
+            )
+
+    example_panel(54, "Najwyżej ocenione", data.get("best_examples") or [])
+    example_panel(524, "Najniżej ocenione", data.get("worst_examples") or [])
     return _save(image)
 
 
 def render_compare(data: dict) -> io.BytesIO:
+    compare_height = 1120 if data.get("_cover_images") else 990
     image, draw = _base(
         f"Porównanie • {data['user_a']} i {data['user_b']}",
         "Komenda bazuje na danych zapisanych przez bota",
+        height=compare_height,
     )
     _avatar_badges(image, data)
-    _metric(draw, 54, "Wspólne oceny", str(data["common_count"]), TEXT)
-    _metric(
-        draw, 283, f"Średnia: {data['user_a']}", _number(data["average_a"]),
-        _score_color(data["average_a"]),
-    )
-    _metric(
-        draw, 512, f"Średnia: {data['user_b']}", _number(data["average_b"]),
-        _score_color(data["average_b"]),
-    )
-    _metric(
-        draw, 741, "Zgodność", f"{_number(data['agreement'])}%",
-        _score_color(data["agreement"]),
-    )
 
-    draw.text(
-        (62, 308),
-        "Największe różnice w ocenach",
-        font=_font(29, bold=True),
-        fill=TEXT,
-    )
-    font = _font(22)
-    items = data["disagreements"] or []
-    if not items:
-        draw.text((62, 372), "Brak wspólnych ocen", font=font, fill=MUTED)
-    for index, item in enumerate(items[:5], start=1):
-        y = 366 + (index - 1) * 65
-        name = _fit(draw, f"{item['artist']} — {item['album']}", font, 520)
-        draw.text((62, y), f"{index}. {name}", font=font, fill=TEXT)
-        _draw_parts(
-            draw,
-            (
-                (f"{item['score_a']:.0f}", _score_color(item["score_a"])),
-                (" / ", MUTED),
-                (f"{item['score_b']:.0f}", _score_color(item["score_b"])),
-                (f"   różnica: {item['gap']:.0f}", MUTED),
-            ),
-            right=938,
-            y=y,
-            font=font,
+    def user_card(x1: int, username: str, average, median, ratings: int, color) -> None:
+        x2 = x1 + 434
+        draw.rounded_rectangle((x1, 154, x2, 306), 18, fill=PANEL_ALT)
+        name_font = _font(27, bold=True)
+        draw.text(
+            (_centered_x(draw, username, name_font, x1, x2), 172),
+            username,
+            font=name_font,
+            fill=color,
+        )
+        average_text = _number(average)
+        average_font = _font(45, bold=True)
+        draw.text(
+            (_centered_x(draw, average_text, average_font, x1, x2), 207),
+            average_text,
+            font=average_font,
+            fill=_score_color(average),
+        )
+        detail = f"{ratings} ocen  •  mediana {_number(median)}"
+        detail_font = _font(19)
+        draw.text(
+            (_centered_x(draw, detail, detail_font, x1, x2), 269),
+            detail,
+            font=detail_font,
+            fill=MUTED,
         )
 
-    draw.text(
-        (62, 730),
-        "Zgodność = 100 minus średnia bezwzględna różnica ocen.",
-        font=_font(21),
-        fill=MUTED,
+    user_card(
+        54, data["user_a"], data["average_a"], data["median_a"],
+        data["ratings_a"], USER_A_COLOR,
     )
-    _cover_cards(draw, image, data)
+    user_card(
+        512, data["user_b"], data["average_b"], data["median_b"],
+        data["ratings_b"], USER_B_COLOR,
+    )
+
+    summary = (
+        f"{data['common_count']} wspólnych ocen  •  "
+        f"zgodność {_number(data['agreement'])}%"
+    )
+    summary_font = _font(22, bold=True)
+    draw.text(
+        (_centered_x(draw, summary, summary_font, 54, 946), 326),
+        summary,
+        font=summary_font,
+        fill=TEXT,
+    )
+
+    def comparison_bars(
+        y: int,
+        label: str,
+        value_a,
+        value_b,
+        maximum: float,
+    ) -> None:
+        label_font = _font(21, bold=True)
+        value_font = _font(18, bold=True)
+        bar_x1, bar_x2 = 216, 892
+        draw.text(
+            (_centered_x(draw, label, label_font, bar_x1, bar_x2), y),
+            label,
+            font=label_font,
+            fill=TEXT,
+        )
+        for offset, value, color, username in (
+            (32, value_a, USER_A_COLOR, data["user_a"]),
+            (65, value_b, USER_B_COLOR, data["user_b"]),
+        ):
+            numeric = float(value or 0)
+            draw.text((54, y + offset), username, font=_font(17), fill=color)
+            draw.rounded_rectangle(
+                (bar_x1, y + offset + 4, bar_x2, y + offset + 25),
+                10,
+                fill=(65, 67, 76),
+            )
+            width = int((bar_x2 - bar_x1) * numeric / max(1.0, maximum))
+            if width:
+                draw.rounded_rectangle(
+                    (bar_x1, y + offset + 4, bar_x1 + max(5, width), y + offset + 25),
+                    10,
+                    fill=color,
+                )
+            value_text = _number(value, 0 if label == "Liczba ocen" else 1)
+            draw.text((904, y + offset), value_text, font=value_font, fill=TEXT)
+
+    comparison_bars(
+        374, "Liczba ocen", data["ratings_a"], data["ratings_b"],
+        max(data["ratings_a"], data["ratings_b"], 1),
+    )
+    comparison_bars(474, "Średnia ocen", data["average_a"], data["average_b"], 100)
+    comparison_bars(574, "Mediana ocen", data["median_a"], data["median_b"], 100)
+
+    def advantage_panel(x1: int, username: str, items: list[dict], side: str) -> None:
+        x2 = x1 + 434
+        draw.rounded_rectangle((x1, 690, x2, 948), 18, fill=PANEL_ALT)
+        heading = f"{username} ocenia wyżej"
+        heading_font = _font(23, bold=True)
+        draw.text(
+            (_centered_x(draw, heading, heading_font, x1, x2), 712),
+            heading,
+            font=heading_font,
+            fill=USER_A_COLOR if side == "a" else USER_B_COLOR,
+        )
+        if not items:
+            empty = "Brak wyżej ocenionych wspólnych pozycji"
+            empty_font = _font(17)
+            draw.text(
+                (_centered_x(draw, empty, empty_font, x1, x2), 815),
+                empty,
+                font=empty_font,
+                fill=MUTED,
+            )
+            return
+        for index, item in enumerate(items[:3]):
+            y = 758 + index * 60
+            name = _fit(
+                draw,
+                f"{item['artist']} — {item['album']}",
+                _font(17, bold=True),
+                280,
+            )
+            draw.text((x1 + 18, y), name, font=_font(17, bold=True), fill=TEXT)
+            score_a = item["score_a"]
+            score_b = item["score_b"]
+            parts = (
+                (f"{data['user_a']} ", USER_A_COLOR),
+                (f"{score_a:.0f}", _score_color(score_a)),
+                ("  •  ", MUTED),
+                (f"{data['user_b']} ", USER_B_COLOR),
+                (f"{score_b:.0f}", _score_color(score_b)),
+                (f"  •  +{item['gap']:.0f}", TEXT),
+            )
+            parts_font = _font(14, bold=True)
+            part_x = x1 + 18
+            for text, color in parts:
+                draw.text((part_x, y + 27), text, font=parts_font, fill=color)
+                part_x += draw.textlength(text, font=parts_font)
+
+    advantage_panel(54, data["user_a"], data.get("ahead_a") or [], "a")
+    advantage_panel(512, data["user_b"], data.get("ahead_b") or [], "b")
+    if data.get("_cover_images"):
+        _cover_cards(draw, image, data, y=980)
     return _save(image)
 
 

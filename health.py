@@ -12,10 +12,13 @@ import time
 
 from aiohttp import web
 
+from cover_badges import render_must_hear_png
 from database import DB
 from http_client import HTTP
+from must_hear import cover_token, must_hear_album
 from services import DATA
 from settings import PORT
+from stats_cover_cache import load_cover_bytes
 
 
 class HealthServer:
@@ -94,10 +97,45 @@ class HealthServer:
             status=200 if database_ok else 503,
         )
 
+    async def _must_hear_cover(self, request: web.Request) -> web.Response:
+        """Serve a cached orange-tag cover only for an in-scope release."""
+
+        album_id = str(request.match_info.get("album_id") or "").strip()
+        token = str(request.match_info.get("token") or "").strip()
+        details = await asyncio.to_thread(DB.get_release_details, album_id)
+        if not details:
+            raise web.HTTPNotFound()
+        cover_url = str(details.get("cover") or "").strip()
+        if token != cover_token(album_id, cover_url):
+            raise web.HTTPNotFound()
+        if not must_hear_album(
+            details.get("user_score"),
+            details.get("ratings_count"),
+            details.get("critic_score"),
+            details.get("critic_reviews_count"),
+        ):
+            raise web.HTTPNotFound()
+        content = await asyncio.to_thread(load_cover_bytes, cover_url)
+        if not content:
+            raise web.HTTPNotFound()
+        try:
+            marked = await asyncio.to_thread(render_must_hear_png, content)
+        except Exception:
+            raise web.HTTPNotFound() from None
+        return web.Response(
+            body=marked,
+            content_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
+
     async def start(self) -> None:
         app = web.Application()
         app.router.add_get("/health", self._health)
         app.router.add_get("/live", self._live)
+        app.router.add_get(
+            "/must-hear-cover/{album_id}/{token}.png",
+            self._must_hear_cover,
+        )
 
         self.runner = web.AppRunner(app)
         await self.runner.setup()

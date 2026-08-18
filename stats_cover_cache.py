@@ -84,6 +84,12 @@ def _load_one(url: str) -> bytes | None:
     return content
 
 
+def load_cover_bytes(url: str) -> bytes | None:
+    """Public single-cover cache accessor used by the HTTP badge endpoint."""
+
+    return _load_one(url)
+
+
 def load_cover_images(items: list[dict], *, limit: int = 3) -> list[dict]:
     """Return up to ``limit`` config-scope items with locally cached bytes."""
 

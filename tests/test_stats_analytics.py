@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +17,7 @@ os.environ.setdefault("DISCORD_TOKEN", "test-token")
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="kotone-stats-runtime-"))
 
 from database import Database  # noqa: E402
+from must_hear import must_hear_album  # noqa: E402
 from stats_engine import (  # noqa: E402
     compare,
     rating_distribution,
@@ -107,6 +108,9 @@ class StatsEngineTests(unittest.TestCase):
         self.assertEqual(data["mean_gap"], 20)
         self.assertEqual(data["agreement"], 80)
         self.assertEqual(data["disagreements"][0]["album_id"], "shared")
+        self.assertEqual(data["median_a"], 95)
+        self.assertEqual(data["median_b"], 40)
+        self.assertEqual(data["ahead_a"][0]["album_id"], "shared")
 
     def test_wrapped_filters_by_saved_rating_year(self):
         year_2025 = 1735689600  # 2025-01-01 UTC
@@ -138,6 +142,8 @@ class StatsEngineTests(unittest.TestCase):
             "enso", [lp, single], [track], "all", category_label="Wszystko"
         )
         self.assertEqual(everything["ratings"], 3)
+        self.assertEqual(everything["best_examples"][0]["album_id"], "lp")
+        self.assertEqual(everything["worst_examples"][0]["album_id"], "single")
 
         singles = rating_distribution(
             "enso", [lp, single], [track], "single", category_label="Single"
@@ -158,6 +164,13 @@ class StatsEngineTests(unittest.TestCase):
         )
         self.assertEqual(tracks["ratings"], 1)
         self.assertEqual(tracks["average"], 95)
+
+    def test_orange_must_hear_rule_uses_all_four_cached_thresholds(self):
+        self.assertTrue(must_hear_album("84", "2,204", "74", "18"))
+        self.assertFalse(must_hear_album("80", "2,204", "74", "18"))
+        self.assertFalse(must_hear_album("84", "499", "74", "18"))
+        self.assertFalse(must_hear_album("84", "2,204", "80", "18"))
+        self.assertFalse(must_hear_album("84", "2,204", "74", "14"))
 
 
 class AnalyticsDatabaseTests(unittest.TestCase):
@@ -196,6 +209,10 @@ class AnalyticsDatabaseTests(unittest.TestCase):
                 "release_date": "January 1, 2024",
                 "year": "2024",
                 "album_format": "LP",
+                "user_score": "84",
+                "ratings_count": "2,204",
+                "critic_score": "74",
+                "critic_reviews_count": "18",
             },
         )
 
@@ -205,6 +222,8 @@ class AnalyticsDatabaseTests(unittest.TestCase):
         self.assertEqual(rows[0]["genres"], ["Dream Pop"])
         self.assertTrue(rows[0]["has_review"])
         self.assertTrue(rows[0]["liked"])
+        self.assertEqual(rows[0]["critic_score"], "74")
+        self.assertEqual(rows[0]["critic_reviews_count"], "18")
         self.assertEqual(
             rows[0]["cover"],
             "https://cdn.albumoftheyear.org/example.jpg",
@@ -267,6 +286,23 @@ class CoverCacheTests(unittest.TestCase):
         )
         self.assertIsNone(_safe_cover_url("http://cdn.albumoftheyear.org/x.jpg"))
         self.assertIsNone(_safe_cover_url("https://example.com/x.jpg"))
+
+    def test_marked_cover_url_is_stable_and_badge_is_orange(self):
+        try:
+            from PIL import Image
+            from cover_badges import MUST_HEAR_ORANGE, add_must_hear_badge
+            from must_hear import marked_cover_url
+        except ModuleNotFoundError as exc:
+            self.skipTest(str(exc))
+
+        with patch.dict(
+            os.environ,
+            {"RAILWAY_PUBLIC_DOMAIN": "kotone.example"},
+        ):
+            url = marked_cover_url("42", "https://cdn.albumoftheyear.org/x.jpg")
+        self.assertTrue(url.startswith("https://kotone.example/must-hear-cover/42/"))
+        image = add_must_hear_badge(Image.new("RGB", (200, 200), "white"))
+        self.assertEqual(image.getpixel((198, 1)), MUST_HEAR_ORANGE)
 
 
 @unittest.skipIf(DISCORD_IMPORT_ERROR is not None, str(DISCORD_IMPORT_ERROR))
