@@ -185,6 +185,18 @@ class ArtistViewTests(unittest.TestCase):
         self.assertIn("Jazz Pop", header)
         self.assertNotIn("Genre:", header)
 
+    def test_artist_header_has_balanced_markdown(self):
+        header = _artist_header_text(
+            {
+                "artist_user_score": None,
+                "artist_ratings_count": "0",
+                "artist_followers": "0",
+                "genres": ["Dream Pop"],
+            }
+        )
+        self.assertNotIn("**  •  **", header)
+        self.assertIn("**0 ratings • 0 followers**", header)
+
     def test_artist_pagination_only_appears_when_releases_need_two_pages(self):
         discography = {"artist": "Artist", "url": "https://example.test"}
         releases = [
@@ -261,6 +273,7 @@ class ArtistViewTests(unittest.TestCase):
                 [parameter.name for parameter in command.parameters],
                 ["artist", "aoty_min", "aoty_max"],
             )
+            self.assertFalse(command.parameters[0].required)
         finally:
             import asyncio
 

@@ -2,9 +2,11 @@ import discord
 import requests
 
 import aoty
+from commands.album import _music_from_presence
 from services import DATA
 from display_utils import display_genres, display_romanized_name
 from formats import RATING_FORMATS, format_key_from_label
+from presence_cache import PRESENCE_CACHE
 from shared import build_release_variables, score_or_nr, score_or_missing, set_aoty_footer
 from views import TimedDisableView
 
@@ -197,9 +199,8 @@ def _artist_header_text(discography):
 
     lines = [
         (
-            f"<:aoty:1539095897084924004> {score}**  •  **"
-            f"**{ratings_count} ratings  •  **"
-            f"**{followers} followers**"
+            f"<:aoty:1539095897084924004> {score} • "
+            f"**{ratings_count} ratings • {followers} followers**"
         )
     ]
 
@@ -919,7 +920,7 @@ class ArtistSortView(TimedDisableView):
         label="Najnowsze",
         style=discord.ButtonStyle.primary,
         custom_id="newest",
-        row=1,
+        row=0,
     )
     async def newest_button(
         self,
@@ -1015,14 +1016,14 @@ def setup_artist_command(
         description="Pokazuje dyskografię artysty z datami i ocenami AOTY",
     )
     @discord.app_commands.describe(
-        artist="Nazwa artysty na AOTY",
+        artist="Nazwa artysty na AOTY (opcjonalnie; bez pola używa Rich Presence)",
         aoty_min="Minimalny AOTY User Score (0–100)",
         aoty_max="Maksymalny AOTY User Score (0–100)",
     )
     @discord.app_commands.autocomplete(artist=artist_autocomplete)
     async def artist_command(
         interaction: discord.Interaction,
-        artist: str,
+        artist: str | None = None,
         aoty_min: int | None = None,
         aoty_max: int | None = None,
     ):
@@ -1042,6 +1043,23 @@ def setup_artist_command(
             )
             return
         await interaction.response.defer()
+
+        artist = str(artist or "").strip()
+        if not artist:
+            member = interaction.user
+            if interaction.guild is not None:
+                member = interaction.guild.get_member(interaction.user.id) or member
+            presence = _music_from_presence(
+                member,
+                cached_activities=PRESENCE_CACHE.activities_for(interaction.user.id),
+            )
+            if presence is None:
+                await interaction.followup.send(
+                    "❌ Nie widzę aktywnego artysty w Twoim Rich Presence."
+                )
+                return
+            artist, _album, source = presence
+            print(f"[ARTIST] Rich Presence ({source}): {artist}")
 
         try:
             result = await build_artist_response(
