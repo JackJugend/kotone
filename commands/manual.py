@@ -58,7 +58,7 @@ async def manual_album_autocomplete(
 def setup_manual_command(tree: discord.app_commands.CommandTree) -> None:
     @tree.command(
         name="manual",
-        description="Tymczasowo ustawia review lub like w Twoim profilu SQLite.",
+        description="Tymczasowo ustawia review lub like na Twoim profilu kotone.",
     )
     @discord.app_commands.describe(
         album="Album z Twojego archiwum bota",

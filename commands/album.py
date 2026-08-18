@@ -208,11 +208,11 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
     @tree.command(
         name="album",
-        description="Pokazuje wydanie z AOTY.",
+        description="Pokazuje informacje danego release z AOTY.",
     )
     @discord.app_commands.describe(
-        artist="Artysta na AOTY (opcjonalnie)",
-        album="Wydanie — opcjonalnie; bez obu pól używa Rich Presence",
+        artist="Artysta (opcjonalnie)",
+        album="Wydanie (opcjonalnie)",
     )
     @discord.app_commands.autocomplete(
         artist=artist_autocomplete,
@@ -243,9 +243,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             )
             if presence is None:
                 await interaction.followup.send(
-                    "❌ Nie widzę aktywnego albumu w Twoim Rich Presence. "
-                    "Włącz Spotify/RPC, oba Intents bota i zmień utwór lub status po deployu."
-                )
+                    "❌ Nie widzę aktywnego albumu w Twoim Rich Presence.")
                 return
             artist, album, source = presence
             print(f"[ALBUM] Rich Presence ({source}): {artist} — {album}")

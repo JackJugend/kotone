@@ -26,7 +26,7 @@ MAX_CSV_BYTES = 2 * 1024 * 1024
 def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
     @tree.command(
         name="import",
-        description="Importuje Twój oficjalny eksport ocen AOTY do SQLite.",
+        description="Importuje eksport ocen AOTY do kotone.",
     )
     @discord.app_commands.describe(
         file="Plik CSV pobrany przez AOTY Settings → Export Ratings",
@@ -53,7 +53,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         canonical = DB.canonical_username(username)
         if canonical is None:
             await interaction.response.send_message(
-                "Przypisany użytkownik AOTY nie znajduje się w `config.json`.",
+                "Przypisany użytkownik AOTY nie znajduje się w kotone.",
                 ephemeral=True,
             )
             return

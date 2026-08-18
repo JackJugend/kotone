@@ -74,7 +74,7 @@ def setup_dbstats_command(
 ):
     @tree.command(
         name="dbstats",
-        description="Pokazuje stan lokalnej bazy SQLite Kotone",
+        description="Pokazuje stan lokalnej bazy SQLite kotone.",
     )
     async def dbstats_command(
         interaction: discord.Interaction,

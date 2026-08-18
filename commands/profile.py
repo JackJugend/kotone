@@ -55,7 +55,7 @@ def _recent_line(item: dict) -> str:
 def setup_profile_command(tree: discord.app_commands.CommandTree):
     @tree.command(
         name="profile",
-        description="Pokazuje profil użytkownika AOTY",
+        description="Pokazuje profil użytkownika AOTY.",
     )
     @discord.app_commands.describe(username="Użytkownik AOTY")
     @discord.app_commands.autocomplete(username=username_autocomplete)

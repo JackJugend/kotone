@@ -203,9 +203,9 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
 
     @tree.command(
         name="stats",
-        description="Graficzne statystyki ocen użytkownika zapisane przez Kotone",
+        description="Statystyki ocen użytkownika zapisane przez kotone.",
     )
-    @discord.app_commands.describe(username="Użytkownik z configu")
+    @discord.app_commands.describe(username="username")
     @discord.app_commands.autocomplete(username=username_autocomplete)
     async def stats_command(interaction: discord.Interaction, username: str):
         canonical = await _configured_user_or_error(interaction, username)
@@ -247,11 +247,11 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         description="Graficzny rozkład ocen zapisanych przez Kotone",
     )
     @discord.app_commands.describe(
-        username="Użytkownik z configu",
-        year="Opcjonalny rok wydania",
-        genre="Opcjonalny gatunek",
-        score_min="Minimalna ocena 0–100",
-        score_max="Maksymalna ocena 0–100",
+        username="Użytkownik",
+        year="Rok",
+        genre="Gatunek",
+        score_min="Min rating 0–100",
+        score_max="Max rating 0–100",
     )
     @discord.app_commands.autocomplete(
         username=username_autocomplete,
@@ -344,11 +344,11 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
 
     @tree.command(
         name="compare",
-        description="Porównuje oceny dwóch użytkowników z configu",
+        description="Porównuje oceny dwóch użytkowników.",
     )
     @discord.app_commands.describe(
-        user_a="Pierwszy użytkownik z configu",
-        user_b="Drugi użytkownik z configu",
+        user_a="username",
+        user_b="username",
     )
     @discord.app_commands.autocomplete(
         user_a=username_autocomplete,
@@ -363,7 +363,7 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         canonical_b = DB.canonical_username(user_b)
         if canonical_a is None or canonical_b is None:
             await interaction.response.send_message(
-                "Obaj użytkownicy muszą być wpisani w `config.json`.",
+                "Obaj użytkownicy muszą być zapisani w kotone.",
                 ephemeral=True,
             )
             return
@@ -415,11 +415,11 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
 
     @tree.command(
         name="wrapped",
-        description="Roczne podsumowanie ocen użytkownika zapisanych przez Kotone",
+        description="Roczne podsumowanie ocen użytkownika zapisanych przez kotone",
     )
     @discord.app_commands.describe(
-        username="Użytkownik z configu",
-        year="Rok dodania ocen; domyślnie bieżący",
+        username="username",
+        year="Rok",
     )
     @discord.app_commands.autocomplete(username=username_autocomplete)
     async def wrapped_command(
