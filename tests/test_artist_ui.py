@@ -39,8 +39,8 @@ class DisplayNormalizationTests(unittest.TestCase):
         )
 
     def test_release_dates_use_one_polish_format(self):
-        self.assertEqual(display_release_date("2021-01-01"), "1 stycznia 2021")
-        self.assertEqual(display_release_date("January 1, 2021"), "1 stycznia 2021")
+        self.assertEqual(display_release_date("2021-01-01"), "01.01.2021")
+        self.assertEqual(display_release_date("January 1, 2021"), "01.01.2021")
         self.assertEqual(display_release_date("2021"), "2021")
 
     def test_release_variables_normalize_date_and_genres_for_all_commands(self):
@@ -51,7 +51,7 @@ class DisplayNormalizationTests(unittest.TestCase):
                 "genres": ["Jazz Pop", "jazz pop", "Progressive Pop"],
             },
         )
-        self.assertEqual(variables.release_date, "25 października 2024")
+        self.assertEqual(variables.release_date, "25.10.2024")
         self.assertEqual(variables.genres_text, "Jazz Pop, Progressive Pop")
 
 

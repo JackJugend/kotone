@@ -26,21 +26,6 @@ _EDITION_WORDS = {
     "version",
 }
 
-_POLISH_MONTHS = {
-    1: "stycznia",
-    2: "lutego",
-    3: "marca",
-    4: "kwietnia",
-    5: "maja",
-    6: "czerwca",
-    7: "lipca",
-    8: "sierpnia",
-    9: "września",
-    10: "października",
-    11: "listopada",
-    12: "grudnia",
-}
-
 _GENRE_WORD_FORMS = {
     "r&b": "R&B",
     "edm": "EDM",
@@ -87,7 +72,7 @@ def _display_genre_label(text: str) -> str:
 
 
 def display_release_date(value, *, missing: str = "—") -> str:
-    """Format known release dates as e.g. ``1 stycznia 2021``."""
+    """Formatuj znaną datę wydania jednolicie jako ``DD.MM.RRRR``."""
 
     text = str(value or "").strip()
     if not text or text == missing:
@@ -113,7 +98,7 @@ def display_release_date(value, *, missing: str = "—") -> str:
             continue
     if parsed is None:
         return text
-    return f"{parsed.day} {_POLISH_MONTHS[parsed.month]} {parsed.year}"
+    return parsed.strftime("%d.%m.%Y")
 
 
 def _letter_script_stats(text):
