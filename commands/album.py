@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from collections.abc import Mapping
 
@@ -62,8 +63,32 @@ def _music_from_presence(member) -> tuple[str, str, str] | None:
             if artist and album:
                 return artist, album, "Spotify"
 
+        # Common custom music RPC layout (including the one shown in Discord's
+        # "Listening to Music" card): details is "Artist - Track" while state
+        # is the album.  Only accept it for an actual listening activity, so a
+        # generic game/status string can never be mistaken for an album.
+        details = _clean_presence_text(getattr(activity, "details", None))
+        state = _clean_presence_text(getattr(activity, "state", None))
+        if (
+            getattr(activity, "type", None) == discord.ActivityType.listening
+            and details
+            and state
+        ):
+            parts = re.split(r"\s+(?:-|–|—)\s+", details, maxsplit=1)
+            artist = _clean_presence_text(parts[0] if len(parts) == 2 else None)
+            if artist:
+                return (
+                    artist,
+                    # Discord exposes the cover tooltip as ``large_text``.
+                    # Prefer it: custom RPCs often use state for a different
+                    # field, while the artwork caption is consistently album.
+                    _presence_asset_text(activity) or state,
+                    _clean_presence_text(getattr(activity, "name", None))
+                    or "Music RPC",
+                )
+
         album = _presence_asset_text(activity)
-        artist = _clean_presence_text(getattr(activity, "state", None))
+        artist = state
         if artist and artist.casefold().startswith("by "):
             artist = artist[3:].strip() or None
         source = _clean_presence_text(getattr(activity, "name", None))
