@@ -40,6 +40,7 @@ from lifecycle import (
     stop_tasks_before_deadline,
 )
 from monitor import RatingMonitor
+from presence_cache import PRESENCE_CACHE
 from settings import APPLICATION_ID, GUILD_ID, TOKEN
 
 
@@ -76,6 +77,12 @@ setup_profile_command(tree)
 setup_check_command(tree, monitor)
 setup_dbstats_command(tree)
 setup_history_command(tree)
+
+
+@client.event
+async def on_presence_update(before: discord.Member, after: discord.Member) -> None:
+    """Keep only the current in-memory activities for `/album` lookup."""
+    PRESENCE_CACHE.update(after)
 
 
 async def setup_hook() -> None:

@@ -11,6 +11,7 @@ import aoty
 from services import DATA
 from display_utils import display_romanized_name
 from settings import USERS
+from presence_cache import PRESENCE_CACHE
 from shared import (
     load_release_variables,
     rating_flags_text,
@@ -46,7 +47,11 @@ def _presence_asset_text(activity) -> str | None:
     return None
 
 
-def _music_from_presence(member) -> tuple[str, str, str] | None:
+def _music_from_presence(
+    member,
+    *,
+    cached_activities: tuple[object, ...] = (),
+) -> tuple[str, str, str] | None:
     """Return artist, album and source from structured Discord music presence.
 
     Spotify is the only standardized Discord music activity. Other programs
@@ -55,7 +60,11 @@ def _music_from_presence(member) -> tuple[str, str, str] | None:
     song title alone is never guessed to be an album.
     """
 
-    for activity in getattr(member, "activities", ()) or ():
+    activities = tuple(getattr(member, "activities", ()) or ())
+    if not activities:
+        activities = cached_activities
+
+    for activity in activities:
         if isinstance(activity, discord.Spotify):
             artists = list(getattr(activity, "artists", ()) or ())
             artist = _clean_presence_text(", ".join(map(str, artists)))
@@ -226,11 +235,14 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             member = interaction.user
             if interaction.guild is not None:
                 member = interaction.guild.get_member(interaction.user.id) or member
-            presence = _music_from_presence(member)
+            presence = _music_from_presence(
+                member,
+                cached_activities=PRESENCE_CACHE.activities_for(interaction.user.id),
+            )
             if presence is None:
                 await interaction.followup.send(
                     "❌ Nie widzę aktywnego albumu w Twoim Rich Presence. "
-                    "Włącz Spotify/RPC i upewnij się, że Presence Intent jest aktywny."
+                    "Włącz Spotify/RPC, oba Intents bota i zmień utwór lub status po deployu."
                 )
                 return
             artist, album, source = presence

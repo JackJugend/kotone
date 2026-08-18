@@ -33,10 +33,23 @@ class _Member:
     activities = (_ListeningActivity(),)
 
 
+class _InteractionMember:
+    activities = ()
+
+
 class AlbumPresenceTests(unittest.TestCase):
     def test_listening_rpc_uses_state_as_album_and_details_artist(self):
         self.assertEqual(
             _music_from_presence(_Member()),
+            ("bloodthirsty butchers", "KOCORONO", "Music"),
+        )
+
+    def test_interaction_without_activities_uses_presence_update_cache(self):
+        self.assertEqual(
+            _music_from_presence(
+                _InteractionMember(),
+                cached_activities=(_ListeningActivity(),),
+            ),
             ("bloodthirsty butchers", "KOCORONO", "Music"),
         )
 
