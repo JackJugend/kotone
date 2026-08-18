@@ -94,18 +94,37 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         embed = discord.Embed(
             title=f"📊 Statystyki • {canonical}",
             description=(
-                f"**{data['ratings']}** ocen · średnia **{_metric(data['average'])}** "
-                f"· mediana **{_metric(data['median'])}**\n"
-                f"✎ **{data['reviews']}** · ❤︎⁠ **{data['likes']}** · "
-                f"☰ **{data['track_albums']}** albumów / **{data['track_scores']}** ocen utworów"
+                f"Liczba ocen: **{data['ratings']}**\n"
+                f"Średnia: **{_metric(data['average'])}** · "
+                f"mediana: **{_metric(data['median'])}**\n"
+                f"Recenzje: **{data['reviews']}** · "
+                f"polubienia: **{data['likes']}**\n"
+                f"Albumy oznaczone Track Ratings: **{data['track_albums']}**\n"
+                f"Zapisane oceny utworów: **{data['track_scores']}**"
             ),
             color=discord.Color.blurple(),
         )
-        embed.add_field(name="Najczęstsze gatunki", value=_pairs(data["top_genres"]), inline=True)
-        embed.add_field(name="Najczęstsze formaty", value=_pairs(data["top_formats"]), inline=True)
-        embed.add_field(name="Najczęściej oceniani artyści", value=_pairs(data["top_artists"]), inline=True)
-        embed.add_field(name="Najwyższe oceny", value=_top_ratings(data["top_ratings"]), inline=False)
-        embed.set_footer(text="Tylko SQLite • tylko użytkownicy z configu • 0 requestów HTTP")
+        embed.add_field(
+            name="Najczęstsze gatunki",
+            value=_pairs(data["top_genres"]),
+            inline=False,
+        )
+        embed.add_field(
+            name="Najczęstsze formaty",
+            value=_pairs(data["top_formats"]),
+            inline=False,
+        )
+        embed.add_field(
+            name="Najczęściej oceniani artyści",
+            value=_pairs(data["top_artists"]),
+            inline=False,
+        )
+        embed.add_field(
+            name="Najwyższe oceny",
+            value=_top_ratings(data["top_ratings"]),
+            inline=False,
+        )
+        embed.set_footer(text="Źródło: lokalna baza SQLite")
 
         from stats_graphics import render_stats
 
@@ -212,12 +231,14 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         rows = await asyncio.to_thread(DB.get_analytics_rows, canonical)
         data = wrapped(canonical, rows, selected_year)
         embed = discord.Embed(
-            title=f"🎁 Wrapped {selected_year} • {canonical}",
+            title=f"🎁 Podsumowanie {selected_year} • {canonical}",
             description=(
-                f"**{data['ratings']}** ocen · średnia **{_metric(data['average'])}** "
-                f"· mediana **{_metric(data['median'])}**\n"
-                f"✎ **{data['reviews']}** · ❤︎⁠ **{data['likes']}** · "
-                f"☰ **{data['track_albums']}**"
+                f"Liczba ocen: **{data['ratings']}**\n"
+                f"Średnia: **{_metric(data['average'])}** · "
+                f"mediana: **{_metric(data['median'])}**\n"
+                f"Recenzje: **{data['reviews']}** · "
+                f"polubienia: **{data['likes']}** · "
+                f"albumy z Track Ratings: **{data['track_albums']}**"
             ),
             color=discord.Color.blurple(),
         )

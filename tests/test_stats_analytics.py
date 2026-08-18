@@ -139,6 +139,15 @@ class AnalyticsDatabaseTests(unittest.TestCase):
 
 
 class GraphicTests(unittest.TestCase):
+    def test_unicode_fonts_are_bundled_with_the_project(self):
+        for filename in (
+            "NotoSans-Regular.ttf",
+            "NotoSans-Bold.ttf",
+            "NotoSans-LICENSE.txt",
+        ):
+            with self.subTest(filename=filename):
+                self.assertTrue((ROOT / "assets" / filename).is_file())
+
     def test_all_cards_are_valid_pngs(self):
         try:
             from stats_graphics import render_compare, render_stats, render_wrapped
