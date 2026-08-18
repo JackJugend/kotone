@@ -7,7 +7,8 @@ import asyncio
 import discord
 
 from database import DB
-from settings import GUILD_ID, RATING_FORMATS
+from formats import RATING_FORMATS
+from settings import GUILD_ID
 
 
 def _format_bytes(value: int | float | None) -> str:

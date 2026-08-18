@@ -7,20 +7,17 @@ import asyncio
 import discord
 
 from database import DB
-from settings import GUILD_ID, USERS
+from settings import GUILD_ID
+from shared import configured_username_autocomplete
 
 
 async def _configured_user_autocomplete(
     interaction: discord.Interaction,
     current: str,
 ):
-    """History is local-only, so autocomplete never queries AOTY."""
-    needle = str(current or "").strip().casefold()
-    return [
-        discord.app_commands.Choice(name=user[:100], value=user[:100])
-        for user in USERS
-        if not needle or needle in user.casefold()
-    ][:25]
+    """Historia korzysta z tej samej lokalnej listy users co inne komendy."""
+
+    return await configured_username_autocomplete(interaction, current, limit=25)
 
 
 def _score_from_track(value):

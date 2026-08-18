@@ -4,8 +4,8 @@ import discord
 import requests
 
 import aoty
+from formats import RATING_FORMATS
 from services import DATA
-from settings import RATING_FORMATS
 from shared import (
     load_release_variables,
     rating_flags_text,

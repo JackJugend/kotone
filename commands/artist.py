@@ -4,7 +4,7 @@ import requests
 import aoty
 from services import DATA
 from display_utils import display_genres, display_romanized_name
-from settings import RATING_FORMATS
+from formats import RATING_FORMATS, format_key_from_label
 from shared import build_release_variables, score_or_nr, score_or_missing, set_aoty_footer
 from views import TimedDisableView
 
@@ -131,20 +131,9 @@ def _release_year(release):
 
 
 def _format_key_for_release(release):
-    """Map release format label back to settings.RATING_FORMATS key."""
-    label = str(
-        release.get("album_format")
-        or ""
-    ).strip().casefold()
+    """Przetłumacz etykietę wydania przez centralny katalog formatów."""
 
-    if not label:
-        return None
-
-    for key, info in RATING_FORMATS.items():
-        if str(info["label"]).casefold() == label:
-            return key
-
-    return None
+    return format_key_from_label(release.get("album_format"))
 
 
 def _artist_relation_text(items):

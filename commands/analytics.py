@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import discord
 
 from database import DB
-from settings import RATING_FORMATS
+from formats import RATING_FORMATS
 from shared import score_color, username_autocomplete
 from stats_cover_cache import load_cover_images
 from stats_engine import compare, rating_distribution, summarize, wrapped

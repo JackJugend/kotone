@@ -1,8 +1,9 @@
-"""Shared variables and Discord helpers used by every command.
+"""Wspólny model danych i helpery prezentacji dla wszystkich komend.
 
-Najważniejszy element to ReleaseVariables. Wszystkie dane wydania, które
-wcześniej były kopiowane osobno do /last, /recent, /album i monitora,
-są teraz przygotowywane tutaj. Nazwy zmiennych zostały zachowane.
+``ReleaseVariables`` jest jednym źródłem prawdy dla danych wydania z SQLite,
+AOTY i MusicBrainz. Każda komenda powinna najpierw zbudować ten obiekt zamiast
+samodzielnie wybierać pola z różnych słowników. Dzięki temu fallbacki,
+brakujące wartości, daty, gatunki i flagi wyglądają tak samo w całym bocie.
 """
 
 from __future__ import annotations
@@ -467,8 +468,13 @@ def rating_flags_text(item_or_variables: dict | ReleaseVariables | None) -> str:
     return " ".join(flags)
 
 
-async def username_autocomplete(interaction: discord.Interaction, current: str):
-    """Configured usernames only; command autocomplete never calls AOTY."""
+async def configured_username_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+    *,
+    limit: int = 10,
+):
+    """Zwróć użytkowników z configu bez kontaktu z AOTY."""
     current = str(current or "").strip()
 
     choices: list[discord.app_commands.Choice] = []
@@ -486,5 +492,14 @@ async def username_autocomplete(interaction: discord.Interaction, current: str):
         )
         seen.add(username.casefold())
 
-    return choices[:10]
+    return choices[: max(1, min(25, int(limit)))]
+
+
+async def username_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+):
+    """Callback Discorda o wymaganej sygnaturze dla standardowych komend."""
+
+    return await configured_username_autocomplete(interaction, current, limit=10)
 

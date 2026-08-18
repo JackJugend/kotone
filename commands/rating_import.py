@@ -13,13 +13,9 @@ from rating_import import (
     parse_aoty_ratings_csv,
     unmatched_report_csv,
 )
-from settings import GUILD_ID
+from settings import GUILD_ID, IMPORT_USERS_BY_DISCORD_ID
 
 
-IMPORT_USERS_BY_DISCORD_ID = {
-    805601151366070292: "enso",
-    463642066401099786: "kulkien",
-}
 MAX_CSV_BYTES = 2 * 1024 * 1024
 
 

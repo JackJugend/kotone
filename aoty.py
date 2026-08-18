@@ -23,12 +23,12 @@ from http_client import (
     ExternalRateLimit,
     ExternalUnavailable,
 )
+from formats import RATING_FORMATS, format_key_from_label
 from settings import (
     ALBUM_LOOKUP_FALLBACK_LIMIT,
     AOTY_ARCHIVE_MAX_PAGES,
     BASE_URL,
     RATING_FETCH_LIMITS,
-    RATING_FORMATS,
 )
 
 
@@ -1009,17 +1009,9 @@ def _extract_release_format(text: str) -> str | None:
 
 
 def _format_key_from_label(label: str | None) -> str | None:
-    if not label:
-        return None
+    """Kompatybilny alias wspólnego katalogu formatów."""
 
-    normalized = re.sub(r"[^a-z0-9]+", "", str(label).casefold())
-
-    for key, info in RATING_FORMATS.items():
-        candidate = re.sub(r"[^a-z0-9]+", "", info["label"].casefold())
-        if normalized == candidate:
-            return key
-
-    return None
+    return format_key_from_label(label)
 
 
 def _extract_release_cover(container) -> str | None:

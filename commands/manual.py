@@ -6,10 +6,9 @@ import asyncio
 
 import discord
 
-from commands.rating_import import IMPORT_USERS_BY_DISCORD_ID
 from database import DB
 from rating_import import normalized_text
-from settings import GUILD_ID
+from settings import GUILD_ID, IMPORT_USERS_BY_DISCORD_ID
 
 
 def _owned_username(interaction: discord.Interaction) -> str | None:

@@ -1,23 +1,14 @@
 import discord
 
 from settings import GUILD_ID, USERS
+from shared import configured_username_autocomplete
 
 
 def setup_check_command(tree: discord.app_commands.CommandTree, monitor):
-    async def config_user_autocomplete(
-        interaction: discord.Interaction,
-        current: str,
-    ):
-        current = str(current or "").casefold().strip()
-        matches = [
-            username
-            for username in USERS
-            if not current or current in username.casefold()
-        ]
-        return [
-            discord.app_commands.Choice(name=username[:100], value=username[:100])
-            for username in matches[:25]
-        ]
+    async def config_user_autocomplete(interaction, current):
+        """Wspólne autocomplete, z pełnym limitem opcji tej komendy."""
+
+        return await configured_username_autocomplete(interaction, current, limit=25)
 
     @tree.command(
         name="check",

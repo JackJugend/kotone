@@ -10,6 +10,12 @@ from __future__ import annotations
 import json
 import os
 
+from formats import (
+    DEFAULT_RATING_FETCH_LIMITS,
+    RATING_FORMATS,
+    build_rating_fetch_limits,
+)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 BASE_URL = "https://www.albumoftheyear.org"
@@ -115,6 +121,46 @@ USER_CHANNELS = {
     str(username).casefold(): int(channel_id)
     for username, channel_id in CONFIG.get("user_channels", {}).items()
 }
+
+# Mapowanie Discord ID -> własny profil AOTY jest polityką dostępu, a nie
+# szczegółem komendy /import lub /manual. Trzymamy je przy pozostałej
+# konfiguracji, aby obie komendy zawsze korzystały z dokładnie tej samej listy.
+_DEFAULT_IMPORT_USERS_BY_DISCORD_ID = {
+    805601151366070292: "enso",
+    463642066401099786: "kulkien",
+}
+
+
+def _validate_import_users(raw_mapping: object) -> dict[int, str]:
+    if not isinstance(raw_mapping, dict):
+        raise RuntimeError(
+            "config.json -> import_users_by_discord_id musi być mapą Discord ID -> user AOTY."
+        )
+
+    known_users = {user.casefold(): user for user in USERS}
+    result: dict[int, str] = {}
+    for raw_id, raw_username in raw_mapping.items():
+        try:
+            discord_id = int(raw_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "config.json -> import_users_by_discord_id zawiera niepoprawne Discord ID."
+            ) from exc
+        username = known_users.get(str(raw_username or "").strip().casefold())
+        if discord_id <= 0 or username is None:
+            raise RuntimeError(
+                "config.json -> import_users_by_discord_id może wskazywać wyłącznie userów z users."
+            )
+        result[discord_id] = username
+    return result
+
+
+IMPORT_USERS_BY_DISCORD_ID = _validate_import_users(
+    CONFIG.get(
+        "import_users_by_discord_id",
+        _DEFAULT_IMPORT_USERS_BY_DISCORD_ID,
+    )
+)
 
 CHECK_INTERVAL = max(60, int(CONFIG.get("check_interval", 300)))
 
@@ -312,64 +358,11 @@ DATABASE_BACKUP_FILE = os.path.join(
 # powinien decydować, czy nowy deploy Kotone jest zdrowy.
 PORT = _runtime_int("port", int(os.getenv("PORT", "8080")), 1)
 
-# Wszystkie formaty obsługiwane przez monitor /last /artist.
-RATING_FORMATS = {
-    "lp": {"slug": "lp", "label": "LP"},
-    "ep": {"slug": "ep", "label": "EP"},
-    "mixtape": {"slug": "mixtape", "label": "Mixtape"},
-    "single": {"slug": "single", "label": "Single"},
-    "compilation": {"slug": "compilation", "label": "Compilation"},
-    "live": {"slug": "live", "label": "Live"},
-    "reissue": {"slug": "reissue", "label": "Reissue"},
-    "soundtrack": {"slug": "soundtrack", "label": "Soundtrack"},
-    "holiday": {"slug": "holiday", "label": "Holiday"},
-    "dj_mix": {"slug": "dj-mix", "label": "DJ Mix"},
-    "box_set": {"slug": "box-set", "label": "Box Set"},
-    "instrumental": {"slug": "instrumental", "label": "Instrumental"},
-    "unofficial": {"slug": "unofficial", "label": "Unofficial"},
-    "video": {"slug": "video", "label": "Video"},
-    "demo": {"slug": "demo", "label": "Demo"},
-    "miscellaneous": {"slug": "miscellaneous", "label": "Miscellaneous"},
-    "music_video": {"slug": "music-video", "label": "Music Video"},
-    "remix": {"slug": "remix", "label": "Remix"},
-    "audiobook": {"slug": "audiobook", "label": "Audiobook"},
-}
-
-DEFAULT_RATING_FETCH_LIMITS = {
-    "lp": 120,
-    "ep": 60,
-    "mixtape": 60,
-    "single": 60,
-    "compilation": 30,
-    "live": 20,
-    "reissue": 20,
-    "soundtrack": 20,
-    "holiday": 0,
-    "dj_mix": 0,
-    "box_set": 0,
-    "instrumental": 0,
-    "unofficial": 0,
-    "video": 0,
-    "demo": 0,
-    "miscellaneous": 0,
-    "music_video": 20,
-    "remix": 0,
-    "audiobook": 0,
-}
-
-raw_limits = CONFIG.get("rating_fetch_limits", {})
-RATING_FETCH_LIMITS: dict[str, int] = {}
-
-for key, info in RATING_FORMATS.items():
-    default = DEFAULT_RATING_FETCH_LIMITS.get(key, 0)
-    raw = raw_limits.get(key, raw_limits.get(info["slug"], default))
-
-    try:
-        value = max(0, int(raw))
-    except (TypeError, ValueError):
-        value = default
-
-    RATING_FETCH_LIMITS[key] = value
+# Kompatybilne eksporty pozostają tutaj, bo zewnętrzne skrypty mogły dotąd
+# importować je z settings.py. Nowy kod powinien importować katalog z formats.
+RATING_FETCH_LIMITS = build_rating_fetch_limits(
+    CONFIG.get("rating_fetch_limits", {})
+)
 
 ALBUM_LOOKUP_FALLBACK_LIMIT = max(
     20,

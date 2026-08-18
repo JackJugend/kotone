@@ -22,6 +22,7 @@ import lastfm
 import musicbrainz
 from database import DB
 from display_utils import display_genres
+from formats import RATING_FORMATS
 from http_client import (
     PRIORITY_BACKGROUND,
     PRIORITY_INTERACTIVE,
@@ -44,7 +45,6 @@ from settings import (
     MUSICBRAINZ_FALLBACK_RETRY_INTERVAL,
     RATING_DETAIL_TTL,
     RATING_FETCH_LIMITS,
-    RATING_FORMATS,
     RELEASE_DETAIL_TTL,
 )
 
