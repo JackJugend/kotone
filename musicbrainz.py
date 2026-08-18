@@ -3,7 +3,7 @@
 This module is deliberately separate from the AOTY transport.  It has its own
 one-request-per-second gate, a meaningful User-Agent and no polling.  It is
 called only by Kotone's low-priority background worker after an AOTY failure,
-then its result is stored in SQLite for later command reads.
+then its result stays in a volatile in-memory display cache.
 """
 
 from __future__ import annotations

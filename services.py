@@ -1201,10 +1201,17 @@ class DataService:
         # this pass ever reached the user-detail phase.  If even one detail is
         # due, finish that queue first; public release enrichment resumes once
         # it is empty.
-        priority_details = DB.detail_enrichment_candidates(
-            username,
-            1,
-            stale_before=time.time() - DETAIL_CHANGE_SCAN_INTERVAL,
+        # A MusicBrainz-only pass cannot resolve personal AOTY details. Do not
+        # let stale reviews/Track Ratings permanently starve the independent
+        # public fallback queue while /dbonly or a challenge is active.
+        priority_details = (
+            []
+            if musicbrainz_only
+            else DB.detail_enrichment_candidates(
+                username,
+                1,
+                stale_before=time.time() - DETAIL_CHANGE_SCAN_INTERVAL,
+            )
         )
         release_candidates = (
             []

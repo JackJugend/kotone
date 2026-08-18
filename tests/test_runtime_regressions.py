@@ -491,6 +491,58 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cached["genres"], ["Art Pop"])
         self.assertEqual(cached["tracklist"][0]["duration"], "3:00")
 
+    async def test_db_only_personal_detail_queue_does_not_starve_musicbrainz(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "kocorono",
+                "artist": "Bloodthirsty Butchers",
+                "album": "Kocorono",
+                "url": "https://www.albumoftheyear.org/album/1-kocorono.php",
+                "release_format": "LP",
+                "score": "85",
+                "has_track_ratings": True,
+            },
+        )
+        self.assertEqual(
+            self.db.detail_enrichment_candidates("enso", 1)[0]["album_id"],
+            "kocorono",
+        )
+        original_mb = services.musicbrainz.MUSICBRAINZ.lookup_release
+        services.musicbrainz.MUSICBRAINZ.lookup_release = lambda *_args, **_kwargs: {
+            "source": "musicbrainz",
+            "release_date": "1996-10-23",
+            "year": "1996",
+            "album_format": "LP",
+            "tracklist": [{"number": 1, "title": "Track", "duration": "3:00"}],
+            "_section_complete": {
+                "score": False,
+                "release_date": True,
+                "format": True,
+                "labels": False,
+                "genres": False,
+                "vibes": False,
+                "ranking": False,
+                "tracklist": True,
+            },
+        }
+        try:
+            result = await self.service.enrich_user(
+                "enso",
+                detail_limit=2,
+                release_limit=1,
+                musicbrainz_only=True,
+            )
+        finally:
+            services.musicbrainz.MUSICBRAINZ.lookup_release = original_mb
+
+        self.assertEqual(result["musicbrainz"], 1)
+        self.assertEqual(
+            self.service.cached_release_details("kocorono")["release_date"],
+            "1996-10-23",
+        )
+        self.assertIsNone(self.db.get_release_details("kocorono"))
+
     def test_volatile_musicbrainz_fills_only_missing_aoty_fields(self):
         self.db.upsert_rating(
             "enso",
