@@ -4,14 +4,31 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import Mock
 
 
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
 
-from musicbrainz import _pick_exact_release, release_to_details  # noqa: E402
+from musicbrainz import (  # noqa: E402
+    MusicBrainzClient,
+    MusicBrainzUnavailable,
+    _pick_exact_release,
+    release_to_details,
+)
 
 
 class MusicBrainzFallbackTests(unittest.TestCase):
+    def test_503_opens_meaningful_global_retry_window(self):
+        client = MusicBrainzClient()
+        response = Mock(status_code=503, headers={"Retry-After": "120"})
+        client.session.get = Mock(return_value=response)
+
+        with self.assertRaises(MusicBrainzUnavailable) as raised:
+            client._json("/release/", params={"query": "test", "fmt": "json"})
+
+        self.assertGreaterEqual(raised.exception.retry_after, 15 * 60)
+        response.raise_for_status.assert_not_called()
+
     def test_exact_matching_refuses_similar_but_wrong_release(self):
         candidates = [
             {
@@ -62,4 +79,3 @@ class MusicBrainzFallbackTests(unittest.TestCase):
         self.assertIn("coverartarchive.org/release-group/group-id", details["cover"])
         self.assertFalse(details["_section_complete"]["score"])
         self.assertFalse(details["_section_complete"]["ranking"])
-

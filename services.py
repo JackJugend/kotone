@@ -64,73 +64,25 @@ class DataService:
         # in-memory cooldown; a process restart safely clears it.
         self._detail_retry_after: dict[tuple[str, str], float] = {}
         self._release_retry_after: dict[str, float] = {}
-        # MusicBrainz is a volatile display fallback only. It must never become
-        # durable application state or be confused with authoritative AOTY
-        # data. Railway restarts intentionally clear this cache.
-        self._musicbrainz_release_cache: dict[str, dict] = {}
+        self._release_priority_queue: dict[str, dict] = {}
+        self._musicbrainz_blocked_until = 0.0
+        self._musicbrainz_last_error: str | None = None
 
     @staticmethod
     def _value_present(value) -> bool:
         return value not in (None, "", [], {})
 
-    def _merged_release_details(
-        self,
-        persistent: dict | None,
-        volatile: dict | None,
-    ) -> dict | None:
-        """Overlay SQLite/AOTY on volatile MusicBrainz and mark each section."""
-
-        if not persistent and not volatile:
-            return None
-
-        merged = dict(volatile or {})
-        for key, value in dict(persistent or {}).items():
-            if self._value_present(value):
-                merged[key] = value
-
-        sources: dict[str, str] = {}
-        section_keys = {
-            "score": ("user_score", "ratings_count"),
-            "release_date": ("release_date", "year"),
-            "format": ("album_format",),
-            "labels": ("label", "labels"),
-            "genres": ("genres", "secondary_genres"),
-            "vibes": ("vibes",),
-            "ranking": ("ranking_year", "year_ranking", "year_ranking_text"),
-            "tracklist": ("tracklist",),
-        }
-
-        def section_present(data: dict | None, section: str) -> bool:
-            data = data or {}
-            return any(
-                self._value_present(data.get(key))
-                for key in section_keys[section]
-            )
-
-        for section in section_keys:
-            if section_present(volatile, section):
-                sources[section] = "musicbrainz"
-
-        durable_source = str(
-            (persistent or {}).get("metadata_source") or "aoty"
-        ).casefold()
-        if durable_source not in {"aoty", "musicbrainz"}:
-            durable_source = "aoty"
-        for section in section_keys:
-            if section_present(persistent, section):
-                sources[section] = (
-                    "aoty"
-                    if section in {"score", "vibes", "ranking"}
-                    else durable_source
-                )
-
-        if not persistent and volatile:
-            merged["metadata_source"] = "musicbrainz"
-        merged["metadata_sources"] = sources
-        return merged
-
     def is_monitored(self, username: str) -> bool:
         return DB.is_monitored(username)
+
+    def musicbrainz_status(self) -> dict:
+        blocked_seconds = max(0.0, self._musicbrainz_blocked_until - time.time())
+        return {
+            "blocked": blocked_seconds > 0,
+            "blocked_seconds": round(blocked_seconds, 1),
+            "priority_queue": len(self._release_priority_queue),
+            "last_error": self._musicbrainz_last_error,
+        }
 
     async def _musicbrainz_release_fallback(
         self,
@@ -142,25 +94,35 @@ class DataService:
 
         This is never called by a Discord command. The result deliberately
         omits AOTY-only values (ratings, rankings, reviews and personal data)
-        and remains only in this process's memory; it is never saved to SQLite.
+        and is persisted only as a lower-priority fallback for missing fields.
         """
         if not MUSICBRAINZ_FALLBACK_ENABLED:
             return None
+        if self._musicbrainz_blocked_until > time.time():
+            return None
         try:
-            return await _thread_call(
+            result = await _thread_call(
                 priority,
                 musicbrainz.MUSICBRAINZ.lookup_release,
                 item.get("artist"),
                 item.get("album") or item.get("title"),
                 requested_format=item.get("release_format"),
             )
+            self._musicbrainz_last_error = None
+            return result
         except (
             musicbrainz.MusicBrainzUnavailable,
             aoty.AOTYPageIncomplete,
             aoty.AOTYRateLimit,
             requests.RequestException,
         ) as exc:
-            print(f"[MUSICBRAINZ] fallback: {type(exc).__name__}: {exc}")
+            self._musicbrainz_last_error = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, musicbrainz.MusicBrainzUnavailable):
+                self._musicbrainz_blocked_until = max(
+                    self._musicbrainz_blocked_until,
+                    time.time() + max(exc.retry_after, 60.0),
+                )
+            print(f"[MUSICBRAINZ] fallback: {self._musicbrainz_last_error}")
             return None
 
     def _rating_with_cached_detail(
@@ -821,12 +783,37 @@ class DataService:
         return DB.get_user_track_ratings(username, album_id)
 
     def cached_release_details(self, album_id: str) -> dict | None:
-        """Return SQLite plus volatile fallback without making any request."""
-        album_id = str(album_id or "")
-        return self._merged_release_details(
-            DB.get_release_details(album_id),
-            self._musicbrainz_release_cache.get(album_id),
+        """Return durable AOTY/MusicBrainz release data without a request."""
+        return DB.get_release_details(str(album_id or ""))
+
+    def _queue_partial_release(self, item: dict, cached: dict | None) -> None:
+        """Prioritize a viewed partial release without making a command request."""
+
+        album_id = str(item.get("album_id") or "").strip()
+        if (
+            not album_id
+            or DB.get_release_details(album_id) is None
+        ):
+            return
+        cached = cached or {}
+        if all(
+            self._value_present(cached.get(key))
+            for key in ("release_date", "label", "genres", "tracklist")
+        ):
+            return
+        queued = dict(cached)
+        queued.update(
+            {
+                key: value
+                for key, value in item.items()
+                if self._value_present(value)
+            }
         )
+        queued["album_id"] = album_id
+        self._release_priority_queue[album_id] = queued
+        # Bound untrusted command-driven state while preserving newest views.
+        while len(self._release_priority_queue) > 100:
+            self._release_priority_queue.pop(next(iter(self._release_priority_queue)))
 
     def cached_genres(self, username: str | None = None) -> list[str]:
         """Distinct cached genres for command autocomplete, without HTTP."""
@@ -976,6 +963,8 @@ class DataService:
         # when at least one configured user has rated it.
         cached = self.cached_release_details(album_id) if album_id else None
         if cached is not None:
+            if not allow_network:
+                self._queue_partial_release(item, cached)
             return cached
 
         if not allow_network:
@@ -997,7 +986,6 @@ class DataService:
                 # the configured-user scope. Public searches are never enough
                 # to create a persistent row on their own.
                 if DB.save_release_details(album_id, details):
-                    self._musicbrainz_release_cache.pop(album_id, None)
                     # Parser snapshots carry per-section completeness. Return
                     # the same non-destructively merged view that was stored so
                     # a partially rendered AOTY page cannot temporarily strip
@@ -1196,6 +1184,20 @@ class DataService:
         detail_done = 0
         errors = 0
 
+        if musicbrainz_only and self._musicbrainz_blocked_until > now:
+            return {
+                "releases": 0,
+                "musicbrainz": 0,
+                "details": 0,
+                "errors": 0,
+            }
+
+        priority_release = None
+        for queued_album_id, queued_item in self._release_priority_queue.items():
+            if self._release_retry_after.get(queued_album_id, 0.0) <= now:
+                priority_release = dict(queued_item)
+                break
+
         # Personal Track Ratings are more valuable than generic album metadata
         # and were previously starved: a blocked release fetch returned before
         # this pass ever reached the user-detail phase.  If even one detail is
@@ -1214,7 +1216,9 @@ class DataService:
             )
         )
         release_candidates = (
-            []
+            [priority_release]
+            if priority_release is not None
+            else []
             if priority_details
             else DB.release_enrichment_candidates(
                 username,
@@ -1248,14 +1252,22 @@ class DataService:
                     item,
                     priority=priority,
                 )
-                if details:
-                    self._musicbrainz_release_cache[album_id] = dict(details)
+                if details and DB.save_musicbrainz_fallback(album_id, details):
+                    self._release_priority_queue.pop(album_id, None)
                     self._release_retry_after[album_id] = (
                         time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
                     )
                     release_done += 1
                     musicbrainz_done += 1
                 elif details is None:
+                    if self._musicbrainz_blocked_until > time.time():
+                        return {
+                            "releases": release_done,
+                            "musicbrainz": musicbrainz_done,
+                            "details": detail_done,
+                            "errors": errors,
+                        }
+                    self._release_priority_queue.pop(album_id, None)
                     self._release_retry_after[album_id] = time.time() + 60 * 60
                 continue
 
@@ -1268,7 +1280,7 @@ class DataService:
                 details = dict(details or {})
                 details["source"] = "aoty"
                 DB.save_release_details(album_id, details)
-                self._musicbrainz_release_cache.pop(album_id, None)
+                self._release_priority_queue.pop(album_id, None)
                 self._release_retry_after.pop(album_id, None)
                 release_done += 1
             except (
@@ -1285,15 +1297,23 @@ class DataService:
                     item,
                     priority=priority,
                 )
-                if details:
-                    self._musicbrainz_release_cache[album_id] = dict(details)
+                if details and DB.save_musicbrainz_fallback(album_id, details):
+                    self._release_priority_queue.pop(album_id, None)
                     self._release_retry_after[album_id] = (
                         time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
                     )
                     release_done += 1
                     musicbrainz_done += 1
                     continue
+                if self._musicbrainz_blocked_until > time.time():
+                    return {
+                        "releases": release_done,
+                        "musicbrainz": musicbrainz_done,
+                        "details": detail_done,
+                        "errors": errors,
+                    }
                 errors += 1
+                self._release_priority_queue.pop(album_id, None)
                 return {
                     "releases": release_done,
                     "musicbrainz": musicbrainz_done,
@@ -1302,6 +1322,7 @@ class DataService:
                 }
             except Exception as exc:
                 errors += 1
+                self._release_priority_queue.pop(album_id, None)
                 self._release_retry_after[album_id] = time.time() + 60 * 60
                 print(
                     f"[CACHE] release {album_id}: "

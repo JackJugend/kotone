@@ -484,48 +484,109 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["musicbrainz"], 1)
         self.assertEqual(len(calls), 1)
-        self.assertIsNone(self.db.get_release_details("mb-fallback"))
+        self.assertIsNotNone(self.db.get_release_details("mb-fallback"))
         cached = self.service.cached_release_details("mb-fallback")
         self.assertEqual(cached["metadata_source"], "musicbrainz")
         self.assertEqual(cached["metadata_sources"]["genres"], "musicbrainz")
         self.assertEqual(cached["genres"], ["Art Pop"])
         self.assertEqual(cached["tracklist"][0]["duration"], "3:00")
 
+    async def test_musicbrainz_outage_blocks_followup_requests_globally(self):
+        item = {"artist": "Artist", "album": "Album"}
+        original_mb = services.musicbrainz.MUSICBRAINZ.lookup_release
+        calls = []
+
+        def unavailable(*_args, **_kwargs):
+            calls.append(True)
+            raise services.musicbrainz.MusicBrainzUnavailable(
+                "HTTP 503",
+                retry_after=15 * 60,
+            )
+
+        services.musicbrainz.MUSICBRAINZ.lookup_release = unavailable
+        try:
+            self.assertIsNone(
+                await self.service._musicbrainz_release_fallback(
+                    item,
+                    priority=0,
+                )
+            )
+            self.assertIsNone(
+                await self.service._musicbrainz_release_fallback(
+                    item,
+                    priority=0,
+                )
+            )
+        finally:
+            services.musicbrainz.MUSICBRAINZ.lookup_release = original_mb
+
+        self.assertEqual(len(calls), 1)
+        self.assertGreater(self.service._musicbrainz_blocked_until, time.time())
+        self.assertTrue(self.service.musicbrainz_status()["blocked"])
+
     async def test_db_only_personal_detail_queue_does_not_starve_musicbrainz(self):
+        item = {
+            "album_id": "kocorono",
+            "artist": "Bloodthirsty Butchers",
+            "album": "Kocorono",
+            "url": "https://www.albumoftheyear.org/album/1-kocorono.php",
+            "release_format": "LP",
+            "score": "85",
+            "has_track_ratings": True,
+            "sort_timestamp": 1,
+        }
+        self.db.upsert_rating("enso", item)
+        self.assertTrue(
+            self.db.save_release_details(
+                "kocorono",
+                {"source": "aoty", "album_format": "LP"},
+            )
+        )
         self.db.upsert_rating(
             "enso",
             {
-                "album_id": "kocorono",
-                "artist": "Bloodthirsty Butchers",
-                "album": "Kocorono",
-                "url": "https://www.albumoftheyear.org/album/1-kocorono.php",
+                "album_id": "newer-release",
+                "artist": "Newer Artist",
+                "album": "Newer Album",
+                "url": "https://www.albumoftheyear.org/album/2-newer.php",
                 "release_format": "LP",
-                "score": "85",
-                "has_track_ratings": True,
+                "score": "90",
+                "sort_timestamp": 999,
             },
         )
         self.assertEqual(
             self.db.detail_enrichment_candidates("enso", 1)[0]["album_id"],
             "kocorono",
         )
+        # Rendering details queues Kocorono but performs no MusicBrainz request.
+        await self.service.get_release_details(item, allow_network=False)
+        self.assertIn("kocorono", self.service._release_priority_queue)
         original_mb = services.musicbrainz.MUSICBRAINZ.lookup_release
-        services.musicbrainz.MUSICBRAINZ.lookup_release = lambda *_args, **_kwargs: {
-            "source": "musicbrainz",
-            "release_date": "1996-10-23",
-            "year": "1996",
-            "album_format": "LP",
-            "tracklist": [{"number": 1, "title": "Track", "duration": "3:00"}],
-            "_section_complete": {
-                "score": False,
-                "release_date": True,
-                "format": True,
-                "labels": False,
-                "genres": False,
-                "vibes": False,
-                "ranking": False,
-                "tracklist": True,
-            },
-        }
+        calls = []
+
+        def fallback(artist, album, **_kwargs):
+            calls.append((artist, album))
+            return {
+                "source": "musicbrainz",
+                "release_date": "1996-10-23",
+                "year": "1996",
+                "album_format": "LP",
+                "tracklist": [
+                    {"number": 1, "title": "Track", "duration": "3:00"}
+                ],
+                "_section_complete": {
+                    "score": False,
+                    "release_date": True,
+                    "format": True,
+                    "labels": False,
+                    "genres": False,
+                    "vibes": False,
+                    "ranking": False,
+                    "tracklist": True,
+                },
+            }
+
+        services.musicbrainz.MUSICBRAINZ.lookup_release = fallback
         try:
             result = await self.service.enrich_user(
                 "enso",
@@ -537,13 +598,17 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
             services.musicbrainz.MUSICBRAINZ.lookup_release = original_mb
 
         self.assertEqual(result["musicbrainz"], 1)
+        self.assertEqual(calls, [("Bloodthirsty Butchers", "Kocorono")])
         self.assertEqual(
             self.service.cached_release_details("kocorono")["release_date"],
             "1996-10-23",
         )
-        self.assertIsNone(self.db.get_release_details("kocorono"))
+        self.assertEqual(
+            self.db.get_release_details("kocorono")["release_date"],
+            "1996-10-23",
+        )
 
-    def test_volatile_musicbrainz_fills_only_missing_aoty_fields(self):
+    def test_persisted_musicbrainz_fills_only_missing_aoty_fields(self):
         self.db.upsert_rating(
             "enso",
             {
@@ -561,12 +626,28 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 {"source": "aoty", "album_format": "LP"},
             )
         )
-        self.service._musicbrainz_release_cache["mixed-source"] = {
-            "source": "musicbrainz",
-            "album_format": "EP",
-            "release_date": "2025-01-02",
-            "genres": ["Art Pop"],
-        }
+        self.assertTrue(
+            self.db.save_musicbrainz_fallback(
+                "mixed-source",
+                {
+                    "source": "musicbrainz",
+                    "album_format": "EP",
+                    "release_date": "2025-01-02",
+                    "year": "2025",
+                    "genres": ["Art Pop"],
+                    "_section_complete": {
+                        "score": False,
+                        "release_date": True,
+                        "format": True,
+                        "labels": False,
+                        "genres": True,
+                        "vibes": False,
+                        "ranking": False,
+                        "tracklist": False,
+                    },
+                },
+            )
+        )
 
         merged = self.service.cached_release_details("mixed-source")
         self.assertEqual(merged["album_format"], "LP")
@@ -577,7 +658,37 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
             "musicbrainz",
         )
         self.assertEqual(merged["genres"], ["Art Pop"])
-        self.assertEqual(self.db.get_release_details("mixed-source")["genres"], [])
+        self.assertEqual(
+            self.db.get_release_details("mixed-source")["genres"],
+            ["Art Pop"],
+        )
+        self.assertTrue(
+            self.db.save_release_details(
+                "mixed-source",
+                {
+                    "source": "aoty",
+                    "release_date": "January 3, 2025",
+                    "year": "2025",
+                    "genres": ["Post-Punk"],
+                    "secondary_genres": [],
+                    "_section_complete": {
+                        "score": False,
+                        "release_date": True,
+                        "format": False,
+                        "labels": False,
+                        "genres": True,
+                        "vibes": False,
+                        "ranking": False,
+                        "tracklist": False,
+                    },
+                },
+            )
+        )
+        authoritative = self.db.get_release_details("mixed-source")
+        self.assertEqual(authoritative["release_date"], "January 3, 2025")
+        self.assertEqual(authoritative["genres"], ["Post-Punk"])
+        self.assertEqual(authoritative["metadata_sources"]["release_date"], "aoty")
+        self.assertEqual(authoritative["metadata_sources"]["genres"], "aoty")
 
     async def test_aoty_details_win_without_musicbrainz_fallback(self):
         item = {

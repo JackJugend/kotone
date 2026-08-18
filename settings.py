@@ -280,6 +280,9 @@ MUSICBRAINZ_MIN_REQUEST_INTERVAL = _runtime_float(
 MUSICBRAINZ_REQUEST_TIMEOUT = _runtime_float(
     "musicbrainz_request_timeout", 15.0, 3.0
 )
+MUSICBRAINZ_OUTAGE_COOLDOWN = _runtime_float(
+    "musicbrainz_outage_cooldown", 15 * 60.0, 60.0
+)
 MUSICBRAINZ_FALLBACK_RETRY_INTERVAL = _runtime_int(
     "musicbrainz_fallback_retry_interval", 24 * 60 * 60, 60 * 60
 )

@@ -665,7 +665,7 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("kulkien **75**", embed.description)
         live_detail.assert_not_awaited()
 
-    async def test_details_tab_marks_aoty_and_volatile_musicbrainz_sources(self):
+    async def test_details_tab_marks_aoty_and_musicbrainz_sources(self):
         item = {
             "album_id": "source-test",
             "artist": "Artist",

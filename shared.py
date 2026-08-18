@@ -382,9 +382,8 @@ async def load_release_variables(
 ) -> ReleaseVariables:
     """Build release variables through the shared cache/live service.
 
-    AOTY release details for configured users are persisted in SQLite and
-    survive Railway restarts. Volatile MusicBrainz fallback can fill missing
-    display fields but is never persisted.
+    AOTY release details for configured users are persisted in SQLite.
+    MusicBrainz may persist only sections still missing from AOTY.
     """
     item = item or {}
     details = {}

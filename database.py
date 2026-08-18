@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def _json_dump(value) -> str:
@@ -872,6 +872,7 @@ class Database:
                     year_ranking TEXT,
                     year_ranking_text TEXT,
                     metadata_source TEXT,
+                    metadata_sources_json TEXT,
                     fetched_at REAL NOT NULL
                 )
                 """
@@ -880,6 +881,7 @@ class Database:
             # legacy partial rows. Existing rows intentionally remain NULL so
             # the background worker can offer them to MusicBrainz immediately.
             self._ensure_column("releases", "metadata_source", "TEXT")
+            self._ensure_column("releases", "metadata_sources_json", "TEXT")
 
             self.connection.execute(
                 """
@@ -2422,6 +2424,8 @@ class Database:
 
         raw_section_complete = details.get("_section_complete")
         legacy_authoritative = not isinstance(raw_section_complete, dict)
+        source = str(details.get("source") or "").strip().casefold()
+        source = source if source in {"aoty", "musicbrainz"} else ""
 
         def section_complete(name: str) -> bool:
             # Older callers and test fixtures predate the parser contract and
@@ -2433,6 +2437,76 @@ class Database:
             if not self._release_is_in_scope_locked(album_id):
                 return False
 
+            existing = self.connection.execute(
+                "SELECT * FROM releases WHERE album_id = ?",
+                (album_id,),
+            ).fetchone()
+            metadata_sources = (
+                _json_load(existing["metadata_sources_json"], {})
+                if existing is not None
+                else {}
+            )
+            if not isinstance(metadata_sources, dict):
+                metadata_sources = {}
+            if existing is not None:
+                inferred_source = str(
+                    existing["metadata_source"] or "aoty"
+                ).casefold()
+                if inferred_source not in {"aoty", "musicbrainz"}:
+                    inferred_source = "aoty"
+
+                def raw_present(*columns: str) -> bool:
+                    return any(
+                        str(existing[column] or "").strip()
+                        not in {"", "[]", "{}"}
+                        for column in columns
+                    )
+
+                if raw_present("user_score", "ratings_count"):
+                    metadata_sources.setdefault("score", "aoty")
+                if raw_present("release_date", "year"):
+                    metadata_sources.setdefault("release_date", inferred_source)
+                if raw_present("album_format"):
+                    metadata_sources.setdefault("format", inferred_source)
+                if raw_present("label", "labels_json"):
+                    metadata_sources.setdefault("labels", inferred_source)
+                if raw_present("genres_json", "secondary_genres_json"):
+                    metadata_sources.setdefault("genres", inferred_source)
+                if raw_present("vibes_json"):
+                    metadata_sources.setdefault("vibes", "aoty")
+                if raw_present(
+                    "ranking_year",
+                    "year_ranking",
+                    "year_ranking_text",
+                ):
+                    metadata_sources.setdefault("ranking", "aoty")
+                if self.connection.execute(
+                    "SELECT 1 FROM release_tracks WHERE album_id = ? LIMIT 1",
+                    (album_id,),
+                ).fetchone():
+                    metadata_sources.setdefault("tracklist", inferred_source)
+            section_keys = {
+                "score": ("user_score", "ratings_count"),
+                "release_date": ("release_date", "year"),
+                "format": ("album_format",),
+                "labels": ("label", "labels"),
+                "genres": ("genres", "secondary_genres"),
+                "vibes": ("vibes",),
+                "ranking": (
+                    "ranking_year",
+                    "year_ranking",
+                    "year_ranking_text",
+                ),
+                "tracklist": ("tracklist",),
+            }
+            if source:
+                for section, keys in section_keys.items():
+                    if section_complete(section) and any(
+                        details.get(key) not in (None, "", [], {})
+                        for key in keys
+                    ):
+                        metadata_sources[section] = source
+
             self.connection.execute(
                 """
                 INSERT INTO releases(
@@ -2440,8 +2514,9 @@ class Database:
                     user_score, ratings_count, release_date, year,
                     album_format, label, labels_json, genres_json,
                     secondary_genres_json, vibes_json, ranking_year,
-                    year_ranking, year_ranking_text, metadata_source, fetched_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    year_ranking, year_ranking_text, metadata_source,
+                    metadata_sources_json, fetched_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(album_id) DO UPDATE SET
                     artist = COALESCE(excluded.artist, releases.artist),
                     artist_url = COALESCE(excluded.artist_url, releases.artist_url),
@@ -2484,6 +2559,7 @@ class Database:
                         excluded.metadata_source,
                         releases.metadata_source
                     ),
+                    metadata_sources_json = excluded.metadata_sources_json,
                     fetched_at = excluded.fetched_at
                 """,
                 (
@@ -2506,7 +2582,8 @@ class Database:
                     details.get("ranking_year"),
                     details.get("year_ranking"),
                     details.get("year_ranking_text"),
-                    details.get("source"),
+                    source or None,
+                    _json_dump(metadata_sources),
                     now,
                     section_complete("score"),
                     section_complete("score"),
@@ -2561,6 +2638,42 @@ class Database:
 
         return True
 
+    def save_musicbrainz_fallback(self, album_id: str, details: dict) -> bool:
+        """Persist only MusicBrainz sections that are still absent from AOTY."""
+
+        album_id = str(album_id or "").strip()
+        if not album_id:
+            return False
+        incoming = dict(details or {})
+        existing = self.get_release_details(album_id)
+        complete = dict(incoming.get("_section_complete") or {})
+
+        if existing is not None:
+            section_keys = {
+                "score": ("user_score", "ratings_count"),
+                "release_date": ("release_date", "year"),
+                "format": ("album_format",),
+                "labels": ("label", "labels"),
+                "genres": ("genres", "secondary_genres"),
+                "vibes": ("vibes",),
+                "ranking": (
+                    "ranking_year",
+                    "year_ranking",
+                    "year_ranking_text",
+                ),
+                "tracklist": ("tracklist",),
+            }
+            for section, keys in section_keys.items():
+                if any(existing.get(key) not in (None, "", [], {}) for key in keys):
+                    complete[section] = False
+            for detail_key in ("artist", "artist_url", "album", "url", "cover"):
+                if existing.get(detail_key) not in (None, "", [], {}):
+                    incoming[detail_key] = None
+
+        incoming["source"] = "musicbrainz"
+        incoming["_section_complete"] = complete
+        return self.save_release_details(album_id, incoming)
+
     def get_release_details(self, album_id: str) -> dict | None:
         album_id = str(album_id or "").strip()
         if not album_id:
@@ -2588,6 +2701,28 @@ class Database:
         genres = _json_load(row["genres_json"], [])
         secondary = _json_load(row["secondary_genres_json"], [])
         vibes = _json_load(row["vibes_json"], [])
+        metadata_sources = _json_load(row["metadata_sources_json"], {})
+        if not isinstance(metadata_sources, dict):
+            metadata_sources = {}
+        inferred_source = str(row["metadata_source"] or "aoty").casefold()
+        if inferred_source not in {"aoty", "musicbrainz"}:
+            inferred_source = "aoty"
+        if row["user_score"] or row["ratings_count"]:
+            metadata_sources.setdefault("score", "aoty")
+        if row["release_date"] or row["year"]:
+            metadata_sources.setdefault("release_date", inferred_source)
+        if row["album_format"]:
+            metadata_sources.setdefault("format", inferred_source)
+        if row["label"] or labels:
+            metadata_sources.setdefault("labels", inferred_source)
+        if genres or secondary:
+            metadata_sources.setdefault("genres", inferred_source)
+        if vibes:
+            metadata_sources.setdefault("vibes", "aoty")
+        if row["year_ranking"] or row["year_ranking_text"]:
+            metadata_sources.setdefault("ranking", "aoty")
+        if tracks:
+            metadata_sources.setdefault("tracklist", inferred_source)
 
         return {
             "album_id": album_id,
@@ -2614,6 +2749,7 @@ class Database:
             "year_ranking": row["year_ranking"],
             "year_ranking_text": row["year_ranking_text"],
             "metadata_source": row["metadata_source"],
+            "metadata_sources": metadata_sources,
             "tracklist": [
                 {
                     "number": track["track_number"],

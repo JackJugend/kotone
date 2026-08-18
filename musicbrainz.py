@@ -3,7 +3,7 @@
 This module is deliberately separate from the AOTY transport.  It has its own
 one-request-per-second gate, a meaningful User-Agent and no polling.  It is
 called only by Kotone's low-priority background worker after an AOTY failure,
-then its result stays in a volatile in-memory display cache.
+then its result may fill only missing sections in the SQLite release cache.
 """
 
 from __future__ import annotations
@@ -15,7 +15,11 @@ from typing import Any
 
 import requests
 
-from settings import MUSICBRAINZ_MIN_REQUEST_INTERVAL, MUSICBRAINZ_REQUEST_TIMEOUT
+from settings import (
+    MUSICBRAINZ_MIN_REQUEST_INTERVAL,
+    MUSICBRAINZ_OUTAGE_COOLDOWN,
+    MUSICBRAINZ_REQUEST_TIMEOUT,
+)
 
 
 BASE_URL = "https://musicbrainz.org/ws/2"
@@ -24,6 +28,10 @@ USER_AGENT = "Kotone/1.0 (https://github.com/JackJugend/kotone)"
 
 class MusicBrainzUnavailable(RuntimeError):
     """MusicBrainz could not provide a safe fallback result."""
+
+    def __init__(self, message: str, *, retry_after: float = 0.0):
+        super().__init__(message)
+        self.retry_after = max(0.0, float(retry_after))
 
 
 def _normalized(value: object) -> str:
@@ -192,10 +200,24 @@ class MusicBrainzClient:
                     params=params,
                     timeout=MUSICBRAINZ_REQUEST_TIMEOUT,
                 )
+                if response.status_code in {429, 502, 503, 504}:
+                    try:
+                        retry_after = float(response.headers.get("Retry-After") or 0)
+                    except (TypeError, ValueError):
+                        retry_after = 0.0
+                    raise MusicBrainzUnavailable(
+                        f"HTTP {response.status_code}: MusicBrainz temporarily unavailable",
+                        retry_after=max(retry_after, MUSICBRAINZ_OUTAGE_COOLDOWN),
+                    )
                 response.raise_for_status()
                 payload = response.json()
+            except MusicBrainzUnavailable:
+                raise
             except (requests.RequestException, ValueError) as exc:
-                raise MusicBrainzUnavailable(str(exc)) from exc
+                raise MusicBrainzUnavailable(
+                    str(exc),
+                    retry_after=MUSICBRAINZ_OUTAGE_COOLDOWN,
+                ) from exc
             finally:
                 self._next_request_at = time.monotonic() + MUSICBRAINZ_MIN_REQUEST_INTERVAL
         if not isinstance(payload, dict):

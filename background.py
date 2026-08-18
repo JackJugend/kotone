@@ -97,7 +97,7 @@ class BackgroundWorker:
 
         if HTTP.db_only_enabled():
             # /dbonly means no AOTY requests, not no useful background work.
-            # MusicBrainz can still fill a volatile display cache safely.
+            # MusicBrainz can still fill missing durable release fields safely.
             for username in self._ordered_users_from(self._enrich_cursor):
                 result = await self._enrich_one_user(
                     username,
@@ -113,7 +113,7 @@ class BackgroundWorker:
             return ARCHIVE_WORKER_IDLE_SECONDS
 
         # During a real AOTY challenge there is no value in retrying an AOTY
-        # route. Use one bounded MusicBrainz-only pass to fill volatile display
+        # route. Use one bounded MusicBrainz-only pass to fill durable release
         # gaps, then wait for the normal AOTY cooldown to expire.
         if HTTP.status().get("challenge_open"):
             for username in self._ordered_users_from(self._enrich_cursor):

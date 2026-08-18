@@ -14,6 +14,7 @@ from aiohttp import web
 
 from database import DB
 from http_client import HTTP
+from services import DATA
 from settings import PORT
 
 
@@ -76,6 +77,7 @@ class HealthServer:
                     else None
                 ),
                 "aoty_transport": HTTP.status(),
+                "musicbrainz": DATA.musicbrainz_status(),
             },
             status=200 if ok else 503,
         )
