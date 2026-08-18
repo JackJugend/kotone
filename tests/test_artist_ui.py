@@ -108,7 +108,7 @@ class ArtistImageDatabaseTests(unittest.TestCase):
 
 @unittest.skipIf(DISCORD_ERROR is not None, str(DISCORD_ERROR))
 class ArtistViewTests(unittest.TestCase):
-    def test_artist_embed_has_one_artist_name_and_decade_menu(self):
+    def test_artist_embed_has_one_artist_name_and_period_menu(self):
         discography = {
             "artist": "Fievel Is Glauque",
             "url": "https://example.test/artist",
@@ -129,7 +129,9 @@ class ArtistViewTests(unittest.TestCase):
         ]
         view = ArtistSortView(discography=discography, releases=releases)
         self.assertEqual(view.timeout, ARTIST_VIEW_TIMEOUT_SECONDS)
-        self.assertIn("2020-2029", [option.label for option in view.decade_select.options])
+        labels = [option.label for option in view.period_select.options]
+        self.assertIn("2021", labels)
+        self.assertIn("2020-2029", labels)
         header = _artist_header_text(discography)
         self.assertNotIn("**Fievel Is Glauque**", header)
         self.assertIn("Jazz Pop", header)
@@ -162,7 +164,7 @@ class ArtistViewTests(unittest.TestCase):
             ).default
         )
 
-    def test_slash_command_only_exposes_artist_argument(self):
+    def test_slash_command_exposes_artist_and_aoty_score_range(self):
         client = discord.Client(intents=discord.Intents.none())
         tree = discord.app_commands.CommandTree(client)
         try:
@@ -170,7 +172,7 @@ class ArtistViewTests(unittest.TestCase):
             command = next(item for item in tree.get_commands() if item.name == "artist")
             self.assertEqual(
                 [parameter.name for parameter in command.parameters],
-                ["artist"],
+                ["artist", "aoty_min", "aoty_max"],
             )
         finally:
             import asyncio

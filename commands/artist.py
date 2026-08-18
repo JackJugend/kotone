@@ -295,6 +295,8 @@ class ArtistFormatSelect(discord.ui.Select):
         view = self.artist_view
         view.selected_format = self.values[0]
 
+        if view.selected_year not in {None, *view.available_years()}:
+            view.selected_year = None
         if view.selected_decade not in {None, *view.available_decades()}:
             view.selected_decade = None
 
@@ -308,8 +310,8 @@ class ArtistFormatSelect(discord.ui.Select):
         )
 
 
-class ArtistDecadeSelect(discord.ui.Select):
-    """Release-period filter showing compact decade ranges."""
+class ArtistPeriodSelect(discord.ui.Select):
+    """Filtr okresu z konkretnymi latami oraz kompaktowymi dekadami."""
 
     def __init__(self, artist_view):
         self.artist_view = artist_view
@@ -324,40 +326,63 @@ class ArtistDecadeSelect(discord.ui.Select):
 
     def refresh_options(self):
         view = self.artist_view
+        years = view.available_years()
         decades = view.available_decades()
+        if view.selected_year not in {None, *years}:
+            view.selected_year = None
         if view.selected_decade not in {None, *decades}:
             view.selected_decade = None
+
+        # Discord pozwala na 25 opcji. Pokazujemy najnowsze konkretne lata
+        # (najczęstszy wybór) i równolegle dekady dla starszej dyskografii.
+        # Aktywny filtr zawsze pozostaje widoczny, nawet gdy jest bardzo stary.
+        visible_years = list(years)
+        if view.selected_year in visible_years:
+            visible_years.remove(view.selected_year)
+            visible_years.insert(0, view.selected_year)
+        visible_decades = list(decades)
+        if view.selected_decade in visible_decades:
+            visible_decades.remove(view.selected_decade)
+            visible_decades.insert(0, view.selected_decade)
+
         self.options = [
             discord.SelectOption(
                 label="Wszystkie lata",
                 value="all",
-                default=view.selected_decade is None,
+                default=view.selected_year is None and view.selected_decade is None,
             )
         ] + [
             discord.SelectOption(
+                label=str(year),
+                value=f"year:{year}",
+                default=view.selected_year == year,
+            )
+            for year in visible_years[:12]
+        ] + [
+            discord.SelectOption(
                 label=f"{start}-{start + 9}",
-                value=str(start),
+                value=f"decade:{start}",
                 default=view.selected_decade == start,
             )
-            for start in decades[:24]
+            for start in visible_decades[:12]
         ]
-        self.placeholder = (
-            "Lata: Wszystkie lata"
-            if view.selected_decade is None
-            else f"Lata: {view.selected_decade}-{view.selected_decade + 9}"
-        )
-        self.disabled = not decades
+        self.placeholder = f"Lata: {view.selected_period_label}"
+        self.disabled = not years
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         value = self.values[0]
-        self.artist_view.selected_decade = (
-            None if value == "all" else int(value)
-        )
-        self.artist_view.refresh_controls()
+        view = self.artist_view
+        view.selected_year = None
+        view.selected_decade = None
+        if value.startswith("year:"):
+            view.selected_year = value.split(":", 1)[1]
+        elif value.startswith("decade:"):
+            view.selected_decade = int(value.split(":", 1)[1])
+        view.refresh_controls()
         await interaction.edit_original_response(
-            embed=await self.artist_view.build_embed(),
-            view=self.artist_view,
+            embed=await view.build_embed(),
+            view=view,
         )
 
 
@@ -405,6 +430,8 @@ class ArtistGenreSelect(discord.ui.Select):
         await interaction.response.defer()
         view = self.artist_view
         view.selected_genre = self.values[0]
+        if view.selected_year not in {None, *view.available_years()}:
+            view.selected_year = None
         if view.selected_decade not in {None, *view.available_decades()}:
             view.selected_decade = None
         view.refresh_controls()
@@ -442,15 +469,8 @@ class ArtistSortView(TimedDisableView):
         self.sort_key = "newest"
         self.selected_format = selected_format
         self.selected_genre = selected_genre or "all"
-        self.selected_decade = (
-            int(decade)
-            if decade is not None
-            else (
-                (int(selected_year) // 10) * 10
-                if selected_year is not None
-                else None
-            )
-        )
+        self.selected_year = str(selected_year) if selected_year is not None else None
+        self.selected_decade = int(decade) if decade is not None else None
         self.aoty_min = aoty_min
         self.aoty_max = aoty_max
 
@@ -462,7 +482,7 @@ class ArtistSortView(TimedDisableView):
             self
         )
 
-        self.decade_select = ArtistDecadeSelect(
+        self.period_select = ArtistPeriodSelect(
             self
         )
 
@@ -473,7 +493,7 @@ class ArtistSortView(TimedDisableView):
         )
 
         self.add_item(
-            self.decade_select
+            self.period_select
         )
         self.add_item(self.genre_select)
 
@@ -495,6 +515,8 @@ class ArtistSortView(TimedDisableView):
 
     @property
     def selected_period_label(self):
+        if self.selected_year is not None:
+            return self.selected_year
         if self.selected_decade is None:
             return "Wszystkie lata"
         return f"{self.selected_decade}-{self.selected_decade + 9}"
@@ -522,7 +544,13 @@ class ArtistSortView(TimedDisableView):
 
     def _base_filtered_releases(self):
         releases = list(self.releases)
-        if self.selected_decade is not None:
+        if self.selected_year is not None:
+            releases = [
+                release
+                for release in releases
+                if _release_year(release) == self.selected_year
+            ]
+        elif self.selected_decade is not None:
             start = int(self.selected_decade)
             releases = [
                 release
@@ -587,6 +615,21 @@ class ArtistSortView(TimedDisableView):
         }
         return sorted(decades, reverse=True)
 
+    def available_years(self):
+        """Konkretne lata po filtrach formatu i gatunku, bez filtra okresu."""
+
+        years = {
+            year
+            for year in (
+                _release_year(release)
+                for release in self._format_and_genre_filtered_releases(
+                    include_base=False
+                )
+            )
+            if year is not None
+        }
+        return sorted(years, reverse=True)
+
     def filtered_releases(self):
         releases = self._format_and_genre_filtered_releases()
 
@@ -595,7 +638,7 @@ class ArtistSortView(TimedDisableView):
     def refresh_controls(self):
         self._refresh_button_styles()
         self.format_select.refresh_options()
-        self.decade_select.refresh_options()
+        self.period_select.refresh_options()
         self.genre_select.refresh_options()
 
     def _refresh_button_styles(self):
@@ -934,17 +977,38 @@ def setup_artist_command(
     )
     @discord.app_commands.describe(
         artist="Nazwa artysty na AOTY",
+        aoty_min="Minimalny AOTY User Score (0–100)",
+        aoty_max="Maksymalny AOTY User Score (0–100)",
     )
     @discord.app_commands.autocomplete(artist=artist_autocomplete)
     async def artist_command(
         interaction: discord.Interaction,
         artist: str,
+        aoty_min: int | None = None,
+        aoty_max: int | None = None,
     ):
+        if any(
+            value is not None and not 0 <= value <= 100
+            for value in (aoty_min, aoty_max)
+        ):
+            await interaction.response.send_message(
+                "AOTY User Score musi mieścić się w zakresie 0–100.",
+                ephemeral=True,
+            )
+            return
+        if aoty_min is not None and aoty_max is not None and aoty_min > aoty_max:
+            await interaction.response.send_message(
+                "`aoty_min` nie może być większe niż `aoty_max`.",
+                ephemeral=True,
+            )
+            return
         await interaction.response.defer()
 
         try:
             result = await build_artist_response(
                 artist,
+                aoty_min=aoty_min,
+                aoty_max=aoty_max,
             )
             if result is None:
                 await interaction.followup.send(
