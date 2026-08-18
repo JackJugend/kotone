@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 def _json_dump(value) -> str:
@@ -902,6 +902,21 @@ class Database:
                     FOREIGN KEY (album_id)
                         REFERENCES releases(album_id)
                         ON DELETE CASCADE
+                )
+                """
+            )
+
+            # Artist imagery is public cache only. It can be inserted solely
+            # for artists that already belong to a configured user's rating.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS artist_images (
+                    artist_key TEXT PRIMARY KEY,
+                    artist TEXT NOT NULL,
+                    image_url TEXT,
+                    source TEXT NOT NULL,
+                    fetched_at REAL NOT NULL,
+                    retry_after REAL NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -1873,6 +1888,70 @@ class Database:
             }
             for row in rows
         ]
+
+    @staticmethod
+    def _artist_image_key(artist: object) -> str:
+        return " ".join(str(artist or "").split()).casefold()
+
+    def get_artist_image(self, artist: str) -> dict | None:
+        """Return one cached public image record without contacting a site."""
+
+        key = self._artist_image_key(artist)
+        if not key:
+            return None
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT artist, image_url, source, fetched_at, retry_after
+                FROM artist_images WHERE artist_key = ?
+                """,
+                (key,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def save_artist_image(
+        self,
+        artist: str,
+        image_url: str | None,
+        *,
+        source: str = "lastfm",
+        retry_after: float = 0.0,
+    ) -> bool:
+        """Store a public artist image only when the artist is in scope."""
+
+        name = " ".join(str(artist or "").split())
+        key = self._artist_image_key(name)
+        if not key:
+            return False
+        image = str(image_url or "").strip() or None
+        if image is not None and not image.startswith("https://"):
+            return False
+        with self._lock, self.connection:
+            in_scope = self.connection.execute(
+                """
+                SELECT 1 FROM ratings
+                WHERE active = 1 AND artist = ? COLLATE NOCASE
+                LIMIT 1
+                """,
+                (name,),
+            ).fetchone()
+            if in_scope is None:
+                return False
+            self.connection.execute(
+                """
+                INSERT INTO artist_images(
+                    artist_key, artist, image_url, source, fetched_at, retry_after
+                ) VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artist_key) DO UPDATE SET
+                    artist = excluded.artist,
+                    image_url = excluded.image_url,
+                    source = excluded.source,
+                    fetched_at = excluded.fetched_at,
+                    retry_after = excluded.retry_after
+                """,
+                (key, name, image, str(source or "lastfm"), _now(), float(retry_after)),
+            )
+        return True
 
     def get_rating(self, username: str, album_id: str) -> dict | None:
         canonical = self.canonical_username(username)
@@ -3521,10 +3600,10 @@ class Database:
             "label": row["label"],
             "labels": labels,
             "labels_text": ", ".join(labels) if labels else None,
-            "genres".title(): genres,
-            "genres_text".title(): ", ".join(genres) if genres else None,
-            "secondary_genres".title(): secondary,
-            "secondary_genres_text".title(): ", ".join(secondary) if secondary else None,
+            "genres": genres,
+            "genres_text": ", ".join(genres) if genres else None,
+            "secondary_genres": secondary,
+            "secondary_genres_text": ", ".join(secondary) if secondary else None,
             "vibes": vibes,
             "vibes_text": ", ".join(vibes) if vibes else None,
             "ranking_year": row["ranking_year"],
@@ -3552,6 +3631,16 @@ class Database:
             DELETE FROM releases
             WHERE album_id NOT IN (
                 SELECT DISTINCT album_id FROM ratings
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            DELETE FROM artist_images
+            WHERE NOT EXISTS(
+                SELECT 1 FROM ratings r
+                WHERE r.active = 1
+                  AND r.artist = artist_images.artist COLLATE NOCASE
             )
             """
         )

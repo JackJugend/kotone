@@ -702,7 +702,7 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(
             "<:music_brainz:1539096206083629186> "
-            "**Release date:** 1996-12-01",
+            "**Release date:** 1 grudnia 1996",
             embed.description,
         )
         self.assertIn("**Label:** —", embed.description)

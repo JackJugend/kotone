@@ -18,8 +18,10 @@ import time
 import requests
 
 import aoty
+import lastfm
 import musicbrainz
 from database import DB
+from display_utils import display_genres
 from http_client import (
     PRIORITY_BACKGROUND,
     PRIORITY_INTERACTIVE,
@@ -31,6 +33,8 @@ from settings import (
     CHECK_INTERVAL,
     DETAIL_CHANGE_SCAN_INTERVAL,
     FULL_SYNC_INTERVAL,
+    LASTFM_ARTIST_IMAGE_RETRY_INTERVAL,
+    LASTFM_ARTIST_IMAGE_TTL,
     PROFILE_SYNC_INTERVAL,
     PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
     PROFILE_RATING_ARCHIVE_INTERVAL,
@@ -291,10 +295,9 @@ class DataService:
         artist_info["url"] = artist_url
         cached_genres = sorted(
             {
-                str(genre).strip()
+                genre
                 for release in releases
-                for genre in (release.get("genres") or [])
-                if str(genre).strip()
+                for genre in display_genres(release.get("genres") or [])
             },
             key=str.casefold,
         )
@@ -306,6 +309,40 @@ class DataService:
             "genres_text": ", ".join(cached_genres[:10]) or None,
             "source": "SQLite cache",
         }
+
+    async def _cached_lastfm_artist_image(self, artist: str) -> str | None:
+        """Return a cached Last.fm image, fetching at most once per TTL."""
+
+        cached = DB.get_artist_image(artist)
+        now = time.time()
+        if cached:
+            image = str(cached.get("image_url") or "").strip() or None
+            fetched_at = float(cached.get("fetched_at") or 0)
+            retry_after = float(cached.get("retry_after") or 0)
+            if image and now - fetched_at < LASTFM_ARTIST_IMAGE_TTL:
+                return image
+            if not image and now < retry_after:
+                return None
+
+        try:
+            image = await asyncio.to_thread(lastfm.fetch_artist_image, artist)
+        except lastfm.LastFMUnavailable as exc:
+            DB.save_artist_image(
+                artist,
+                None,
+                retry_after=now + LASTFM_ARTIST_IMAGE_RETRY_INTERVAL,
+            )
+            print(f"[LASTFM] artist image unavailable for {artist}: {exc}")
+            return None
+
+        DB.save_artist_image(
+            artist,
+            image,
+            retry_after=(
+                0.0 if image else now + LASTFM_ARTIST_IMAGE_RETRY_INTERVAL
+            ),
+        )
+        return image
 
     async def get_artist_discography(
         self,
@@ -322,9 +359,13 @@ class DataService:
         cached_info, cached_discography = self.cached_artist_discography(
             artist_query
         )
-        # Interactive commands are SQLite-only. The background worker is the
-        # sole owner of regular AOTY refreshes, so an existing local artist
-        # cache always wins regardless of its age.
+        # Interactive commands are SQLite-only for AOTY. A missing artist
+        # thumbnail is the one bounded exception: Last.fm is checked once and
+        # then cached locally for a long period.
+        if cached_info and cached_discography and not cached_discography.get("image"):
+            cached_discography["image"] = await self._cached_lastfm_artist_image(
+                cached_info["name"]
+            )
         return cached_info, cached_discography
 
     @staticmethod

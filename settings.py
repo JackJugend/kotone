@@ -142,6 +142,19 @@ def _runtime_float(name: str, default: float, minimum: float = 0.0) -> float:
 # Profil zmienia się dużo rzadziej niż ratings, więc odświeżamy go osobno.
 PROFILE_SYNC_INTERVAL = _runtime_int("profile_sync_interval", 30 * 60, 300)
 
+# /artist may fetch a public Last.fm picture only when SQLite has no current
+# image. The result (including a failed lookup) is cached in SQLite.
+LASTFM_ARTIST_IMAGE_TTL = _runtime_int(
+    "lastfm_artist_image_ttl",
+    30 * 24 * 60 * 60,
+    60 * 60,
+)
+LASTFM_ARTIST_IMAGE_RETRY_INTERVAL = _runtime_int(
+    "lastfm_artist_image_retry_interval",
+    24 * 60 * 60,
+    5 * 60,
+)
+
 # Quick sync służy do wykrywania nowych/recent zmian. Pełny sync co kilka
 # godzin łapie zmianę starej oceny, której quick sync już nie widzi.
 FULL_SYNC_INTERVAL = _runtime_int("full_sync_interval", 6 * 60 * 60, 15 * 60)

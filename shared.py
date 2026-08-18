@@ -13,7 +13,7 @@ from typing import Any
 
 import discord
 
-from display_utils import display_romanized_name
+from display_utils import display_genres, display_release_date, display_romanized_name
 from must_hear import marked_cover_url, must_hear_album
 from settings import AOTY_ICON_ATTACHMENT, USERS
 
@@ -270,8 +270,8 @@ def build_release_variables(
         candidate = item.get(name)
         return default if candidate in (None, "", [], {}) else candidate
 
-    genres = list(value("genres", []) or [])
-    secondary_genres = list(value("secondary_genres", []) or [])
+    genres = display_genres(value("genres", []) or [])
+    secondary_genres = display_genres(value("secondary_genres", []) or [])
     vibes = list(value("vibes", []) or [])
     labels = list(value("labels", []) or [])
     tracklist = list(value("tracklist", []) or [])
@@ -364,7 +364,7 @@ def build_release_variables(
         critic_score=critic_score,
         critic_reviews_count=critic_reviews_count,
         must_hear=must_hear,
-        release_date=value("release_date", missing),
+        release_date=display_release_date(value("release_date", missing), missing=missing),
         year=value("year", missing),
         album_format=(
             details.get("album_format")
@@ -377,15 +377,14 @@ def build_release_variables(
         labels=labels,
         labels_text=value("labels_text", ", ".join(labels) if labels else missing),
         genres=genres,
-        genres_text=value("genres_text", ", ".join(genres) if genres else missing),
+        genres_text=", ".join(genres) if genres else missing,
         main_genre=main_genre,
         other_genres=other_genres,
         other_genres_text=other_genres_text,
         all_genres_text=all_genres_text,
         secondary_genres=secondary_genres,
         secondary_genres_text=(
-            value("secondary_genres_text")
-            or (", ".join(secondary_genres) if secondary_genres else missing)
+            ", ".join(secondary_genres) if secondary_genres else missing
         ),
         vibes=vibes,
         vibes_text=value("vibes_text", ", ".join(vibes) if vibes else missing),
