@@ -7,6 +7,7 @@ import aoty
 from formats import RATING_FORMATS
 from services import DATA
 from shared import (
+    aoty_score_or_missing,
     load_release_variables,
     rating_flags_text,
     release_year_suffix,
@@ -41,7 +42,10 @@ def _rating_embed(username, item, avatar, variables):
     )
 
     embed.add_field(
-        name=f"\👥 **{variables.aoty_user_score}**/{variables.ratings_count}",
+        name=(
+            f"\👥 **{aoty_score_or_missing(variables.aoty_user_score, variables.ratings_count)}**"
+            f"/{variables.ratings_count}"
+        ),
         value=" ",
         inline=True,
     )

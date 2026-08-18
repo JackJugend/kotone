@@ -13,6 +13,7 @@ from display_utils import display_romanized_name
 from settings import USERS
 from presence_cache import PRESENCE_CACHE
 from shared import (
+    aoty_score_or_missing,
     load_release_variables,
     rating_flags_text,
     release_year_suffix,
@@ -358,14 +359,14 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             color=score_color(variables.aoty_user_score),
         )
 
-        if variables.aoty_user_score is not None:
-                aoty_score = variables.aoty_user_score
-        else:
-                aoty_score = "—"
+        aoty_score = aoty_score_or_missing(
+            variables.aoty_user_score,
+            variables.ratings_count,
+        )
 
         embed.add_field(
                 name="AOTY",
-                value=f"{score_icon(variables.aoty_user_score)} **{aoty_score}**",
+                value=f"**{aoty_score}**",
                 inline=True,
         )
 

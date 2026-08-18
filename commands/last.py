@@ -7,6 +7,7 @@ import aoty
 from formats import RATING_FORMATS
 from services import DATA
 from shared import (
+    aoty_score_or_missing,
     load_release_variables,
     rating_flags_text,
     release_year_suffix,
@@ -213,7 +214,8 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         embed.add_field(
             name=(
-                f"<:aoty:1539095897084924004> **{variables.aoty_user_score}**"
+                f"<:aoty:1539095897084924004> "
+                f"**{aoty_score_or_missing(variables.aoty_user_score, variables.ratings_count)}**"
             ),
             value=f"/{variables.ratings_count}",
             inline=True,

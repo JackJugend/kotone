@@ -15,7 +15,7 @@ from typing import Any
 import discord
 
 from display_utils import display_genres, display_release_date, display_romanized_name
-from must_hear import marked_cover_url, must_hear_album
+from must_hear import marked_cover_url, must_hear_album, numeric_count
 from settings import AOTY_ICON_ATTACHMENT, USERS
 
 
@@ -86,13 +86,20 @@ def score_icon(score: Any) -> str:
     return "\⚫"
 
 
-def score_or_nr(score: Any) -> str:
-    """Render every missing rating consistently as a white ``NR`` marker."""
+def score_value_or_nr(score: Any) -> str:
+    """Return a personal rating value, using NR only for a true no-rating."""
 
     text = str(score or "").strip()
     if not text or text.casefold() in {"nr", "n/r", "—", "?"}:
-        return f"{score_icon(None)} NR"
-    return f"{score_icon(text)} {text}"
+        return "NR"
+    return text
+
+
+def score_or_nr(score: Any) -> str:
+    """Render every missing rating consistently as a white ``NR`` marker."""
+
+    value = score_value_or_nr(score)
+    return f"{score_icon(None)} NR" if value == "NR" else f"{score_icon(value)} {value}"
 
 def score_or_missing(score: Any) -> str:
     """Render every missing aoty ratings info consistently as a white ``—`` marker."""
@@ -101,6 +108,27 @@ def score_or_missing(score: Any) -> str:
     if not text or text.casefold() in {"nr", "n/r", "—", "?"}:
         return f"{score_icon(None)} —"
     return f"{score_icon(text)} {text}"
+
+
+def aoty_score_value(score: Any, ratings_count: Any) -> str:
+    """Render a missing public AOTY score without guessing.
+
+    ``NR`` means AOTY explicitly reports zero user ratings.  When a ratings
+    count exists but the score did not parse/cache, the honest value is ``—``:
+    calling that state NR would falsely say that nobody rated the release.
+    """
+
+    text = str(score or "").strip()
+    if text and text.casefold() not in {"nr", "n/r", "—", "?"}:
+        return text
+    return "NR" if numeric_count(ratings_count) == 0 else "—"
+
+
+def aoty_score_or_missing(score: Any, ratings_count: Any) -> str:
+    """Score + icon for public AOTY values using the safe NR distinction."""
+
+    value = aoty_score_value(score, ratings_count)
+    return score_or_nr(None) if value == "NR" else score_or_missing(value)
 
 
 def release_year_suffix(year: Any) -> str:

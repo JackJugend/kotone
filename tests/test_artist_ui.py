@@ -21,7 +21,7 @@ from display_utils import (  # noqa: E402
     display_romanized_name,
 )
 from lastfm import fetch_artist_image  # noqa: E402
-from shared import build_release_variables  # noqa: E402
+from shared import aoty_score_value, build_release_variables, score_value_or_nr  # noqa: E402
 
 DISCORD_ERROR = None
 try:
@@ -59,6 +59,17 @@ class DisplayNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(variables.release_date, "25.10.2024")
         self.assertEqual(variables.genres_text, "Jazz Pop, Progressive Pop")
+
+    def test_public_aoty_nr_requires_an_explicit_zero_rating_count(self):
+        self.assertEqual(aoty_score_value(None, "0"), "NR")
+        self.assertEqual(aoty_score_value(None, "12"), "—")
+        self.assertEqual(aoty_score_value(None, None), "—")
+        self.assertEqual(aoty_score_value("83", "12"), "83")
+
+    def test_personal_missing_score_is_always_nr(self):
+        self.assertEqual(score_value_or_nr(None), "NR")
+        self.assertEqual(score_value_or_nr("—"), "NR")
+        self.assertEqual(score_value_or_nr("90"), "90")
 
     def test_romanization_hides_original_non_latin_name_in_display(self):
         self.assertEqual(

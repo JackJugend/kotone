@@ -11,10 +11,12 @@ from services import DATA
 from display_utils import display_romanized_name
 from settings import AOTY_SOURCE_EMOJI, MUSICBRAINZ_SOURCE_EMOJI, USERS
 from shared import (
+    aoty_score_value,
     build_release_variables,
     load_release_variables,
     rating_flags_text,
     score_or_nr,
+    score_value_or_nr,
     score_color,
     score_icon,
     set_aoty_footer,
@@ -173,7 +175,8 @@ async def build_release_details_embed(
     )
     lines = [
         f"{_details_source_prefix(variables, 'score', variables.aoty_user_score)}"
-        f"**AOTY User Score:** {variables.aoty_user_score}",
+        f"**AOTY User Score:** "
+        f"{aoty_score_value(variables.aoty_user_score, variables.ratings_count)}",
         f"{_details_source_prefix(variables, 'score', variables.ratings_count)}"
         f"**Ratings:** {variables.ratings_count}",
         f"{_details_source_prefix(variables, 'release_date', variables.release_date)}"
@@ -366,7 +369,9 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
                 if number is not None
                 else None
             ) or by_title.get(title_key)
-            scores.append(f"{username} **{(row or {}).get('score') or '—'}**")
+            # Configured users have a personal rating state.  Unlike public
+            # AOTY metadata, a missing personal score is always genuinely NR.
+            scores.append(f"{username} **{score_value_or_nr((row or {}).get('score'))}**")
         lines.append(
             f"**{display_number}.** {title_text}{duration}\n"
             + " • ".join(scores)

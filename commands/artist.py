@@ -7,7 +7,12 @@ from services import DATA
 from display_utils import display_genres, display_romanized_name
 from formats import RATING_FORMATS, format_key_from_label
 from presence_cache import PRESENCE_CACHE
-from shared import build_release_variables, score_or_nr, score_or_missing, set_aoty_footer
+from shared import (
+    aoty_score_or_missing,
+    build_release_variables,
+    score_or_missing,
+    set_aoty_footer,
+)
 from views import TimedDisableView
 
 
@@ -746,7 +751,7 @@ class ArtistSortView(TimedDisableView):
             )
 
             lines.append(
-                f"{score_or_missing(variables.aoty_user_score)} • "
+                f"{aoty_score_or_missing(variables.aoty_user_score, variables.ratings_count)} • "
                 f"**[{variables.display_album}]({release['url']})** • "
                 f"{variables.album_format} • {variables.release_date}"
             )

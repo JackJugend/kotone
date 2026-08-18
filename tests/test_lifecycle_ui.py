@@ -316,6 +316,33 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("/must-hear-cover/42/", str(embed.thumbnail.url))
 
+    async def test_combined_tracklist_uses_the_shared_must_hear_cover(self):
+        item = {
+            "album_id": "42",
+            "artist": "Artist",
+            "album": "Album",
+            "cover": "https://cdn.albumoftheyear.org/old.jpg",
+        }
+        cached = {
+            "album_id": "42",
+            "cover": "https://cdn.albumoftheyear.org/current.jpg",
+            "user_score": "84",
+            "ratings_count": "2,204",
+            "critic_score": "74",
+            "critic_reviews_count": "18",
+            "fetched_at": 1,
+            "tracklist": [{"number": 1, "title": "Track", "user_score": "90"}],
+        }
+        with (
+            patch.dict(os.environ, {"RAILWAY_PUBLIC_DOMAIN": "kotone.example"}, clear=False),
+            patch.object(views_module.DATA, "get_release_details", new=AsyncMock(return_value=cached)),
+            patch.object(views_module.DATA, "cached_rating", return_value=None),
+            patch.object(views_module.DATA, "cached_user_track_ratings", return_value=[]),
+        ):
+            embed = await views_module.build_combined_tracklist_embed(item)
+
+        self.assertIn("/must-hear-cover/42/", str(embed.thumbnail.url))
+
     async def test_album_compact_card_reloads_complete_track_rows(self):
         compact = {
             "score": "90",
