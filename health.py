@@ -15,7 +15,11 @@ from aiohttp import web
 from cover_badges import render_must_hear_png
 from database import DB
 from http_client import HTTP
-from must_hear import cover_token, must_hear_album
+from must_hear import (
+    cover_token,
+    marked_cover_endpoint_enabled,
+    must_hear_album,
+)
 from services import DATA
 from settings import PORT
 from stats_cover_cache import load_cover_bytes
@@ -81,6 +85,9 @@ class HealthServer:
                 ),
                 "aoty_transport": HTTP.status(),
                 "musicbrainz": DATA.musicbrainz_status(),
+                "must_hear_badges": {
+                    "endpoint_enabled": marked_cover_endpoint_enabled(),
+                },
             },
             status=200 if ok else 503,
         )

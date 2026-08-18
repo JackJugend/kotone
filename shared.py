@@ -297,7 +297,12 @@ def build_release_variables(
     critic_score = value("critic_score", missing)
     critic_reviews_count = value("critic_reviews_count", missing)
     album_id = str(item.get("album_id") or details.get("album_id") or "")
-    raw_cover = item.get("cover") or details.get("cover")
+    # The orange tag endpoint validates its URL token against the durable
+    # ``releases`` record.  Prefer that exact cover URL whenever it exists;
+    # a compact rating card can contain an older CDN URL for the same cover.
+    # Using the card URL here made the endpoint correctly reject its token
+    # and Discord silently displayed no Must Hear tag.
+    raw_cover = details.get("cover") or item.get("cover")
     must_hear = must_hear_album(
         user_score,
         ratings_count,

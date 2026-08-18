@@ -61,3 +61,9 @@ def marked_cover_url(album_id: str, cover_url: str) -> str | None:
         f"https://{domain}/must-hear-cover/"
         f"{quote(album_id, safe='')}/{token}.png"
     )
+
+
+def marked_cover_endpoint_enabled() -> bool:
+    """Whether this deployment can expose generated cover images publicly."""
+
+    return bool(str(os.getenv("RAILWAY_PUBLIC_DOMAIN") or "").strip())

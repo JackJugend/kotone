@@ -8,7 +8,10 @@ import math
 from PIL import Image, ImageDraw
 
 
-MUST_HEAR_ORANGE = (242, 126, 91)
+# AOTY ``.mustHear.user`` uses rgba(233, 116, 81, .85).  The generated
+# Discord cover cannot keep the source image's alpha compositing reliably, so
+# use its opaque base colour for the same orange badge.
+MUST_HEAR_ORANGE = (233, 116, 81)
 BADGE_INK = (45, 47, 54)
 
 
@@ -18,7 +21,9 @@ def add_must_hear_badge(cover: Image.Image) -> Image.Image:
     cover = cover.copy().convert("RGB")
     draw = ImageDraw.Draw(cover)
     size = min(cover.size)
-    corner = max(26, int(size * 0.34))
+    # Keep a compact AOTY-like corner rather than covering a third of a small
+    # Discord thumbnail.
+    corner = max(20, int(size * 0.22))
     width = cover.width
     draw.polygon(
         ((width - corner, 0), (width, 0), (width, corner)),

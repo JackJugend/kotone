@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +54,42 @@ class DisplayNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(variables.release_date, "25.10.2024")
         self.assertEqual(variables.genres_text, "Jazz Pop, Progressive Pop")
+
+    def test_must_hear_cover_uses_the_durable_cache_url_for_its_token(self):
+        """A stale compact-card URL must not make the badge endpoint return 404."""
+
+        with patch.dict(
+            os.environ,
+            {"RAILWAY_PUBLIC_DOMAIN": "kotone.example"},
+            clear=False,
+        ):
+            variables = build_release_variables(
+                {
+                    "album_id": "42",
+                    "cover": "https://cdn.albumoftheyear.org/old.jpg",
+                    "artist": "Artist",
+                    "album": "Album",
+                },
+                {
+                    "album_id": "42",
+                    "cover": "https://cdn.albumoftheyear.org/current.jpg",
+                    "user_score": "84",
+                    "ratings_count": "2,204",
+                    "critic_score": "74",
+                    "critic_reviews_count": "18",
+                    "fetched_at": 1,
+                },
+            )
+
+        self.assertTrue(variables.must_hear)
+        self.assertIn("/must-hear-cover/42/", str(variables.cover))
+        from must_hear import cover_token
+
+        self.assertTrue(
+            str(variables.cover).endswith(
+                f"/{cover_token('42', 'https://cdn.albumoftheyear.org/current.jpg')}.png"
+            )
+        )
 
 
 class LastFMParserTests(unittest.TestCase):
