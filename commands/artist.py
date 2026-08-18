@@ -839,7 +839,7 @@ class ArtistSortView(TimedDisableView):
             lines.append(
                 f"**{score_or_missing(variables.aoty_user_score)}**  "
                 f"**[{variables.display_album}]({release['url']})**"
-                f" — {variables.release_date}  ·  {variables.album_format}"
+                f"  —  {variables.release_date}  ·  {variables.album_format}"
             )
 
 
@@ -884,7 +884,7 @@ class ArtistSortView(TimedDisableView):
         filter_text = (
             f"{self.selected_format_label}  •  "
             f"{self.selected_genre_label}  •  "
-            f"{self.selected_year_label}  •  "
+            f"{self.selected_year_label}"
         )
         extra_filters = []
         if self.selected_decade is not None:
