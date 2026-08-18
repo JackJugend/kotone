@@ -13,9 +13,11 @@ from cover_badges import add_must_hear_badge
 
 WIDTH = 1000
 HEIGHT = 900
-BACKGROUND = (30, 31, 36)
-PANEL = (45, 47, 54)
-PANEL_ALT = (55, 57, 65)
+# Bazowa paleta interfejsu AOTY.  Wszystkie generowane wykresy korzystają z
+# tych stałych, więc dalsze dostrojenie kolorów pozostaje w jednym miejscu.
+BACKGROUND = (32, 34, 37)  # #202225
+PANEL = (54, 57, 63)  # #36393f
+PANEL_ALT = (47, 49, 54)  # #2f3136
 TEXT = (242, 243, 245)
 MUTED = (190, 194, 202)
 BLUE = (88, 101, 242)

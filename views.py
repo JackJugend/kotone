@@ -64,7 +64,13 @@ def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
         url=f"https://www.albumoftheyear.org/user/{username}/",
     )
 
-    cover = item.get("cover")
+    # Review is a separate tab, but its cover must follow the same cached
+    # Must Hear state as the home/details/tracklist tabs.  Keep this path
+    # SQLite-only: switching tabs must never request AOTY.
+    hydrated = DATA.release_with_cached_details(item)
+    album_id = str(hydrated.get("album_id") or "").strip()
+    cached = DATA.cached_release_details(album_id) if album_id else {}
+    cover = build_release_variables(hydrated, cached or {}).cover
     if cover:
         embed.set_thumbnail(url=cover)
 

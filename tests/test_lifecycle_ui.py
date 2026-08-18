@@ -278,6 +278,44 @@ class SharedAssetTests(unittest.TestCase):
     f"project dependencies unavailable: {PROJECT_IMPORT_ERROR}",
 )
 class DetailViewTests(unittest.IsolatedAsyncioTestCase):
+    def test_review_tab_uses_the_shared_must_hear_cover(self):
+        item = {
+            "album_id": "42",
+            "artist": "Artist",
+            "album": "Album",
+            "cover": "https://cdn.albumoftheyear.org/old.jpg",
+            "score": "90",
+        }
+        cached = {
+            "album_id": "42",
+            "cover": "https://cdn.albumoftheyear.org/current.jpg",
+            "user_score": "84",
+            "ratings_count": "2,204",
+            "critic_score": "74",
+            "critic_reviews_count": "18",
+            "fetched_at": 1,
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {"RAILWAY_PUBLIC_DOMAIN": "kotone.example"},
+                clear=False,
+            ),
+            patch.object(
+                views_module.DATA,
+                "release_with_cached_details",
+                return_value=item,
+            ),
+            patch.object(
+                views_module.DATA,
+                "cached_release_details",
+                return_value=cached,
+            ),
+        ):
+            embed = views_module.build_review_embed("enso", item, {})
+
+        self.assertIn("/must-hear-cover/42/", str(embed.thumbnail.url))
+
     async def test_album_compact_card_reloads_complete_track_rows(self):
         compact = {
             "score": "90",
