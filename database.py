@@ -1835,6 +1835,8 @@ class Database:
                     ) AS cover,
                     MAX(rel.user_score) AS user_score,
                     MAX(rel.ratings_count) AS ratings_count,
+                    MAX(rel.critic_score) AS critic_score,
+                    MAX(rel.critic_reviews_count) AS critic_reviews_count,
                     MAX(rel.release_date) AS release_date,
                     MAX(rel.year) AS year,
                     MAX(rel.genres_json) AS genres_json,
@@ -1876,6 +1878,11 @@ class Database:
                 "cover": row["cover"],
                 "user_score": row["user_score"],
                 "ratings_count": row["ratings_count"],
+                # /album can start from this compact SQLite discography. Keep
+                # the full AOTY score quartet here so Must Hear is decided
+                # identically to /last, /recent and generated charts.
+                "critic_score": row["critic_score"],
+                "critic_reviews_count": row["critic_reviews_count"],
                 "release_date": row["release_date"],
                 "year": row["year"],
                 "genres": _json_load(row["genres_json"], []),

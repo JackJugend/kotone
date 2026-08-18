@@ -181,6 +181,10 @@ class DatabaseTests(unittest.TestCase):
                 "year": "2024",
                 "release_date": "May 31, 2024",
                 "album_format": "LP",
+                "user_score": "84",
+                "ratings_count": "2,204",
+                "critic_score": "74",
+                "critic_reviews_count": "18",
             },
         )
 
@@ -201,6 +205,8 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(releases[0]["album_id"], "783921")
         self.assertEqual(releases[0]["title"], "Dall")
         self.assertEqual(releases[0]["year"], "2024")
+        self.assertEqual(releases[0]["critic_score"], "74")
+        self.assertEqual(releases[0]["critic_reviews_count"], "18")
         self.assertEqual(releases[0]["source"], "SQLite cache")
         db.close()
 
