@@ -166,7 +166,7 @@ class ProfileVariables:
     following_count: str = "0"
     followers_count: str = "0"
     average_rating: float | None = None
-    average_rating_text: str = "Brak danych"
+    average_rating_text: str = "—"
     favorite_kind: str | None = None
     favorites: list[dict] = field(default_factory=list)
     favorite_albums: list[dict] = field(default_factory=list)
@@ -214,7 +214,7 @@ def build_release_variables(
     item: dict | None,
     details: dict | None = None,
     *,
-    missing: str = "Brak danych",
+    missing: str = "—",
 ) -> ReleaseVariables:
     """Build every standard release variable in one place.
 

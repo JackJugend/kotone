@@ -59,7 +59,7 @@ def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
     )
 
     embed.set_author(
-        name=f"{username}  •  {extra.get('date') or item.get('date') or '?'}",
+        name=f"{username}  •  {extra.get('date') or item.get('date') or '—'}",
         url=f"https://www.albumoftheyear.org/user/{username}/",
     )
 
@@ -158,7 +158,7 @@ async def build_release_details_embed(
         )
     if variables.vibes:
         lines.append(f"**Vibes:** {', '.join(variables.vibes)}")
-    if variables.year_ranking_text and variables.year_ranking_text != "?":
+    if variables.year_ranking_text and variables.year_ranking_text != "—":
         lines.append(
             f"**{variables.ranking_year or variables.year} Ratings:** "
             f"{variables.year_ranking_text}"
