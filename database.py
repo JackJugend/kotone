@@ -2747,6 +2747,7 @@ class Database:
         *,
         fallback_stale_before: float | None = None,
         aoty_stale_before: float | None = None,
+        exclude_album_ids: Iterable[str] = (),
     ) -> list[dict]:
         """Return missing, legacy-partial, and stale release-cache rows.
 
@@ -2769,10 +2770,24 @@ class Database:
             if aoty_stale_before is not None
             else -1.0
         )
+        excluded = tuple(
+            dict.fromkeys(
+                str(album_id).strip()
+                for album_id in exclude_album_ids
+                if str(album_id).strip()
+            )
+        )
+        exclude_sql = (
+            " AND r.album_id NOT IN ("
+            + ", ".join("?" for _ in excluded)
+            + ")"
+            if excluded
+            else ""
+        )
 
         with self._lock:
             rows = self.connection.execute(
-                """
+                f"""
                 SELECT r.*
                 FROM ratings r
                 LEFT JOIN releases rel ON rel.album_id = r.album_id
@@ -2796,6 +2811,7 @@ class Database:
                             )
                         )
                   )
+                  {exclude_sql}
                 ORDER BY COALESCE(r.sort_timestamp, r.first_seen_at, 0) DESC
                 LIMIT ?
                 """,
@@ -2803,6 +2819,7 @@ class Database:
                     canonical,
                     fallback_stale_before,
                     aoty_stale_before,
+                    *excluded,
                     int(limit),
                 ),
             ).fetchall()

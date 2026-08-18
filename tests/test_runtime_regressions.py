@@ -484,10 +484,48 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["musicbrainz"], 1)
         self.assertEqual(len(calls), 1)
-        cached = self.db.get_release_details("mb-fallback")
+        self.assertIsNone(self.db.get_release_details("mb-fallback"))
+        cached = self.service.cached_release_details("mb-fallback")
         self.assertEqual(cached["metadata_source"], "musicbrainz")
+        self.assertEqual(cached["metadata_sources"]["genres"], "musicbrainz")
         self.assertEqual(cached["genres"], ["Art Pop"])
         self.assertEqual(cached["tracklist"][0]["duration"], "3:00")
+
+    def test_volatile_musicbrainz_fills_only_missing_aoty_fields(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "mixed-source",
+                "artist": "Artist",
+                "album": "Album",
+                "url": "https://www.albumoftheyear.org/album/3-album.php",
+                "release_format": "LP",
+                "score": "80",
+            },
+        )
+        self.assertTrue(
+            self.db.save_release_details(
+                "mixed-source",
+                {"source": "aoty", "album_format": "LP"},
+            )
+        )
+        self.service._musicbrainz_release_cache["mixed-source"] = {
+            "source": "musicbrainz",
+            "album_format": "EP",
+            "release_date": "2025-01-02",
+            "genres": ["Art Pop"],
+        }
+
+        merged = self.service.cached_release_details("mixed-source")
+        self.assertEqual(merged["album_format"], "LP")
+        self.assertEqual(merged["metadata_sources"]["format"], "aoty")
+        self.assertEqual(merged["release_date"], "2025-01-02")
+        self.assertEqual(
+            merged["metadata_sources"]["release_date"],
+            "musicbrainz",
+        )
+        self.assertEqual(merged["genres"], ["Art Pop"])
+        self.assertEqual(self.db.get_release_details("mixed-source")["genres"], [])
 
     async def test_aoty_details_win_without_musicbrainz_fallback(self):
         item = {
@@ -851,23 +889,13 @@ class ReleaseEnrichmentCandidateTests(unittest.TestCase):
             [item["album_id"] for item in candidates],
             ["legacy-partial"],
         )
-
-        self.assertTrue(
-            self.db.save_release_details(
-                "legacy-partial",
-                {
-                    "source": "musicbrainz",
-                    "release_date": "1996-12-01",
-                    "_section_complete": {"release_date": True},
-                },
-            )
-        )
         self.assertEqual(
             self.db.release_enrichment_candidates(
                 "enso",
                 10,
                 fallback_stale_before=time.time() - 24 * 60 * 60,
                 aoty_stale_before=time.time() - 12 * 60 * 60,
+                exclude_album_ids=("legacy-partial",),
             ),
             [],
         )

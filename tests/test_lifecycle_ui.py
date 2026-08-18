@@ -665,6 +665,52 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("kulkien **75**", embed.description)
         live_detail.assert_not_awaited()
 
+    async def test_details_tab_marks_aoty_and_volatile_musicbrainz_sources(self):
+        item = {
+            "album_id": "source-test",
+            "artist": "Artist",
+            "album": "Album",
+            "url": "https://www.albumoftheyear.org/album/1-album/",
+        }
+        details = {
+            **item,
+            "user_score": "88",
+            "release_date": "1996-12-01",
+            "label": None,
+            "metadata_sources": {
+                "score": "aoty",
+                "release_date": "musicbrainz",
+            },
+        }
+        with (
+            patch.object(
+                views_module.DATA,
+                "release_with_cached_details",
+                return_value=item,
+            ),
+            patch.object(
+                views_module.DATA,
+                "get_release_details",
+                new=AsyncMock(return_value=details),
+            ),
+        ):
+            embed = await views_module.build_release_details_embed(item)
+
+        self.assertIn(
+            "<:aoty:1539095897084924004> **AOTY User Score:** 88",
+            embed.description,
+        )
+        self.assertIn(
+            "<:music_brainz:1539096206083629186> "
+            "**Release date:** 1996-12-01",
+            embed.description,
+        )
+        self.assertIn("**Label:** —", embed.description)
+        self.assertNotIn(
+            "<:music_brainz:1539096206083629186> **Label:** —",
+            embed.description,
+        )
+
     async def test_tracklist_button_is_disabled_without_any_track_rows(self):
         item = {
             "album_id": "77",

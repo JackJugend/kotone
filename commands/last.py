@@ -15,7 +15,7 @@ from shared import (
     set_aoty_footer,
     username_autocomplete,
 )
-from views import SingleRatingView
+from views import SingleRatingView, build_release_details_embed
 
 
 def setup_last_command(tree: discord.app_commands.CommandTree):
@@ -243,80 +243,11 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         )
 
 
-        # Dodatkowy tab: Szczegóły.
-        details_lines = [
-            (
-                f"**AOTY Score:** "
-                f"{variables.aoty_user_score}"
-            ),
-            (
-                f"**Ratings:** "
-                f"{variables.ratings_count}"
-            ),
-            (
-                f"**Release date:** "
-                f"{variables.release_date}"
-            ),
-            (
-                f"**Duration:** "
-                f"{variables.duration}"
-            ),
-            (
-                f"**Format:** "
-                f"{variables.album_format}"
-            ),
-            (
-                f"**Label:** "
-                f"{variables.labels_text}"
-            ),
-        ]
-
-        details_lines.extend(
-            [
-                f"**Primary genres:** {variables.genres_text or '—'}",
-                (
-                    "**Secondary genres:** "
-                    f"{variables.secondary_genres_text or '—'}"
-                ),
-                f"**Vibes:** {variables.vibes_text or '—'}",
-            ]
-        )
-        ranking_year = variables.ranking_year or variables.year or "Year"
-        if ranking_year == "—":
-            ranking_year = "Year"
-        details_lines.append(
-            f"**{ranking_year} Ratings:** "
-            f"{variables.year_ranking_text or '—'}"
-        )
-
-        details_embed = discord.Embed(
-            title=(
-                f"ℹ {variables.display_artist} — "
-                f"{variables.display_album}"
-            ),
-            url=variables.url,
-            description="\n".join(
-                details_lines
-            ),
-            color=score_color(
-                variables.score
-            ),
-        )
-
-        if variables.cover:
-            details_embed.set_thumbnail(
-                url=variables.cover
-            )
-
-        details_embed.set_author(
-            name=f"{username}  •  {variables.date}",
-            url=f"https://www.albumoftheyear.org/user/{username}",
-            icon_url=avatar if avatar else None,
-        )
-
-        set_aoty_footer(
-            details_embed,
-            f"AOTY  •  {score_icon(variables.score)[1:]} {variables.score}",
+        # Every command uses the same details renderer and provenance markers.
+        details_embed = await build_release_details_embed(
+            latest,
+            username=username,
+            author_icon_url=avatar,
         )
 
         # Dodatkowy tab: publiczna tracklista.

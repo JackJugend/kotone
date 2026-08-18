@@ -25,6 +25,8 @@ AOTY_ICON_URL = "https://cdn.albumoftheyear.org/images/favicon.png"
 
 # Zachowujemy starą nazwę zmiennej dla kompatybilności istniejących komend.
 AOTY_ICON_ATTACHMENT = AOTY_ICON_URL
+AOTY_SOURCE_EMOJI = "<:aoty:1539095897084924004>"
+MUSICBRAINZ_SOURCE_EMOJI = "<:music_brainz:1539096206083629186>"
 
 # Runtime state.
 #

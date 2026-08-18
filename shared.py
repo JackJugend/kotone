@@ -160,6 +160,7 @@ class ReleaseVariables:
     # Tracklista AOTY.
     tracklist: list[dict] = field(default_factory=list)
     tracklist_text: Any = None
+    metadata_sources: dict[str, str] = field(default_factory=dict)
 
     # Metadane konkretnej oceny usera.
     has_review: bool = False
@@ -362,6 +363,7 @@ def build_release_variables(
         year_ranking_text=value("year_ranking_text", missing),
         tracklist=tracklist,
         tracklist_text=details.get("tracklist_text") or missing,
+        metadata_sources=dict(details.get("metadata_sources") or {}),
         has_review=bool(item.get("has_review")),
         has_track_ratings=bool(item.get("has_track_ratings")),
         liked=bool(item.get("liked")),
@@ -380,9 +382,9 @@ async def load_release_variables(
 ) -> ReleaseVariables:
     """Build release variables through the shared cache/live service.
 
-    For configured users, public release details are persisted in SQLite and
-    survive AOTY/Railway restarts.  For arbitrary users/artists the same parser
-    is used, but nothing personal is persisted.
+    AOTY release details for configured users are persisted in SQLite and
+    survive Railway restarts. Volatile MusicBrainz fallback can fill missing
+    display fields but is never persisted.
     """
     item = item or {}
     details = {}

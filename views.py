@@ -9,7 +9,7 @@ import discord
 import aoty
 from services import DATA
 from display_utils import display_romanized_name
-from settings import USERS
+from settings import AOTY_SOURCE_EMOJI, MUSICBRAINZ_SOURCE_EMOJI, USERS
 from shared import (
     build_release_variables,
     load_release_variables,
@@ -139,10 +139,24 @@ def _details_value(value: object) -> str:
     return text if text and text not in {"?", "Brak danych", "None"} else "—"
 
 
+def _details_source_prefix(variables, section: str, value: object) -> str:
+    """Show provenance only when the line contains actual information."""
+
+    if _details_value(value) == "—":
+        return ""
+    source = str(variables.metadata_sources.get(section) or "").casefold()
+    if source == "musicbrainz":
+        return f"{MUSICBRAINZ_SOURCE_EMOJI} "
+    if source in {"", "aoty"}:
+        return f"{AOTY_SOURCE_EMOJI} "
+    return ""
+
+
 async def build_release_details_embed(
     item: dict,
     *,
     username: str | None = None,
+    author_icon_url: str | None = None,
 ) -> discord.Embed:
     """Build the shared details tab through the SQLite-first release service."""
 
@@ -152,23 +166,33 @@ async def build_release_details_embed(
         missing="—",
     )
     lines = [
+        f"{_details_source_prefix(variables, 'score', variables.aoty_user_score)}"
         f"**AOTY User Score:** {variables.aoty_user_score}",
+        f"{_details_source_prefix(variables, 'score', variables.ratings_count)}"
         f"**Ratings:** {variables.ratings_count}",
+        f"{_details_source_prefix(variables, 'release_date', variables.release_date)}"
         f"**Release date:** {variables.release_date}",
+        f"{_details_source_prefix(variables, 'tracklist', variables.duration)}"
         f"**Duration:** {variables.duration}",
+        f"{_details_source_prefix(variables, 'format', variables.album_format)}"
         f"**Format:** {variables.album_format}",
+        f"{_details_source_prefix(variables, 'labels', variables.labels_text)}"
         f"**Label:** {variables.labels_text}",
+        f"{_details_source_prefix(variables, 'genres', variables.genres_text)}"
         f"**Genre:** {_details_value(variables.genres_text)}",
         (
+            f"{_details_source_prefix(variables, 'genres', variables.secondary_genres_text)}"
             "**Secondary genres:** "
             f"{_details_value(variables.secondary_genres_text)}"
         ),
+        f"{_details_source_prefix(variables, 'vibes', variables.vibes_text)}"
         f"**Vibes:** {_details_value(variables.vibes_text)}",
     ]
     ranking_year = _details_value(variables.ranking_year)
     if ranking_year == "—":
         ranking_year = _details_value(variables.year)
     lines.append(
+        f"{_details_source_prefix(variables, 'ranking', variables.year_ranking_text)}"
         f"**{ranking_year if ranking_year != '—' else 'Year'} Ratings:** "
         f"{_details_value(variables.year_ranking_text)}"
     )
@@ -185,6 +209,7 @@ async def build_release_details_embed(
         embed.set_author(
             name=f"{username}  •  {variables.date}",
             url=f"https://www.albumoftheyear.org/user/{username}/",
+            icon_url=author_icon_url,
         )
     # /album has no selected AOTY user.  Its shared tabs must not pretend that
     # the release itself has a personal NR score.  User-specific commands keep
