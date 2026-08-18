@@ -15,7 +15,11 @@ os.environ.setdefault("DISCORD_TOKEN", "test-token")
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="kotone-artist-runtime-")
 
 from database import Database  # noqa: E402
-from display_utils import display_genres, display_release_date  # noqa: E402
+from display_utils import (  # noqa: E402
+    display_genres,
+    display_release_date,
+    display_romanized_name,
+)
 from lastfm import fetch_artist_image  # noqa: E402
 from shared import build_release_variables  # noqa: E402
 
@@ -54,6 +58,12 @@ class DisplayNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(variables.release_date, "25.10.2024")
         self.assertEqual(variables.genres_text, "Jazz Pop, Progressive Pop")
+
+    def test_romanization_hides_original_non_latin_name_in_display(self):
+        self.assertEqual(
+            display_romanized_name("長谷川白紙 [Hakushi Hasegawa]"),
+            "Hakushi Hasegawa",
+        )
 
     def test_must_hear_cover_uses_the_durable_cache_url_for_its_token(self):
         """A stale compact-card URL must not make the badge endpoint return 404."""

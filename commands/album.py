@@ -408,7 +408,9 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             )
             await asyncio.sleep(0.15)
 
-        author = {"name": artist_name}
+        # The artist line above an /album card is display-only, so it must use
+        # the same romanization rule as the title, autocomplete and views.
+        author = {"name": display_romanized_name(artist_name)}
         if artist_url:
             author["url"] = artist_url
         if icon_url:

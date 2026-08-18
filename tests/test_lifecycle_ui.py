@@ -886,6 +886,9 @@ class HealthWorkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 200)
             self.assertTrue(payload["monitor_ok"])
             self.assertTrue(payload["background_ok"])
+            self.assertEqual(payload["must_hear_badges"]["requests"], 0)
+            self.assertEqual(payload["must_hear_badges"]["served"], 0)
+            self.assertIsNone(payload["must_hear_badges"]["last_failure"])
         finally:
             monitor_task.cancel()
             background_task.cancel()

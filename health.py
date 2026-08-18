@@ -34,6 +34,11 @@ class HealthServer:
         self.background_task = None
         self.runner: web.AppRunner | None = None
         self.started_at = time.time()
+        # Compact, non-sensitive diagnostics for generated Must Hear covers.
+        # A Discord thumbnail failure otherwise disappears without a trace.
+        self.must_hear_cover_requests = 0
+        self.must_hear_cover_served = 0
+        self.must_hear_cover_last_failure: str | None = None
 
     def bind_worker_tasks(self, *, monitor_task, background_task) -> None:
         """Expose the exact long-running tasks used by bot.py to readiness."""
@@ -87,6 +92,9 @@ class HealthServer:
                 "musicbrainz": DATA.musicbrainz_status(),
                 "must_hear_badges": {
                     "endpoint_enabled": marked_cover_endpoint_enabled(),
+                    "requests": self.must_hear_cover_requests,
+                    "served": self.must_hear_cover_served,
+                    "last_failure": self.must_hear_cover_last_failure,
                 },
             },
             status=200 if ok else 503,
@@ -107,13 +115,16 @@ class HealthServer:
     async def _must_hear_cover(self, request: web.Request) -> web.Response:
         """Serve a cached orange-tag cover only for an in-scope release."""
 
+        self.must_hear_cover_requests += 1
         album_id = str(request.match_info.get("album_id") or "").strip()
         token = str(request.match_info.get("token") or "").strip()
         details = await asyncio.to_thread(DB.get_release_details, album_id)
         if not details:
+            self.must_hear_cover_last_failure = "release_not_cached"
             raise web.HTTPNotFound()
         cover_url = str(details.get("cover") or "").strip()
         if token != cover_token(album_id, cover_url):
+            self.must_hear_cover_last_failure = "cover_token_mismatch"
             raise web.HTTPNotFound()
         if not must_hear_album(
             details.get("user_score"),
@@ -121,14 +132,19 @@ class HealthServer:
             details.get("critic_score"),
             details.get("critic_reviews_count"),
         ):
+            self.must_hear_cover_last_failure = "no_longer_eligible"
             raise web.HTTPNotFound()
         content = await asyncio.to_thread(load_cover_bytes, cover_url)
         if not content:
+            self.must_hear_cover_last_failure = "cover_unavailable"
             raise web.HTTPNotFound()
         try:
             marked = await asyncio.to_thread(render_must_hear_png, content)
         except Exception:
+            self.must_hear_cover_last_failure = "cover_render_failed"
             raise web.HTTPNotFound() from None
+        self.must_hear_cover_served += 1
+        self.must_hear_cover_last_failure = None
         return web.Response(
             body=marked,
             content_type="image/png",
