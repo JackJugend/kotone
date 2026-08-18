@@ -5,21 +5,19 @@ from __future__ import annotations
 import discord
 
 from http_client import HTTP
-from settings import AOTY_DB_ONLY_ADMIN_USERNAME, GUILD_ID
+from settings import AOTY_DB_ONLY_ADMIN_USER_ID, GUILD_ID
 
 
 def _is_operator(interaction: discord.Interaction) -> bool:
-    """Only the configured Discord account may change network policy."""
+    """Only the configured immutable Discord ID may change network policy."""
 
-    return str(getattr(interaction.user, "name", "")).casefold() == (
-        AOTY_DB_ONLY_ADMIN_USERNAME
-    )
+    return int(getattr(interaction.user, "id", 0) or 0) == AOTY_DB_ONLY_ADMIN_USER_ID
 
 
 def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
     @tree.command(
         name="dbonly",
-        description="Enso: wstrzymuje lub wznawia sprawdzanie AOTY w tle",
+        description="Przełącznik monitorowania AOTY w tle.",
     )
     @discord.app_commands.describe(mode="Stan sprawdzania AOTY")
     @discord.app_commands.choices(
@@ -58,7 +56,7 @@ def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
         else:
             enabled = HTTP.set_db_only(
                 mode == "on",
-                actor=interaction.user.name,
+                actor=str(interaction.user.id),
             )
 
         if enabled:
