@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import io
 import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +16,7 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="kotone-stats-runtime-
 
 from database import Database  # noqa: E402
 from must_hear import must_hear_album  # noqa: E402
+from shared import username_autocomplete  # noqa: E402
 from stats_engine import (  # noqa: E402
     compare,
     rating_distribution,
@@ -30,7 +29,6 @@ DISCORD_IMPORT_ERROR = None
 try:
     import discord  # noqa: E402
     from commands.analytics import (  # noqa: E402
-        AnalyticsView,
         RATING_DISTRIBUTION_FORMATS,
         RatingDistributionView,
         setup_analytics_commands,
@@ -96,6 +94,14 @@ class StatsEngineTests(unittest.TestCase):
         self.assertEqual(data["likes"], 1)
         self.assertEqual(data["track_scores"], 2)
         self.assertEqual(data["top_genres"][0], ("Art Pop", 2))
+
+    def test_summary_keeps_ten_most_common_genres_for_the_chart(self):
+        rows = [
+            row(str(index), "80", genres=[f"Genre {index:02d}"])
+            for index in range(12)
+        ]
+        data = summarize("enso", rows)
+        self.assertEqual(len(data["top_genres"]), 10)
 
     def test_compare_uses_only_shared_album_ids(self):
         data = compare(
@@ -306,7 +312,14 @@ class CoverCacheTests(unittest.TestCase):
 
 
 @unittest.skipIf(DISCORD_IMPORT_ERROR is not None, str(DISCORD_IMPORT_ERROR))
-class AnalyticsViewTests(unittest.IsolatedAsyncioTestCase):
+class DistributionViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_username_choices_are_visible_before_typing(self):
+        choices = await username_autocomplete(None, "")
+        self.assertEqual(
+            [choice.value for choice in choices],
+            ["enso", "kulkien"],
+        )
+
     async def test_setup_registers_chart_first_distribution_command(self):
         client = discord.Client(intents=discord.Intents.none())
         tree = discord.app_commands.CommandTree(client)
@@ -318,44 +331,6 @@ class AnalyticsViewTests(unittest.IsolatedAsyncioTestCase):
             )
         finally:
             await client.close()
-
-    async def test_wrapped_view_has_four_stable_tabs(self):
-        sections = {
-            key: discord.Embed(title=key)
-            for key in ("home", "data", "top", "graphic")
-        }
-        view = AnalyticsView(
-            sections=sections,
-            renderer=lambda _: io.BytesIO(b"png"),
-            payload={},
-            filename="stats.png",
-            data_label="▤ Rozkład",
-        )
-        try:
-            self.assertEqual(
-                [button.label for button in view.children],
-                ["🏠 Główne", "▤ Rozkład", "★ Rankingi", "📊 Grafika"],
-            )
-            self.assertEqual(view.children[0].style, discord.ButtonStyle.primary)
-            self.assertTrue(
-                all(
-                    button.style == discord.ButtonStyle.secondary
-                    for button in view.children[1:]
-                )
-            )
-
-            interaction = SimpleNamespace(
-                response=SimpleNamespace(edit_message=AsyncMock()),
-            )
-            await view._show(interaction, "data")
-            interaction.response.edit_message.assert_awaited_once_with(
-                embed=sections["data"],
-                attachments=[],
-                view=view,
-            )
-            self.assertEqual(view.children[1].style, discord.ButtonStyle.primary)
-        finally:
-            view.stop()
 
     async def test_rating_distribution_menu_contains_every_bot_format(self):
         data = rating_distribution("enso", [], [], "all", category_label="Wszystko")

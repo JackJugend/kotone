@@ -125,7 +125,7 @@ def summarize(username: str, rows: list[dict]) -> dict:
         "track_albums": sum(bool(row.get("has_track_ratings")) for row in rows),
         "track_scores": sum(int(row.get("track_score_count") or 0) for row in rows),
         "top_formats": _top(formats),
-        "top_genres": _top(genres),
+        "top_genres": _top(genres, 10),
         "top_artists": _top(artists),
         "top_decades": _top(decades),
         "score_buckets": [(label, buckets[label]) for label, _, _ in SCORE_BUCKETS],

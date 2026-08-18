@@ -23,6 +23,18 @@ GREEN = (82, 196, 122)
 GOLD = (245, 183, 66)
 USER_A_COLOR = (167, 139, 250)
 USER_B_COLOR = (45, 212, 191)
+GENRE_COLORS = (
+    (167, 139, 250),
+    (151, 145, 251),
+    (134, 151, 249),
+    (117, 158, 246),
+    (99, 166, 241),
+    (81, 174, 234),
+    (64, 183, 226),
+    (50, 192, 215),
+    (42, 202, 203),
+    (45, 212, 191),
+)
 RATING_COLORS = (
     (0, 224, 224),
     (0, 235, 167),
@@ -122,12 +134,13 @@ def _base(title: str, subtitle: str, *, height: int = HEIGHT):
         font=title_font,
         fill=TEXT,
     )
-    draw.text(
-        (_centered_x(draw, subtitle, subtitle_font, 54, 946), 105),
-        subtitle,
-        font=subtitle_font,
-        fill=MUTED,
-    )
+    if subtitle:
+        draw.text(
+            (_centered_x(draw, subtitle, subtitle_font, 54, 946), 105),
+            subtitle,
+            font=subtitle_font,
+            fill=MUTED,
+        )
     return image, draw
 
 
@@ -286,34 +299,46 @@ def render_stats(data: dict) -> io.BytesIO:
     _metric(draw, 512, "Mediana", _number(data["median"]), _score_color(data["median"]))
     _metric(draw, 741, "Ocenione tracklisty", str(data["track_albums"]), TEXT)
 
-    draw.text((54, 302), "Rozkład ocen", font=_font(29, bold=True), fill=TEXT)
+    section_font = _font(29, bold=True)
+    distribution_heading = "Rozkład ocen"
+    draw.text(
+        (
+            _centered_x(draw, distribution_heading, section_font, 54, 488),
+            302,
+        ),
+        distribution_heading,
+        font=section_font,
+        fill=TEXT,
+    )
     _bars(
         draw,
         data["score_buckets"],
-        (54, 346, 492, 730),
+        (54, 346, 488, 730),
         colors=RATING_COLORS,
         label_width=92,
         minimum_row_height=34,
         max_rows=11,
     )
 
-    draw.text((548, 302), "Najczęstsze gatunki", font=_font(29, bold=True), fill=TEXT)
+    genres_heading = "Najczęstsze gatunki"
+    draw.text(
+        (
+            _centered_x(draw, genres_heading, section_font, 512, 946),
+            302,
+        ),
+        genres_heading,
+        font=section_font,
+        fill=TEXT,
+    )
     genres = data["top_genres"] or [("Brak danych", 0)]
     _bars(
         draw,
         genres,
-        (548, 360, 938, 670),
-        color=GREEN,
-        label_width=190,
-    )
-    draw.text(
-        (548, 695),
-        (
-            f"Recenzje: {data['reviews']}   •   Polubienia: {data['likes']}\n"
-            f"Zapisane oceny utworów: {data['track_scores']}"
-        ),
-        font=_font(21),
-        fill=MUTED,
+        (512, 346, 946, 730),
+        colors=GENRE_COLORS,
+        label_width=194,
+        minimum_row_height=34,
+        max_rows=10,
     )
     _cover_cards(draw, image, data)
     return _save(image)
@@ -506,17 +531,42 @@ def render_compare(data: dict) -> io.BytesIO:
     compare_height = 1120 if data.get("_cover_images") else 990
     image, draw = _base(
         f"Porównanie • {data['user_a']} i {data['user_b']}",
-        "Komenda bazuje na danych zapisanych przez bota",
+        "",
         height=compare_height,
     )
-    _avatar_badges(image, data)
 
     def user_card(x1: int, username: str, average, median, ratings: int, color) -> None:
         x2 = x1 + 434
-        draw.rounded_rectangle((x1, 154, x2, 306), 18, fill=PANEL_ALT)
-        name_font = _font(27, bold=True)
+        draw.rounded_rectangle((x1, 130, x2, 306), 18, fill=PANEL_ALT)
+        avatar_item = next(
+            (
+                item
+                for item in data.get("_avatar_images") or []
+                if str(item.get("username") or "").casefold()
+                == username.casefold()
+            ),
+            None,
+        )
+        if avatar_item:
+            try:
+                avatar = Image.open(
+                    io.BytesIO(avatar_item["image_bytes"])
+                ).convert("RGB")
+                avatar = ImageOps.fit(
+                    avatar,
+                    (78, 78),
+                    method=Image.Resampling.LANCZOS,
+                )
+                mask = Image.new("L", (78, 78), 0)
+                ImageDraw.Draw(mask).ellipse((0, 0, 77, 77), fill=255)
+                image.paste(avatar, (x1 + 24, 156), mask)
+            except Exception:
+                pass
+
+        content_left = x1 + 112
+        name_font = _font(34, bold=True)
         draw.text(
-            (_centered_x(draw, username, name_font, x1, x2), 172),
+            (_centered_x(draw, username, name_font, content_left, x2 - 12), 148),
             username,
             font=name_font,
             fill=color,
@@ -524,7 +574,12 @@ def render_compare(data: dict) -> io.BytesIO:
         average_text = _number(average)
         average_font = _font(45, bold=True)
         draw.text(
-            (_centered_x(draw, average_text, average_font, x1, x2), 207),
+            (
+                _centered_x(
+                    draw, average_text, average_font, content_left, x2 - 12
+                ),
+                198,
+            ),
             average_text,
             font=average_font,
             fill=_score_color(average),
@@ -532,7 +587,7 @@ def render_compare(data: dict) -> io.BytesIO:
         detail = f"{ratings} ocen  •  mediana {_number(median)}"
         detail_font = _font(19)
         draw.text(
-            (_centered_x(draw, detail, detail_font, x1, x2), 269),
+            (_centered_x(draw, detail, detail_font, x1, x2), 270),
             detail,
             font=detail_font,
             fill=MUTED,
@@ -566,8 +621,8 @@ def render_compare(data: dict) -> io.BytesIO:
         value_b,
         maximum: float,
     ) -> None:
-        label_font = _font(21, bold=True)
-        value_font = _font(18, bold=True)
+        label_font = _font(24, bold=True)
+        value_font = _font(22, bold=True)
         bar_x1, bar_x2 = 216, 892
         draw.text(
             (_centered_x(draw, label, label_font, bar_x1, bar_x2), y),
@@ -580,7 +635,12 @@ def render_compare(data: dict) -> io.BytesIO:
             (65, value_b, USER_B_COLOR, data["user_b"]),
         ):
             numeric = float(value or 0)
-            draw.text((54, y + offset), username, font=_font(17), fill=color)
+            draw.text(
+                (54, y + offset - 2),
+                username,
+                font=_font(22, bold=True),
+                fill=color,
+            )
             draw.rounded_rectangle(
                 (bar_x1, y + offset + 4, bar_x2, y + offset + 25),
                 10,
@@ -607,7 +667,7 @@ def render_compare(data: dict) -> io.BytesIO:
         x2 = x1 + 434
         draw.rounded_rectangle((x1, 690, x2, 948), 18, fill=PANEL_ALT)
         heading = f"{username} ocenia wyżej"
-        heading_font = _font(23, bold=True)
+        heading_font = _font(31, bold=True)
         draw.text(
             (_centered_x(draw, heading, heading_font, x1, x2), 712),
             heading,
@@ -624,15 +684,15 @@ def render_compare(data: dict) -> io.BytesIO:
                 fill=MUTED,
             )
             return
-        for index, item in enumerate(items[:3]):
-            y = 758 + index * 60
+        for index, item in enumerate(items[:2]):
+            y = 770 + index * 90
             name = _fit(
                 draw,
                 f"{item['artist']} — {item['album']}",
-                _font(17, bold=True),
-                280,
+                _font(23, bold=True),
+                392,
             )
-            draw.text((x1 + 18, y), name, font=_font(17, bold=True), fill=TEXT)
+            draw.text((x1 + 18, y), name, font=_font(23, bold=True), fill=TEXT)
             score_a = item["score_a"]
             score_b = item["score_b"]
             parts = (
@@ -643,10 +703,10 @@ def render_compare(data: dict) -> io.BytesIO:
                 (f"{score_b:.0f}", _score_color(score_b)),
                 (f"  •  +{item['gap']:.0f}", TEXT),
             )
-            parts_font = _font(14, bold=True)
+            parts_font = _font(20, bold=True)
             part_x = x1 + 18
             for text, color in parts:
-                draw.text((part_x, y + 27), text, font=parts_font, fill=color)
+                draw.text((part_x, y + 37), text, font=parts_font, fill=color)
                 part_x += draw.textlength(text, font=parts_font)
 
     advantage_panel(54, data["user_a"], data.get("ahead_a") or [], "a")
@@ -659,25 +719,52 @@ def render_compare(data: dict) -> io.BytesIO:
 def render_wrapped(data: dict) -> io.BytesIO:
     image, draw = _base(
         f"Podsumowanie {data['year']} • {data['username']}",
-        "Komenda bazuje na danych zapisanych przez bota",
+        "",
+        height=1400,
     )
     _avatar_badges(image, data)
-    _metric(draw, 54, "Liczba ocen", str(data["ratings"]), TEXT)
-    _metric(
-        draw, 283, "Średnia", _number(data["average"]),
+
+    def summary_tile(x: int, y: int, label: str, value: str, color=TEXT) -> None:
+        width = 270
+        draw.rounded_rectangle((x, y, x + width, y + 96), 16, fill=PANEL_ALT)
+        label_font = _font(18)
+        value_font = _font(32, bold=True)
+        draw.text(
+            (_centered_x(draw, label, label_font, x, x + width), y + 12),
+            label,
+            font=label_font,
+            fill=MUTED,
+        )
+        draw.text(
+            (_centered_x(draw, value, value_font, x, x + width), y + 44),
+            value,
+            font=value_font,
+            fill=color,
+        )
+
+    summary_tile(54, 130, "Liczba ocen", str(data["ratings"]))
+    summary_tile(
+        365, 130, "Średnia", _number(data["average"]),
         _score_color(data["average"]),
     )
-    _metric(draw, 512, "Recenzje", str(data["reviews"]), TEXT)
-    _metric(draw, 741, "Polubienia", str(data["likes"]), TEXT)
+    summary_tile(
+        676, 130, "Mediana", _number(data["median"]),
+        _score_color(data["median"]),
+    )
+    summary_tile(54, 246, "Recenzje", str(data["reviews"]))
+    summary_tile(365, 246, "Polubienia", str(data["likes"]))
+    summary_tile(676, 246, "Ocenione tracklisty", str(data["track_albums"]))
 
+    section_font = _font(29, bold=True)
+    activity_heading = "Aktywność w kolejnych miesiącach"
     draw.text(
-        (62, 308),
-        "Aktywność w kolejnych miesiącach",
-        font=_font(29, bold=True),
+        (_centered_x(draw, activity_heading, section_font, 54, 946), 382),
+        activity_heading,
+        font=section_font,
         fill=TEXT,
     )
     maximum = max((count for _, count in data["months"]), default=1) or 1
-    x_start, y_base = 62, 670
+    x_start, y_base = 62, 720
     bar_width, gap = 59, 17
     month_font = _font(18)
     value_font = _font(19, bold=True)
@@ -707,5 +794,52 @@ def render_wrapped(data: dict) -> io.BytesIO:
                 font=value_font,
                 fill=TEXT,
             )
-    _cover_cards(draw, image, data)
+
+    column_heading_font = _font(27, bold=True)
+    genres_heading = "Gatunki roku"
+    artists_heading = "Artyści roku"
+    draw.text(
+        (_centered_x(draw, genres_heading, column_heading_font, 54, 488), 790),
+        genres_heading,
+        font=column_heading_font,
+        fill=TEXT,
+    )
+    draw.text(
+        (_centered_x(draw, artists_heading, column_heading_font, 512, 946), 790),
+        artists_heading,
+        font=column_heading_font,
+        fill=TEXT,
+    )
+    _bars(
+        draw,
+        (data.get("top_genres") or [("Brak danych", 0)])[:5],
+        (54, 838, 488, 1118),
+        colors=GENRE_COLORS,
+        label_width=185,
+        max_rows=5,
+    )
+    _bars(
+        draw,
+        (data.get("top_artists") or [("Brak danych", 0)])[:5],
+        (512, 838, 946, 1118),
+        colors=GENRE_COLORS[5:],
+        label_width=190,
+        max_rows=5,
+    )
+    draw.text(
+        (
+            _centered_x(
+                draw,
+                "Najwyżej ocenione",
+                column_heading_font,
+                54,
+                946,
+            ),
+            1162,
+        ),
+        "Najwyżej ocenione",
+        font=column_heading_font,
+        fill=TEXT,
+    )
+    _cover_cards(draw, image, data, y=1220)
     return _save(image)

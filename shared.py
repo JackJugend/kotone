@@ -464,9 +464,6 @@ async def username_autocomplete(interaction: discord.Interaction, current: str):
     """Configured usernames only; command autocomplete never calls AOTY."""
     current = str(current or "").strip()
 
-    if len(current) < 1:
-        return []
-
     choices: list[discord.app_commands.Choice] = []
     seen = set()
     needle = current.casefold()

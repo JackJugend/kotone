@@ -10,7 +10,7 @@ import discord
 
 from database import DB
 from settings import RATING_FORMATS
-from shared import score_color, score_icon, username_autocomplete
+from shared import score_color, username_autocomplete
 from stats_cover_cache import load_cover_images
 from stats_engine import compare, rating_distribution, summarize, wrapped
 from stats_graphics import (
@@ -23,10 +23,6 @@ from views import TimedDisableView
 
 
 BOT_DATABASE_FOOTER = "Komenda bazuje na bazie danych bota"
-MONTH_NAMES = (
-    "Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec",
-    "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień",
-)
 RATING_DISTRIBUTION_FORMATS = (
     ("all", "Wszystko"),
     ("tracks", "Oceny utworów"),
@@ -39,22 +35,6 @@ RATING_DISTRIBUTION_FORMATS = (
 
 def _metric(value) -> str:
     return "—" if value is None else f"{float(value):.1f}"
-
-
-def _pairs(items: list[tuple[str, int]], *, empty: str = "—") -> str:
-    if not items:
-        return empty
-    return "\n".join(f"**{name}** · {count}" for name, count in items)[:1024]
-
-
-def _top_ratings(items: list[dict]) -> str:
-    if not items:
-        return "—"
-    return "\n".join(
-        f"{score_icon(item['score'])} **{item['score']:.0f}** · "
-        f"{item['artist']} — {item['album']}"
-        for item in items
-    )[:1024]
 
 
 def _new_embed(
@@ -70,138 +50,6 @@ def _new_embed(
     )
     embed.set_footer(text=BOT_DATABASE_FOOTER)
     return embed
-
-
-def _set_user_author(embed: discord.Embed, username: str, avatar: str | None) -> None:
-    kwargs = {
-        "name": username,
-        "url": f"https://www.albumoftheyear.org/user/{username}/",
-    }
-    if avatar:
-        kwargs["icon_url"] = avatar
-    embed.set_author(**kwargs)
-
-
-class AnalyticsView(TimedDisableView):
-    """One shared tab system for /stats, /compare and /wrapped."""
-
-    def __init__(
-        self,
-        *,
-        sections: dict[str, discord.Embed],
-        renderer,
-        payload: dict,
-        filename: str,
-        data_label: str,
-    ):
-        super().__init__()
-        self.sections = sections
-        self.renderer = renderer
-        self.payload = payload
-        self.filename = filename
-        self.graphic_bytes: bytes | None = None
-        self.active_tab = "home"
-
-        tabs = (
-            ("home", "🏠 Główne"),
-            ("data", data_label),
-            ("top", "★ Rankingi"),
-            ("graphic", "📊 Grafika"),
-        )
-        for key, label in tabs:
-            button = discord.ui.Button(
-                label=label,
-                style=(
-                    discord.ButtonStyle.primary
-                    if key == "home"
-                    else discord.ButtonStyle.secondary
-                ),
-                custom_id=f"analytics:{key}",
-                row=0,
-            )
-
-            async def callback(
-                interaction: discord.Interaction,
-                selected: str = key,
-            ) -> None:
-                await self._show(interaction, selected)
-
-            button.callback = callback
-            self.add_item(button)
-
-    def _mark_active(self, key: str) -> None:
-        self.active_tab = key
-        for child in self.children:
-            if not isinstance(child, discord.ui.Button):
-                continue
-            child_key = str(child.custom_id or "").rsplit(":", 1)[-1]
-            child.style = (
-                discord.ButtonStyle.primary
-                if child_key == key
-                else discord.ButtonStyle.secondary
-            )
-
-    async def _render_graphic(self) -> bytes:
-        if self.graphic_bytes is not None:
-            return self.graphic_bytes
-
-        payload = dict(self.payload)
-        cover_items = (
-            payload.get("top_ratings")
-            or payload.get("shared_favorites")
-            or payload.get("disagreements")
-            or []
-        )
-        cover_images, avatar_images = await asyncio.gather(
-            asyncio.to_thread(
-                load_cover_images,
-                list(cover_items),
-                limit=3,
-            ),
-            asyncio.to_thread(
-                load_cover_images,
-                list(payload.get("avatar_items") or []),
-                limit=2,
-            ),
-        )
-        payload["_cover_images"] = cover_images
-        payload["_avatar_images"] = avatar_images
-        buffer = await asyncio.to_thread(self.renderer, payload)
-        self.graphic_bytes = buffer.getvalue()
-        return self.graphic_bytes
-
-    async def _show(self, interaction: discord.Interaction, key: str) -> None:
-        self._mark_active(key)
-        if key != "graphic":
-            await interaction.response.edit_message(
-                embed=self.sections[key],
-                attachments=[],
-                view=self,
-            )
-            return
-
-        await interaction.response.defer()
-        try:
-            content = await self._render_graphic()
-            file = discord.File(io.BytesIO(content), filename=self.filename)
-            embed = discord.Embed.from_dict(self.sections["graphic"].to_dict())
-            embed.set_image(url=f"attachment://{self.filename}")
-            await interaction.edit_original_response(
-                embed=embed,
-                attachments=[file],
-                view=self,
-            )
-        except Exception as exc:
-            embed = discord.Embed.from_dict(self.sections["graphic"].to_dict())
-            embed.description = (
-                "Nie udało się przygotować grafiki. "
-                f"`{type(exc).__name__}`"
-            )
-            await interaction.edit_original_response(
-                embed=embed,
-                attachments=[],
-                view=self,
-            )
 
 
 class RatingDistributionView(TimedDisableView):
@@ -338,19 +186,6 @@ async def _configured_user_or_error(
         ephemeral=True,
     )
     return None
-
-
-async def _send_view(
-    interaction: discord.Interaction,
-    *,
-    view: AnalyticsView,
-) -> None:
-    message = await interaction.followup.send(
-        embed=view.sections["home"],
-        view=view,
-        wait=True,
-    )
-    view.bind_message(message)
 
 
 def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
@@ -609,60 +444,27 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             asyncio.to_thread(DB.get_avatar, canonical),
         )
         data = wrapped(canonical, rows, selected_year)
-        data["avatar_items"] = [
+        avatar_items = [
             {"username": canonical, "cover": avatar}
         ] if avatar else []
-        color = score_color(data["average"])
-
-        home = _new_embed(
-            f"Podsumowanie {selected_year}",
-            description=(
-                f"**{data['ratings']}** ocen · średnia **{_metric(data['average'])}** "
-                f"· mediana **{_metric(data['median'])}**\n\n"
-                f"Recenzje **{data['reviews']}** · polubienia **{data['likes']}** · "
-                f"ocenione tracklisty **{data['track_albums']}**"
+        cover_images, avatar_images = await asyncio.gather(
+            asyncio.to_thread(
+                load_cover_images,
+                list(data.get("top_ratings") or []),
+                limit=3,
             ),
-            color=color,
+            asyncio.to_thread(
+                load_cover_images,
+                avatar_items,
+                limit=1,
+            ),
         )
-        active_months = [
-            (MONTH_NAMES[month - 1], count)
-            for month, count in data["months"]
-            if count
-        ]
-        months = _new_embed(
-            f"Aktywność w {selected_year}",
-            description=_pairs(active_months, empty="Brak zapisanych ocen w tym roku."),
-            color=color,
+        data["_cover_images"] = cover_images
+        data["_avatar_images"] = avatar_images
+        graphic = await asyncio.to_thread(render_wrapped, data)
+        await interaction.followup.send(
+            file=discord.File(
+                io.BytesIO(graphic.getvalue()),
+                filename=f"wrapped-{canonical}-{selected_year}.png",
+            )
         )
-        top = _new_embed(f"Rankingi {selected_year}", color=color)
-        top.add_field(
-            name="Gatunki roku",
-            value=_pairs(data["top_genres"]),
-            inline=True,
-        )
-        top.add_field(
-            name="Artyści roku",
-            value=_pairs(data["top_artists"]),
-            inline=True,
-        )
-        top.add_field(
-            name="Najwyższe oceny",
-            value=_top_ratings(data["top_ratings"]),
-            inline=False,
-        )
-        graphic = _new_embed(
-            f"Graficzne podsumowanie {selected_year}",
-            description="Aktywność w miesiącach i najwyżej ocenione albumy.",
-            color=color,
-        )
-        for embed in (home, months, top, graphic):
-            _set_user_author(embed, canonical, avatar)
-
-        view = AnalyticsView(
-            sections={"home": home, "data": months, "top": top, "graphic": graphic},
-            renderer=render_wrapped,
-            payload=data,
-            filename=f"wrapped-{canonical}-{selected_year}.png",
-            data_label="▤ Miesiące",
-        )
-        await _send_view(interaction, view=view)
