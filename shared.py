@@ -29,9 +29,8 @@ def set_aoty_footer(embed: discord.Embed, text: str) -> None:
 
 
 def score_color(score: Any) -> discord.Color:
-    try:
-        value = int(score)
-    except (TypeError, ValueError):
+    value = _score_number(score)
+    if value is None:
         return discord.Color.light_grey()
 
     if value == 100:
@@ -58,9 +57,8 @@ def score_color(score: Any) -> discord.Color:
 
 
 def score_icon(score: Any) -> str:
-    try:
-        value = int(score)
-    except (TypeError, ValueError):
+    value = _score_number(score)
+    if value is None:
         return "\⚪"
 
     if value == 100:
@@ -86,13 +84,35 @@ def score_icon(score: Any) -> str:
     return "\⚫"
 
 
+def _score_number(score: Any) -> int | None:
+    """Return the whole-number part of a score, if it is numeric.
+
+    AOTY sometimes exposes a decimal score (for example ``78.2``), while
+    Kotone displays scores as whole numbers everywhere.  Centralizing that
+    conversion keeps the text, colour and score emoji in sync.
+    """
+
+    text = str(score or "").strip().replace(",", ".")
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _whole_score_text(score: Any) -> str:
+    """Format a real score without a decimal part; leave non-scores intact."""
+
+    value = _score_number(score)
+    return str(value) if value is not None else str(score or "").strip()
+
+
 def score_value_or_nr(score: Any) -> str:
     """Return a personal rating value, using NR only for a true no-rating."""
 
     text = str(score or "").strip()
     if not text or text.casefold() in {"nr", "n/r", "—", "?"}:
         return "NR"
-    return text
+    return _whole_score_text(text)
 
 
 def score_or_nr(score: Any) -> str:
@@ -107,7 +127,8 @@ def score_or_missing(score: Any) -> str:
     text = str(score or "").strip()
     if not text or text.casefold() in {"nr", "n/r", "—", "?"}:
         return f"{score_icon(None)} —"
-    return f"{score_icon(text)} {text}"
+    value = _whole_score_text(text)
+    return f"{score_icon(value)} {value}"
 
 
 def aoty_score_value(score: Any, ratings_count: Any) -> str:
@@ -120,7 +141,7 @@ def aoty_score_value(score: Any, ratings_count: Any) -> str:
 
     text = str(score or "").strip()
     if text and text.casefold() not in {"nr", "n/r", "—", "?"}:
-        return text
+        return _whole_score_text(text)
     return "NR" if numeric_count(ratings_count) == 0 else "—"
 
 

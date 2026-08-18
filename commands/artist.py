@@ -31,9 +31,9 @@ SORT_LABELS = {
 
 
 def _score_number(value):
-    """Convert AOTY User Score to int; NR/None always sorts last."""
+    """Convert a whole/decimal AOTY score; NR/None always sort last."""
     try:
-        return int(value)
+        return int(float(str(value).replace(",", ".")))
     except (TypeError, ValueError):
         return None
 

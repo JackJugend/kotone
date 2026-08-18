@@ -65,6 +65,7 @@ class DisplayNormalizationTests(unittest.TestCase):
         self.assertEqual(aoty_score_value(None, "12"), "—")
         self.assertEqual(aoty_score_value(None, None), "—")
         self.assertEqual(aoty_score_value("83", "12"), "83")
+        self.assertEqual(aoty_score_value("78.2", "12"), "78")
 
     def test_personal_missing_score_is_always_nr(self):
         self.assertEqual(score_value_or_nr(None), "NR")
