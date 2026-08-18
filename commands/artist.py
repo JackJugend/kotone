@@ -930,38 +930,6 @@ class ArtistSortView(TimedDisableView):
         )
 
     @discord.ui.button(
-        label="Najnowsze",
-        style=discord.ButtonStyle.primary,
-        custom_id="newest",
-        row=0,
-    )
-    async def newest_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-        await self._apply_sort(
-            interaction,
-            "newest",
-        )
-
-    @discord.ui.button(
-        label="Najstarsze",
-        style=discord.ButtonStyle.secondary,
-        custom_id="oldest",
-        row=0,
-    )
-    async def oldest_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-        await self._apply_sort(
-            interaction,
-            "oldest",
-        )
-
-    @discord.ui.button(
         label="Ocena ↓",
         style=discord.ButtonStyle.secondary,
         custom_id="score_desc",
@@ -1023,6 +991,38 @@ class ArtistSortView(TimedDisableView):
         await self._apply_sort(
             interaction,
             "title_desc",
+        )
+
+    @discord.ui.button(
+        label="Najnowsze",
+        style=discord.ButtonStyle.primary,
+        custom_id="newest",
+        row=1,
+    )
+    async def newest_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self._apply_sort(
+            interaction,
+            "newest",
+        )
+
+    @discord.ui.button(
+        label="Najstarsze",
+        style=discord.ButtonStyle.secondary,
+        custom_id="oldest",
+        row=1,
+    )
+    async def oldest_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self._apply_sort(
+            interaction,
+            "oldest",
         )
 
 
@@ -1164,7 +1164,7 @@ def setup_artist_command(
             )
             if result is None:
                 await interaction.followup.send(
-                    f"❌ Nie znaleziono artysty **{artist}** na AOTY ani w SQLite."
+                    f"❌ Nie znaleziono artysty **{artist}** na AOTY ani w kotone."
                 )
                 return
 
