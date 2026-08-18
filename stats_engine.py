@@ -10,11 +10,17 @@ from datetime import UTC, datetime
 
 
 SCORE_BUCKETS = (
-    ("90–100", 90, 100),
+    ("100", 100, 100),
+    ("90–99", 90, 99),
     ("80–89", 80, 89),
     ("70–79", 70, 79),
     ("60–69", 60, 69),
-    ("0–59", 0, 59),
+    ("50–59", 50, 59),
+    ("40–49", 40, 49),
+    ("30–39", 30, 39),
+    ("20–29", 20, 29),
+    ("10–19", 10, 19),
+    ("0–9", 0, 9),
 )
 
 
@@ -127,9 +133,80 @@ def summarize(username: str, rows: list[dict]) -> dict:
                 "artist": row.get("artist") or "Nieznany artysta",
                 "album": row.get("album") or "Nieznane wydanie",
                 "score": score,
+                "cover": row.get("cover"),
             }
             for row, score in top_ratings
         ],
+    }
+
+
+def rating_distribution(
+    username: str,
+    rows: list[dict],
+    track_rows: list[dict],
+    category: str,
+    *,
+    category_label: str | None = None,
+    year: int | None = None,
+    genre: str | None = None,
+    score_min: int | None = None,
+    score_max: int | None = None,
+) -> dict:
+    """Build one AOTY-style distribution without reading outside SQLite."""
+
+    category = str(category or "all")
+
+    def normalized(value) -> str:
+        return "".join(
+            character
+            for character in str(value or "").casefold()
+            if character.isalnum()
+        )
+
+    if category == "all":
+        selected = list(rows) + list(track_rows)
+    elif category == "tracks":
+        selected = list(track_rows)
+    else:
+        accepted_formats = {normalized(category), normalized(category_label)}
+        selected = [
+            row
+            for row in rows
+            if normalized(row.get("release_format")) in accepted_formats
+        ]
+
+    genre_key = str(genre or "").strip().casefold()
+    filtered: list[dict] = []
+    for row in selected:
+        score = _score(row.get("score"))
+        if score is None:
+            continue
+        if year is not None and _release_year(row) != int(year):
+            continue
+        if genre_key and genre_key not in {
+            value.casefold()
+            for value in _clean_values(row.get("genres"))
+        }:
+            continue
+        if score_min is not None and score < int(score_min):
+            continue
+        if score_max is not None and score > int(score_max):
+            continue
+        filtered.append(row)
+
+    summary = summarize(username, filtered)
+    return {
+        "username": username,
+        "category": category,
+        "label": category_label or category,
+        "ratings": summary["ratings"],
+        "average": summary["average"],
+        "median": summary["median"],
+        "score_buckets": summary["score_buckets"],
+        "year": year,
+        "genre": genre,
+        "score_min": score_min,
+        "score_max": score_max,
     }
 
 
@@ -154,6 +231,7 @@ def compare(user_a: str, rows_a: list[dict], user_b: str, rows_b: list[dict]) ->
                 "album_id": album_id,
                 "artist": row_a.get("artist") or row_b.get("artist") or "Nieznany artysta",
                 "album": row_a.get("album") or row_b.get("album") or "Nieznane wydanie",
+                "cover": row_a.get("cover") or row_b.get("cover"),
                 "score_a": score_a,
                 "score_b": score_b,
                 "gap": abs(score_a - score_b),

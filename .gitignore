@@ -17,6 +17,7 @@ Thumbs.db
 *.sqlite3-wal
 *.sqlite3.tmp
 *.tmp.sqlite3
+stats-cover-cache/
 *.corrupt-*
 *.empty-*
 *.recovery-required

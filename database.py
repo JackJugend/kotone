@@ -1373,6 +1373,7 @@ class Database:
                     r.has_review,
                     r.has_track_ratings,
                     r.liked,
+                    COALESCE(r.cover_url, rel.cover_url) AS cover_url,
                     rel.user_score AS aoty_score,
                     rel.ratings_count AS aoty_ratings_count,
                     rel.release_date,
@@ -1421,6 +1422,7 @@ class Database:
                     "has_review": bool(row["has_review"]),
                     "has_track_ratings": bool(row["has_track_ratings"]),
                     "liked": bool(row["liked"]),
+                    "cover": row["cover_url"],
                     "track_score_count": int(row["track_score_count"] or 0),
                     "aoty_score": row["aoty_score"],
                     "aoty_ratings_count": row["aoty_ratings_count"],
@@ -1435,6 +1437,47 @@ class Database:
                 }
             )
         return result
+
+    def get_analytics_track_rows(self, username: str) -> list[dict]:
+        """Return track scores with parent-release metadata for filtering."""
+
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return []
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT
+                    utr.score,
+                    r.album_id,
+                    r.release_format,
+                    rel.year AS release_year,
+                    rel.release_date,
+                    rel.genres_json
+                FROM user_track_ratings utr
+                JOIN ratings r
+                  ON r.username = utr.username
+                 AND r.album_id = utr.album_id
+                LEFT JOIN releases rel ON rel.album_id = r.album_id
+                WHERE utr.username = ?
+                  AND r.active = 1
+                  AND NULLIF(TRIM(COALESCE(utr.score, '')), '') IS NOT NULL
+                ORDER BY r.sort_timestamp DESC, utr.track_number, utr.rowid
+                """,
+                (canonical,),
+            ).fetchall()
+        return [
+            {
+                "score": str(row["score"]),
+                "album_id": str(row["album_id"]),
+                "release_format": row["release_format"],
+                "release_year": row["release_year"],
+                "release_date": row["release_date"],
+                "genres": _json_load(row["genres_json"], []),
+                "_track_score": True,
+            }
+            for row in rows
+        ]
 
     def get_avatar(self, username: str) -> str | None:
         canonical = self.canonical_username(username)
