@@ -328,7 +328,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         set_aoty_footer(
             details_embed,
-            f"AOTY • {score_icon(variables.score)[1:]} {variables.score}",
+            f"AOTY  •  {score_icon(variables.score)[1:]} {variables.score}",
         )
 
         # Dodatkowy tab: publiczna tracklista.
