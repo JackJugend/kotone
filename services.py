@@ -18,6 +18,7 @@ import time
 import requests
 
 import aoty
+import musicbrainz
 from database import DB
 from http_client import (
     PRIORITY_BACKGROUND,
@@ -35,6 +36,8 @@ from settings import (
     PROFILE_RATING_ARCHIVE_INTERVAL,
     PROFILE_RATING_ARCHIVE_LIMIT_PER_FORMAT,
     QUICK_RATING_LIMIT_PER_FORMAT,
+    MUSICBRAINZ_FALLBACK_ENABLED,
+    MUSICBRAINZ_FALLBACK_RETRY_INTERVAL,
     RATING_DETAIL_TTL,
     RATING_FETCH_LIMITS,
     RATING_FORMATS,
@@ -64,6 +67,37 @@ class DataService:
 
     def is_monitored(self, username: str) -> bool:
         return DB.is_monitored(username)
+
+    async def _musicbrainz_release_fallback(
+        self,
+        item: dict,
+        *,
+        priority: int,
+    ) -> dict | None:
+        """Fetch public metadata only after AOTY was unavailable.
+
+        This is never called by a Discord command. The result deliberately
+        omits AOTY-only values (ratings, rankings, reviews and personal data),
+        then the database preserves anything AOTY already supplied.
+        """
+        if not MUSICBRAINZ_FALLBACK_ENABLED:
+            return None
+        try:
+            return await _thread_call(
+                priority,
+                musicbrainz.MUSICBRAINZ.lookup_release,
+                item.get("artist"),
+                item.get("album") or item.get("title"),
+                requested_format=item.get("release_format"),
+            )
+        except (
+            musicbrainz.MusicBrainzUnavailable,
+            aoty.AOTYPageIncomplete,
+            aoty.AOTYRateLimit,
+            requests.RequestException,
+        ) as exc:
+            print(f"[MUSICBRAINZ] fallback: {type(exc).__name__}: {exc}")
+            return None
 
     def _rating_with_cached_detail(
         self,
@@ -213,11 +247,21 @@ class DataService:
 
         artist_url = artist_info.get("url") or releases[0].get("artist_url")
         artist_info["url"] = artist_url
+        cached_genres = sorted(
+            {
+                str(genre).strip()
+                for release in releases
+                for genre in (release.get("genres") or [])
+                if str(genre).strip()
+            },
+            key=str.casefold,
+        )
         return artist_info, {
             "artist": artist_info["name"],
             "url": artist_url,
             "image": None,
             "releases": releases,
+            "genres_text": ", ".join(cached_genres[:10]) or None,
             "source": "SQLite cache",
         }
 
@@ -1048,6 +1092,7 @@ class DataService:
         detail_limit: int,
         release_limit: int,
         priority: int = PRIORITY_MAINTENANCE,
+        musicbrainz_only: bool = False,
     ) -> dict:
         """Gradually persist release metadata, reviews and Track Ratings.
 
@@ -1060,6 +1105,7 @@ class DataService:
 
         now = time.time()
         release_done = 0
+        musicbrainz_done = 0
         detail_done = 0
         errors = 0
 
@@ -1079,8 +1125,13 @@ class DataService:
             else DB.release_enrichment_candidates(
                 username,
                 max(int(release_limit) * 5, int(release_limit)),
+                fallback_stale_before=(
+                    now - MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
+                ),
             )
         )
+
+        aoty_unavailable = bool(musicbrainz_only)
 
         for item in release_candidates:
             if release_done >= max(0, int(release_limit)):
@@ -1088,6 +1139,19 @@ class DataService:
 
             album_id = str(item.get("album_id") or "")
             if self._release_retry_after.get(album_id, 0.0) > now:
+                continue
+
+            if aoty_unavailable:
+                details = await self._musicbrainz_release_fallback(
+                    item,
+                    priority=priority,
+                )
+                if details and DB.save_release_details(album_id, details):
+                    self._release_retry_after.pop(album_id, None)
+                    release_done += 1
+                    musicbrainz_done += 1
+                elif details is None:
+                    self._release_retry_after[album_id] = time.time() + 60 * 60
                 continue
 
             try:
@@ -1102,14 +1166,26 @@ class DataService:
             except (
                 aoty.AOTYChallengeCooldown,
                 aoty.AOTYRateLimit,
+                aoty.AOTYPageIncomplete,
                 requests.RequestException,
             ):
+                # AOTY is authoritative. Only when it cannot provide a safe
+                # page do we fill public gaps from MusicBrainz, and then stop
+                # probing AOTY again for the rest of this worker pass.
+                aoty_unavailable = True
+                details = await self._musicbrainz_release_fallback(
+                    item,
+                    priority=priority,
+                )
+                if details and DB.save_release_details(album_id, details):
+                    self._release_retry_after.pop(album_id, None)
+                    release_done += 1
+                    musicbrainz_done += 1
+                    continue
                 errors += 1
-                # Challenge/rate-limit/transport failures are global. Do not
-                # walk and log every later album locally during the shared
-                # cooldown, and do not start the user-detail phase either.
                 return {
                     "releases": release_done,
+                    "musicbrainz": musicbrainz_done,
                     "details": detail_done,
                     "errors": errors,
                 }
@@ -1120,6 +1196,16 @@ class DataService:
                     f"[CACHE] release {album_id}: "
                     f"{type(exc).__name__}: {exc}"
                 )
+
+        # MusicBrainz has no personal AOTY reviews/likes/Track Ratings. Those
+        # checks wait for AOTY instead of being falsely treated as complete.
+        if aoty_unavailable:
+            return {
+                "releases": release_done,
+                "musicbrainz": musicbrainz_done,
+                "details": detail_done,
+                "errors": errors,
+            }
 
         detail_candidates = DB.detail_enrichment_candidates(
             username,
@@ -1183,6 +1269,7 @@ class DataService:
 
         return {
             "releases": release_done,
+            "musicbrainz": musicbrainz_done,
             "details": detail_done,
             "errors": errors,
         }

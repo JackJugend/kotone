@@ -266,6 +266,22 @@ DETAIL_CHANGE_SCAN_INTERVAL = _runtime_int(
 
 RELEASE_DETAIL_TTL = _runtime_int("release_detail_ttl", 12 * 60 * 60, 10 * 60)
 
+# MusicBrainz is an official, read-only fallback for public release metadata
+# when AOTY is unavailable.  It is used only by the low-priority worker, never
+# while rendering a Discord command.
+MUSICBRAINZ_FALLBACK_ENABLED = bool(
+    RUNTIME.get("musicbrainz_fallback_enabled", True)
+)
+MUSICBRAINZ_MIN_REQUEST_INTERVAL = _runtime_float(
+    "musicbrainz_min_request_interval", 1.05, 1.0
+)
+MUSICBRAINZ_REQUEST_TIMEOUT = _runtime_float(
+    "musicbrainz_request_timeout", 15.0, 3.0
+)
+MUSICBRAINZ_FALLBACK_RETRY_INTERVAL = _runtime_int(
+    "musicbrainz_fallback_retry_interval", 24 * 60 * 60, 60 * 60
+)
+
 # Lokalny backup SQLite na tym samym volume. Railway backups nadal są mocno
 # zalecane, ale ten plik daje dodatkową warstwę ochrony przed uszkodzeniem DB.
 LOCAL_DATABASE_BACKUP_INTERVAL = _runtime_int("local_database_backup_interval", 24 * 60 * 60, 60 * 60)

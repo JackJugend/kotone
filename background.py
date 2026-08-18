@@ -77,12 +77,18 @@ class BackgroundWorker:
             return 0
         return (position + 1) % len(USERS)
 
-    async def _enrich_one_user(self, username: str) -> dict:
+    async def _enrich_one_user(
+        self,
+        username: str,
+        *,
+        musicbrainz_only: bool = False,
+    ) -> dict:
         return await DATA.enrich_user(
             username,
             detail_limit=DETAIL_ENRICH_PER_CYCLE,
             release_limit=RELEASE_ENRICH_PER_CYCLE,
             priority=PRIORITY_MAINTENANCE,
+            musicbrainz_only=musicbrainz_only,
         )
 
     async def _run_once(self) -> float:
@@ -92,6 +98,23 @@ class BackgroundWorker:
         if HTTP.db_only_enabled():
             self.last_success_at = self.last_run_at
             self.last_error = "Tryb /dbonly aktywny; maintenance AOTY pominięty."
+            return ARCHIVE_WORKER_IDLE_SECONDS
+
+        # During a real AOTY challenge there is no value in retrying an AOTY
+        # route. Use one bounded MusicBrainz-only pass to fill public SQLite
+        # gaps, then wait for the normal AOTY cooldown to expire.
+        if HTTP.status().get("challenge_open"):
+            for username in self._ordered_users_from(self._enrich_cursor):
+                result = await self._enrich_one_user(
+                    username,
+                    musicbrainz_only=True,
+                )
+                if result.get("releases"):
+                    self._enrich_cursor = self._cursor_after(username)
+                    self.last_success_at = time.time()
+                    self.last_error = None
+                    return ENRICH_WORKER_REST_SECONDS
+            self.last_error = "AOTY challenge active; MusicBrainz fallback idle."
             return ARCHIVE_WORKER_IDLE_SECONDS
 
         # Phase 1: ratings first. Exactly one configured user's bounded format

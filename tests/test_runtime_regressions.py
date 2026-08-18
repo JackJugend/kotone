@@ -429,6 +429,111 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["source"], "SQLite cache")
         self.assertEqual(result["track_ratings"][0]["score"], "86")
 
+    async def test_musicbrainz_fallback_is_used_only_after_aoty_failure(self):
+        item = {
+            "album_id": "mb-fallback",
+            "score": "80",
+            "artist": "Artist",
+            "album": "Fallback Album",
+            "url": "https://www.albumoftheyear.org/album/1-fallback.php",
+            "release_format": "EP",
+        }
+        self.db.upsert_rating("enso", item)
+        original_aoty = aoty.get_album_details
+        original_mb = services.musicbrainz.MUSICBRAINZ.lookup_release
+        calls = []
+
+        def challenge(*_args, **_kwargs):
+            raise aoty.AOTYChallengeCooldown("challenge", retry_after=3600)
+
+        def fallback(*args, **kwargs):
+            calls.append((args, kwargs))
+            return {
+                "artist": "Artist",
+                "album": "Fallback Album",
+                "release_date": "2025-01-02",
+                "year": "2025",
+                "album_format": "EP",
+                "genres": ["Art Pop"],
+                "tracklist": [{"number": 1, "title": "Track", "duration": "3:00"}],
+                "_section_complete": {
+                    "score": False,
+                    "release_date": True,
+                    "format": True,
+                    "labels": False,
+                    "genres": True,
+                    "vibes": False,
+                    "ranking": False,
+                    "tracklist": True,
+                },
+            }
+
+        aoty.get_album_details = challenge
+        services.musicbrainz.MUSICBRAINZ.lookup_release = fallback
+        try:
+            result = await self.service.enrich_user(
+                "enso",
+                detail_limit=0,
+                release_limit=1,
+            )
+        finally:
+            aoty.get_album_details = original_aoty
+            services.musicbrainz.MUSICBRAINZ.lookup_release = original_mb
+
+        self.assertEqual(result["musicbrainz"], 1)
+        self.assertEqual(len(calls), 1)
+        cached = self.db.get_release_details("mb-fallback")
+        self.assertEqual(cached["genres"], ["Art Pop"])
+        self.assertEqual(cached["tracklist"][0]["duration"], "3:00")
+
+    async def test_aoty_details_win_without_musicbrainz_fallback(self):
+        item = {
+            "album_id": "aoty-priority",
+            "score": "80",
+            "artist": "Artist",
+            "album": "Priority Album",
+            "url": "https://www.albumoftheyear.org/album/2-priority.php",
+            "release_format": "LP",
+        }
+        self.db.upsert_rating("enso", item)
+        original_aoty = aoty.get_album_details
+        original_mb = services.musicbrainz.MUSICBRAINZ.lookup_release
+        aoty.get_album_details = lambda *_args, **_kwargs: {
+            "artist": "Artist",
+            "album": "Priority Album",
+            "ratings_count": "123",
+            "release_date": "January 1, 2025",
+            "album_format": "LP",
+            "_section_complete": {
+                "score": True,
+                "release_date": True,
+                "format": True,
+                "labels": True,
+                "genres": True,
+                "vibes": True,
+                "ranking": True,
+                "tracklist": True,
+            },
+        }
+        services.musicbrainz.MUSICBRAINZ.lookup_release = lambda *_args, **_kwargs: self.fail(
+            "MusicBrainz must not run when AOTY returned details"
+        )
+        try:
+            result = await self.service.enrich_user(
+                "enso",
+                detail_limit=0,
+                release_limit=1,
+            )
+        finally:
+            aoty.get_album_details = original_aoty
+            services.musicbrainz.MUSICBRAINZ.lookup_release = original_mb
+
+        self.assertEqual(result["musicbrainz"], 0)
+        self.assertEqual(
+            self.db.get_release_details("aoty-priority")["ratings_count"],
+            "123",
+        )
+
     async def test_enrichment_stops_after_one_global_challenge(self):
         self.db.upsert_rating(
             "enso",

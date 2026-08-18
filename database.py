@@ -2729,10 +2729,28 @@ class Database:
             ).fetchall()
         return [self._row_to_rating(row) for row in rows]
 
-    def release_enrichment_candidates(self, username: str, limit: int) -> list[dict]:
+    def release_enrichment_candidates(
+        self,
+        username: str,
+        limit: int,
+        *,
+        fallback_stale_before: float | None = None,
+    ) -> list[dict]:
+        """Return missing releases and old MusicBrainz fallback rows.
+
+        A fallback row intentionally has no AOTY rating-count data.  It is
+        retried only after a long interval, so AOTY remains authoritative once
+        it recovers without turning every worker pass into a request.
+        """
         canonical = self.canonical_username(username)
         if canonical is None or limit <= 0:
             return []
+
+        fallback_stale_before = (
+            float(fallback_stale_before)
+            if fallback_stale_before is not None
+            else -1.0
+        )
 
         with self._lock:
             rows = self.connection.execute(
@@ -2743,11 +2761,17 @@ class Database:
                 WHERE r.username = ?
                   AND r.active = 1
                   AND NULLIF(TRIM(COALESCE(r.album_url, '')), '') IS NOT NULL
-                  AND rel.album_id IS NULL
+                  AND (
+                        rel.album_id IS NULL
+                        OR (
+                            rel.ratings_count IS NULL
+                            AND rel.fetched_at <= ?
+                        )
+                  )
                 ORDER BY COALESCE(r.sort_timestamp, r.first_seen_at, 0) DESC
                 LIMIT ?
                 """,
-                (canonical, int(limit)),
+                (canonical, fallback_stale_before, int(limit)),
             ).fetchall()
         return [self._row_to_rating(row) for row in rows]
 

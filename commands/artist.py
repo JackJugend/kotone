@@ -193,10 +193,14 @@ def _artist_header_text(discography):
             else artist_name
         )
         release_count = len(discography.get("releases") or [])
-        return (
+        lines = [
             f"**{artist_link}**\n"
             f"💾 **SQLite cache: {release_count} zapisanych wydań**"
-        )
+        ]
+        genres_text = discography.get("genres_text")
+        if genres_text:
+            lines.append(f"**Genre:** {genres_text}")
+        return "\n".join(lines)
 
     score = score_or_nr(discography.get("artist_user_score"))
 
