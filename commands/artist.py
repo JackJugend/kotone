@@ -197,9 +197,9 @@ def _artist_header_text(discography):
 
     lines = [
         (
-            f"⭐ **User Score: {score}**"
-            f"  •  **{ratings_count} ratings**"
-            f"  •  **{followers} Followers**"
+            f"<:aoty:1539095897084924004> **{score}  •  **"
+            f"**{ratings_count} ratings  •  **"
+            f"**{followers} followers**"
         )
     ]
 
@@ -706,9 +706,9 @@ class ArtistSortView(TimedDisableView):
             )
 
             lines.append(
-                f"**{score_or_missing(variables.aoty_user_score)}**  "
-                f"**[{variables.display_album}]({release['url']})**"
-                f"  —  {variables.release_date}  •  {variables.album_format}"
+                f"**{score_or_missing(variables.aoty_user_score)}  •  **"
+                f"**[{variables.display_album}]({release['url']})  •  **"
+                f"{variables.album_format}  •  {variables.release_date}"
             )
 
 
@@ -718,8 +718,7 @@ class ArtistSortView(TimedDisableView):
             )
         else:
             releases_text = (
-                "Brak releases dla wybranego "
-                "formatu i roku."
+                "Brak releases dla wybranych filtrów."
             )
 
         header_text = _artist_header_text(

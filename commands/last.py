@@ -213,7 +213,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         embed.add_field(
             name=(
-                f"\📊 **{variables.aoty_user_score}**"
+                f"<:aoty:1539095897084924004> **{variables.aoty_user_score}**"
             ),
             value=f"/{variables.ratings_count}",
             inline=True,
