@@ -358,7 +358,7 @@ async def load_release_variables(
     item: dict | None,
     *,
     username: str | None = None,
-    missing: str = "Brak danych",
+    missing: str = "—",
 ) -> ReleaseVariables:
     """Build release variables through the shared cache/live service.
 
