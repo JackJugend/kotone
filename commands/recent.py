@@ -99,7 +99,7 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
         username="Użytkownik AOTY",
         amount="Ile ostatnich ocen pokazać (1-20)",
         format="Opcjonalnie: tylko konkretny format wydania",
-        genre="Gatunek zapisany w SQLite",
+        genre="Gatunek zapisany w kotone",
         year="Rok wydania",
         decade="Początek dekady, np. 2020",
         rating_date="Data oceny, np. 01.05.2026",

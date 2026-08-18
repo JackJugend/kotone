@@ -42,7 +42,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
     @discord.app_commands.describe(
         username="Użytkownik AOTY",
         format="Opcjonalnie: tylko konkretny format wydania",
-        genre="Gatunek zapisany w SQLite",
+        genre="Gatunek zapisany w kotone",
         year="Rok wydania",
         decade="Początek dekady, np. 2020",
         rating_date="Data oceny, np. 01.05.2026",
@@ -193,9 +193,9 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         description_lines = [f"# — \⭐ **{variables.score}** \⭐ —"]
         if variables.genres:
-            description_lines.append(variables.all_genres_text)
+            description_lines.append(variables.all_genres_text.title())
         if variables.secondary_genres:
-            description_lines.append(f"*{variables.secondary_genres_text}*")
+            description_lines.append(f"*{variables.secondary_genres_text.title()}*")
         if variables.vibes:
             description_lines.append(f"-# {variables.vibes_text}")
 

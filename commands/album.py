@@ -344,9 +344,9 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
         description_lines = []
         if variables.genres:
-            description_lines.append(variables.all_genres_text)
+            description_lines.append(variables.all_genres_text.title())
         if variables.secondary_genres:
-            description_lines.append(variables.secondary_genres_text)
+            description_lines.append(variables.secondary_genres_text.title())
 
         embed = discord.Embed(
             title=(
