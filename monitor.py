@@ -53,6 +53,26 @@ class RatingMonitor:
     def stop(self) -> None:
         self._stop_event.set()
 
+    @staticmethod
+    def _challenge_remaining_seconds() -> float:
+        """Read the shared transport cooldown without sending an HTTP request."""
+        try:
+            return max(
+                0.0,
+                float(aoty.HTTP.metrics().get("challenge_seconds") or 0.0),
+            )
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _cooldown_text(seconds: float) -> str:
+        total = max(0, int(float(seconds) + 0.999))
+        hours, remainder = divmod(total, 3600)
+        minutes, _seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours} h {minutes:02d} min"
+        return f"{minutes} min"
+
     async def _sleep(self, seconds: float) -> None:
         """Sleep but wake immediately during shutdown."""
         try:
@@ -224,6 +244,22 @@ class RatingMonitor:
 
         async with lock:
             prefix = "MANUAL" if manual else "AOTY"
+            cooldown_seconds = self._challenge_remaining_seconds()
+            if cooldown_seconds > 0:
+                message = (
+                    "AOTY cooldown aktywny; pominięto synchronizację "
+                    f"({self._cooldown_text(cooldown_seconds)} pozostało)."
+                )
+                # A manual /check gets one clear result; the automatic loop
+                # performs this check once per cycle before iterating users.
+                if manual:
+                    print(f"[{prefix}] {username}: {message}")
+                return {
+                    "cooldown": True,
+                    "retry_after": cooldown_seconds,
+                    "error": message,
+                }
+
             print(f"[{prefix}] Sprawdzam {username}...")
 
             await self._refresh_profile_if_due(username, manual=manual)
@@ -437,6 +473,21 @@ class RatingMonitor:
         while not self.client.is_closed() and not self._stop_event.is_set():
             self.last_cycle_at = time.time()
             cycle_ok = True
+
+            cooldown_seconds = self._challenge_remaining_seconds()
+            if cooldown_seconds > 0:
+                message = (
+                    "AOTY cooldown aktywny; pominięto cały cykl synchronizacji "
+                    f"({self._cooldown_text(cooldown_seconds)} pozostało)."
+                )
+                print(f"[AOTY] {message}")
+                # The monitor itself is healthy: it has intentionally avoided
+                # every request rather than repeatedly logging per-user errors.
+                self.last_success_at = time.time()
+                self.last_error = message
+                print(f"[BOT] Następne sprawdzenie za {CHECK_INTERVAL} sekund.")
+                await self._sleep(CHECK_INTERVAL)
+                continue
 
             full_scan_used = False
 

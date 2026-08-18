@@ -11,7 +11,7 @@
         "enso",
         "kulkien"
     ],
-    "check_interval": 1200,
+    "check_interval": 1800,
     "rating_fetch_limits": {
         "lp": 500,
         "ep": 300,
