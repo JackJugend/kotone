@@ -141,7 +141,7 @@ async def build_release_details_embed(
     variables = await load_release_variables(
         item,
         username=username,
-        missing="?",
+        missing="—",
     )
     lines = [
         f"**AOTY User Score:** {variables.aoty_user_score}",
@@ -150,8 +150,9 @@ async def build_release_details_embed(
         f"**Duration:** {variables.duration}",
         f"**Format:** {variables.album_format}",
         f"**Label:** {variables.labels_text}",
-        f"**Genre:** {variables.genres_text}",
     ]
+    if variables.genres:
+        lines.append(f"**Genre:** {variables.genres_text}")
     if variables.secondary_genres:
         lines.append(
             f"**Secondary genres:** {', '.join(variables.secondary_genres)}"
@@ -215,7 +216,7 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
     except Exception:
         details = {}
 
-    variables = build_release_variables(item, details, missing="?")
+    variables = build_release_variables(item, details, missing="—")
     public_tracks = [dict(track) for track in variables.tracklist]
     personal: dict[str, list[dict]] = {}
 
@@ -307,7 +308,7 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
     lines: list[str] = []
     for track in merged:
         number = _track_number(track.get("number"))
-        display_number = track.get("_display_number") or "?"
+        display_number = track.get("_display_number") or "—"
         title = str(track.get("title") or "Nieznany utwór")
         title_key = _track_key(title)
         duration = f" `{track.get('duration')}`" if track.get("duration") else ""
@@ -816,8 +817,8 @@ class RatingSelect(discord.ui.Select):
         options = []
 
         for index, item in enumerate(items):
-            artist = display_romanized_name(item.get("artist") or "?")
-            album = display_romanized_name(item.get("album") or item.get("title") or "?")
+            artist = display_romanized_name(item.get("artist") or "—")
+            album = display_romanized_name(item.get("album") or item.get("title") or "—")
             score = item.get("score") or "NR"
             flags = rating_flags_text(item)
             description = f"{score} {flags}".strip()
@@ -1289,8 +1290,8 @@ class ProfilePositionSelect(discord.ui.Select):
 
         for offset, item in enumerate(owner.page_items()):
             absolute_index = page_start + offset
-            artist = display_romanized_name(item.get("artist") or "?")
-            album = display_romanized_name(item.get("album") or "?")
+            artist = display_romanized_name(item.get("artist") or "—")
+            album = display_romanized_name(item.get("album") or "—")
             options.append(
                 discord.SelectOption(
                     label=f"{artist} — {album}"[:100],
@@ -1313,7 +1314,7 @@ class ProfilePositionSelect(discord.ui.Select):
                 label = display_romanized_name(item.get("name") or "Nieznany artysta")
                 description = "Favorite Artist"
             else:
-                artist = display_romanized_name(item.get("artist") or "?")
+                artist = display_romanized_name(item.get("artist") or "—")
                 album = display_romanized_name(item.get("album") or "Nieznane wydanie")
                 label = f"{artist} — {album}" if item.get("artist") else album
                 description = "Favorite Album"

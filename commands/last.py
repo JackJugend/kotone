@@ -126,7 +126,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         variables = await load_release_variables(
             latest,
             username=username,
-            missing="?",
+            missing="—",
         )
 
         if variables.artist_url:
@@ -190,12 +190,13 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         flags = rating_flags_text(latest)
         footer_flags = f"  •  {flags}" if flags else ""
 
-        # W aktualnym wyglądzie brak secondary genres / vibes daje pustą
-        # linię, nie znak zapytania. Zachowujemy to 1:1.
-        
-        primary_genres_display = variables.all_genres_text if variables.vibes else " "
-        secondary_genres_display = f"*{variables.secondary_genres_text}*" if variables.secondary_genres else " "
-        vibes_display = f"-# {variables.vibes_text}" if variables.vibes else " "
+        description_lines = [f"# — \⭐ **{variables.score}** \⭐ —"]
+        if variables.genres:
+            description_lines.append(variables.all_genres_text)
+        if variables.secondary_genres:
+            description_lines.append(f"*{variables.secondary_genres_text}*")
+        if variables.vibes:
+            description_lines.append(f"-# {variables.vibes_text}")
 
         # Wygląd zachowany z obecnej wersji /last.
         embed = discord.Embed(
@@ -205,12 +206,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
                 f"({variables.year})"
             ),
             url=variables.url,
-            description=(
-                f"# — \⭐ **{variables.score}** \⭐ — \n"
-                f"{variables.all_genres_text}\n"
-                f"{secondary_genres_display}\n"
-                f"{vibes_display}"
-            ),
+            description="\n".join(description_lines),
             color=score_color(variables.score),
         )
 
@@ -272,11 +268,10 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
                 f"**Label:** "
                 f"{variables.labels_text}"
             ),
-            (
-                f"**Genre:** "
-                f"{variables.genres_text}"
-            ),
         ]
+
+        if variables.genres:
+            details_lines.append(f"**Genre:** {variables.genres_text}")
 
         if variables.secondary_genres:
             details_lines.append(
@@ -340,7 +335,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         track_lines = []
 
         for track in variables.tracklist:
-            number = track.get("number") or "?"
+            number = track.get("number") or "—"
             title = track.get("title") or "Nieznany utwór"
             duration = track.get("duration")
             public_score = track.get("user_score") or "NR"

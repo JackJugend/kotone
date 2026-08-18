@@ -231,12 +231,11 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         if artist_url:
             release_item["artist_url"] = artist_url
 
-        secondary_genres_display = (
-            variables.secondary_genres_text
-            if variables.secondary_genres
-            else " "
-        )
-        vibes_display = variables.vibes_text if variables.vibes else " "
+        description_lines = []
+        if variables.genres:
+            description_lines.append(variables.all_genres_text)
+        if variables.secondary_genres:
+            description_lines.append(variables.secondary_genres_text)
 
         embed = discord.Embed(
             title=(
@@ -244,10 +243,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 f"({variables.year})"
             ),
             url=variables.url,
-            description=(
-                f"{variables.all_genres_text}\n"
-                f"{secondary_genres_display}"
-            ),
+            description="\n".join(description_lines) or None,
             color=score_color(variables.aoty_user_score),
         )
 

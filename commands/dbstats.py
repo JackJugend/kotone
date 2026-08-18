@@ -139,7 +139,7 @@ def setup_dbstats_command(
             title="Kotone • Database",
             description=(
                 f"{status_icon} **{status_text}**\n"
-                f"Schema: **v{stats.get('schema_version', '?')}**\n"
+                f"Schema: **v{stats.get('schema_version', '—')}**\n"
                 f"Plik: `{stats.get('path', '—')}`"
             ),
             color=(
@@ -262,7 +262,7 @@ def setup_dbstats_command(
                     " ",
                 )[:240]
                 value += (
-                    f"\n⚠️ Archive {user.get('archive_error_format') or '?'}: "
+                    f"\n⚠️ Archive {user.get('archive_error_format') or '—'}: "
                     f"`{clipped_archive}` "
                     f"({_discord_time(user.get('archive_error_at'))})"
                 )

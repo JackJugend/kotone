@@ -42,7 +42,7 @@ def _recent_line(item: dict) -> str:
     album = display_romanized_name(item.get("album") or "Nieznane wydanie")
     score = item.get("score") or "NR"
     url = item.get("url")
-    release_format = item.get("release_format") or "?"
+    release_format = item.get("release_format") or "—"
     flags = rating_flags_text(item)
     flags_text = f" · {flags}" if flags else ""
 

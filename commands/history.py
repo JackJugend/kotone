@@ -36,13 +36,13 @@ def _event_text(event: dict) -> str:
     item_key = str(event.get("item_key") or "").strip()
 
     if event_type == "rating_added":
-        return f"⭐ Dodano ocenę **{new if new not in (None, '') else '?'}**"
+        return f"⭐ Dodano ocenę **{new if new not in (None, '') else '—'}**"
     if event_type == "score_changed":
-        return f"🔄 Ocena **{old if old not in (None, '') else '?'} → {new if new not in (None, '') else '?'}**"
+        return f"🔄 Ocena **{old if old not in (None, '') else '—'} → {new if new not in (None, '') else '—'}**"
     if event_type == "rating_removed":
-        return f"🗑️ Usunięto ocenę **{old if old not in (None, '') else '?'}**"
+        return f"🗑️ Usunięto ocenę **{old if old not in (None, '') else '—'}**"
     if event_type == "rating_restored":
-        return f"♻️ Przywrócono ocenę **{new if new not in (None, '') else '?'}**"
+        return f"♻️ Przywrócono ocenę **{new if new not in (None, '') else '—'}**"
 
     if event_type == "review_added":
         return "✎ Dodano recenzję"
@@ -57,14 +57,14 @@ def _event_text(event: dict) -> str:
         return "♡ Usunięto like"
 
     if event_type == "track_rating_added":
-        return f"☰ **{item_key or 'Track'}** — dodano **{_score_from_track(new) or '?'}**"
+        return f"☰ **{item_key or 'Track'}** — dodano **{_score_from_track(new) or '—'}**"
     if event_type == "track_rating_changed":
         return (
             f"☰ **{item_key or 'Track'}** — "
-            f"**{_score_from_track(old) or '?'} → {_score_from_track(new) or '?'}**"
+            f"**{_score_from_track(old) or '—'} → {_score_from_track(new) or '—'}**"
         )
     if event_type == "track_rating_removed":
-        return f"☰ **{item_key or 'Track'}** — usunięto **{_score_from_track(old) or '?'}**"
+        return f"☰ **{item_key or 'Track'}** — usunięto **{_score_from_track(old) or '—'}**"
     if event_type == "track_ratings_added":
         return "☰ Dodano Track Ratings"
     if event_type == "track_ratings_removed":
