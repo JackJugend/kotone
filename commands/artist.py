@@ -5,7 +5,7 @@ import aoty
 from services import DATA
 from display_utils import display_romanized_name
 from settings import RATING_FORMATS
-from shared import build_release_variables, score_or_nr, set_aoty_footer
+from shared import build_release_variables, score_or_nr, score_or_missing, set_aoty_footer
 from views import TimedDisableView, VIEW_TIMEOUT_SECONDS
 
 
@@ -195,14 +195,14 @@ def _artist_header_text(discography):
         release_count = len(discography.get("releases") or [])
         lines = [
             f"**{artist_link}**\n"
-            f"💾 **SQLite cache: {release_count} zapisanych wydań**"
+            f"💾 **Baza danych kotone: {release_count} zapisanych wydań.**"
         ]
         genres_text = discography.get("genres_text")
         if genres_text:
             lines.append(f"**Genre:** {genres_text}")
         return "\n".join(lines)
 
-    score = score_or_nr(discography.get("artist_user_score"))
+    score = score_or_missing(discography.get("artist_user_score"))
 
     ratings_count = (
         discography.get(
@@ -837,9 +837,9 @@ class ArtistSortView(TimedDisableView):
             )
 
             lines.append(
-                f"• **[{variables.display_album}]({release['url']})**"
+                f"•  **[{variables.display_album}]({release['url']})**"
                 f" — {variables.release_date} · {variables.album_format}"
-                f" — **{score_or_nr(variables.aoty_user_score)}**"
+                f" — **{score_or_missingr(variables.aoty_user_score)}**"
             )
 
 
@@ -849,7 +849,7 @@ class ArtistSortView(TimedDisableView):
             )
         else:
             releases_text = (
-                "Brak wydań dla wybranego "
+                "Brak releases dla wybranego "
                 "formatu i roku."
             )
 
@@ -882,10 +882,9 @@ class ArtistSortView(TimedDisableView):
         )
 
         filter_text = (
-            f"{self.selected_format_label} • "
-            f"{self.selected_genre_label} • "
-            f"{self.selected_year_label} • "
-            f"{sort_label}"
+            f"{self.selected_format_label}  •  "
+            f"{self.selected_genre_label}  •  "
+            f"{self.selected_year_label}  •  "
         )
         extra_filters = []
         if self.selected_decade is not None:
@@ -896,17 +895,17 @@ class ArtistSortView(TimedDisableView):
                 f"–{self.aoty_max if self.aoty_max is not None else '—'}"
             )
         if extra_filters:
-            filter_text += " • " + " • ".join(extra_filters)
+            filter_text += "  •  " + "  •  ".join(extra_filters)
 
         if len(filtered) > len(shown):
             footer = (
-                f"{filter_text} • "
-                f"pokazano {len(shown)} z {len(filtered)} wydań."
+                f"{filter_text}  •  "
+                f"pokazano {len(shown)} z {len(filtered)} releases."
             )
         else:
             footer = (
-                f"{filter_text} • "
-                f"{len(shown)} wydań."
+                f"{filter_text}  •  "
+                f"{len(shown)} releases."
             )
 
         set_aoty_footer(embed, footer)
@@ -998,7 +997,7 @@ class ArtistSortView(TimedDisableView):
         label="A–Z",
         style=discord.ButtonStyle.secondary,
         custom_id="title_asc",
-        row=1,
+        row=0,
     )
     async def title_asc_button(
         self,
@@ -1014,7 +1013,7 @@ class ArtistSortView(TimedDisableView):
         label="Z–A",
         style=discord.ButtonStyle.secondary,
         custom_id="title_desc",
-        row=1,
+        row=0,
     )
     async def title_desc_button(
         self,

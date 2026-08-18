@@ -93,6 +93,14 @@ def score_or_nr(score: Any) -> str:
         return f"{score_icon(None)} NR"
     return f"{score_icon(text)} {text}"
 
+def score_or_missing(score: Any) -> str:
+    """Render every missing aoty ratings info consistently as a white ``—`` marker."""
+
+    text = str(score or "").strip()
+    if not text or text.casefold() in {"nr", "n/r", "—", "?"}:
+        return f"{score_icon(None)} —"
+    return f"{score_icon(text)} {text}"
+
 
 def release_year_suffix(year: Any) -> str:
     """Return a title suffix only for a real cached release year."""

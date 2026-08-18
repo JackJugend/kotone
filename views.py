@@ -366,7 +366,7 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
             + " • ".join(scores)
         )
 
-    description = "\n".join(lines) if lines else "Brak tracklisty w SQLite i AOTY."
+    description = "\n".join(lines) if lines else "Brak tracklisty w kotone."
     embed = discord.Embed(
         title=f"{TRACKLIST_BUTTON} {variables.display_artist} — {variables.display_album}",
         url=variables.url or None,
@@ -377,7 +377,7 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
         embed.set_thumbnail(url=variables.cover)
     set_aoty_footer(
         embed,
-        f"AOTY tracklist • {variables.album_format} • oceny użytkowników",
+        f"AOTY tracklist  •  {variables.album_format}  •  oceny użytkowników",
     )
     return embed
 
