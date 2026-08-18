@@ -426,6 +426,7 @@ class RatingMonitor:
                     record_changes=True,
                     source="monitor",
                 )
+                DB.mark_notification_delivered(username)
                 sent_new += 1
                 await self._sleep(0.5)
 
@@ -447,6 +448,7 @@ class RatingMonitor:
                     record_changes=True,
                     source="monitor",
                 )
+                DB.mark_notification_delivered(username)
                 sent_changed += 1
                 await self._sleep(0.5)
 

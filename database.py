@@ -1563,6 +1563,63 @@ class Database:
                 (_bool_int(pending), canonical, str(album_id)),
             )
 
+    def mark_notification_delivered(
+        self,
+        username: str,
+        *,
+        delivered_at: float | None = None,
+    ) -> float:
+        """Persist the time of a confirmed Discord monitor delivery."""
+
+        canonical = self._require_monitored(username)
+        timestamp = float(delivered_at if delivered_at is not None else _now())
+        key = f"last_monitor_notification_at:{canonical.casefold()}"
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO meta(key, value) VALUES(?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, str(timestamp)),
+            )
+        return timestamp
+
+    def last_notification_at(self, username: str) -> float | None:
+        """Return the newest confirmed or legacy monitor delivery time."""
+
+        canonical = self._require_monitored(username)
+        key = f"last_monitor_notification_at:{canonical.casefold()}"
+        with self._lock:
+            meta_row = self.connection.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                (key,),
+            ).fetchone()
+            if meta_row is not None:
+                try:
+                    return float(meta_row["value"])
+                except (TypeError, ValueError):
+                    pass
+
+            # Older deployments wrote the post-delivery rating event but did
+            # not yet keep the explicit marker above.
+            change_row = self.connection.execute(
+                """
+                SELECT MAX(detected_at) AS delivered_at
+                FROM change_history
+                WHERE username = ?
+                  AND entity_type = 'rating'
+                  AND event_type IN (
+                      'rating_added', 'rating_restored', 'score_changed'
+                  )
+                  AND source = 'monitor'
+                """,
+                (canonical,),
+            ).fetchone()
+            if change_row and change_row["delivered_at"] is not None:
+                return float(change_row["delivered_at"])
+
+        return None
+
     def get_ratings_map(self, username: str, *, include_inactive: bool = False) -> dict[str, dict]:
         canonical = self.canonical_username(username)
         if canonical is None:
@@ -2123,11 +2180,14 @@ class Database:
         canonical = self._require_monitored(username)
         records = list(records)
         now = _now()
+        notification_cutoff = self.last_notification_at(canonical)
         summary = {
             "total": len(records),
             "added": 0,
             "updated": 0,
             "unchanged": 0,
+            "queued_notifications": 0,
+            "notification_cutoff": notification_cutoff,
             "unmatched": [],
         }
         release_detail_hints: dict[str, dict] = {}
@@ -2364,18 +2424,32 @@ class Database:
                     self._upsert_rating_locked(
                         canonical,
                         item,
-                        record_history=True,
+                        # Delivery by the monitor owns the final "added"
+                        # history entry. Until Discord confirms it, keep only
+                        # a durable pending marker so a restart cannot lose it.
+                        record_history=False,
                         active=True,
-                        record_changes=True,
+                        record_changes=False,
                         source="official_csv_import",
+                        record_new_change=False,
+                    )
+                    try:
+                        rated_at = float(record.get("sort_timestamp") or 0)
+                    except (TypeError, ValueError):
+                        rated_at = 0.0
+                    queue_notification = bool(
+                        notification_cutoff is not None
+                        and rated_at > notification_cutoff
                     )
                     self.connection.execute(
                         """
-                        UPDATE ratings SET notify_pending = 0
+                        UPDATE ratings SET notify_pending = ?
                         WHERE username = ? AND album_id = ?
                         """,
-                        (canonical, album_id),
+                        (int(queue_notification), canonical, album_id),
                     )
+                    if queue_notification:
+                        summary["queued_notifications"] += 1
                     summary["added"] += 1
                     continue
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +30,7 @@ try:
         setup_rating_import_command,
     )
     from commands.manual import setup_manual_command  # noqa: E402
+    from monitor import MONITOR_STATE_VERSION, RatingMonitor  # noqa: E402
 except Exception as exc:  # pragma: no cover - dependency-limited local runs
     DISCORD_IMPORT_ERROR = exc
 
@@ -180,11 +183,17 @@ class RatingImportDatabaseTests(unittest.TestCase):
                 'tripleS,"World Wild Women",2026,Single,50,2026-08-17'
             )
         )
+        self.db.mark_notification_delivered(
+            "enso",
+            delivered_at=parsed["rows"][0]["sort_timestamp"] - 1,
+        )
         result = self.db.import_official_ratings("enso", parsed["rows"])
         rating = self.db.get_rating("enso", "1981558")
         release = self.db.get_release_details("1981558")
         self.assertEqual(result["added"], 1)
+        self.assertEqual(result["queued_notifications"], 1)
         self.assertEqual(rating["score"], "50")
+        self.assertTrue(rating["notify_pending"])
         self.assertEqual(rating["cover"], parsed["rows"][0]["release_details_hint"]["cover"])
         self.assertEqual(release["user_score"], "71")
         self.assertEqual(release["ratings_count"], "20")
@@ -203,6 +212,33 @@ class RatingImportDatabaseTests(unittest.TestCase):
         self.assertEqual(result["unmatched"], [])
         self.assertEqual(self.db.get_rating("enso", "722118")["score"], "73")
         self.assertEqual(self.db.get_rating("enso", "732107")["score"], "80")
+        self.assertFalse(self.db.get_rating("enso", "722118")["notify_pending"])
+        self.assertFalse(self.db.get_rating("enso", "732107")["notify_pending"])
+
+    def test_import_queues_only_new_rows_after_last_notification(self):
+        cutoff = 1_700_000_000.0
+        self.db.mark_notification_delivered("enso", delivered_at=cutoff)
+        older = {
+            **self._record(artist="Older", album="Older", score="70"),
+            "album_id_hint": "older-id",
+            "album_url_hint": "https://example.invalid/older",
+            "sort_timestamp": cutoff - 1,
+        }
+        newer = {
+            **self._record(artist="Newer", album="Newer", score="90"),
+            "album_id_hint": "newer-id",
+            "album_url_hint": "https://example.invalid/newer",
+            "sort_timestamp": cutoff + 1,
+        }
+        result = self.db.import_official_ratings("enso", [older, newer])
+        self.assertEqual(result["added"], 2)
+        self.assertEqual(result["queued_notifications"], 1)
+        self.assertFalse(
+            self.db.get_rating("enso", "older-id")["notify_pending"]
+        )
+        self.assertTrue(
+            self.db.get_rating("enso", "newer-id")["notify_pending"]
+        )
 
     def test_manual_review_and_like_preserve_tracks_and_become_due(self):
         self.db.upsert_rating(
@@ -364,6 +400,58 @@ class RatingImportCommandTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("manual", command_names)
         finally:
             await client.close()
+
+
+@unittest.skipIf(DISCORD_IMPORT_ERROR is not None, str(DISCORD_IMPORT_ERROR))
+class MonitorNotificationMarkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_and_changed_delivery_both_advance_import_cutoff(self):
+        fake_db = MagicMock()
+        fake_db.canonical_username.return_value = "enso"
+        fake_db.sync_timestamps.return_value = {
+            "ratings_synced_at": time.time(),
+            "full_ratings_synced_at": time.time(),
+        }
+        fake_db.get_monitor_version.return_value = MONITOR_STATE_VERSION
+        fake_db.get_ratings_map.return_value = {
+            "changed": {
+                "album_id": "changed",
+                "score": "70",
+                "active": True,
+                "notify_pending": False,
+            }
+        }
+        fake_db.get_avatar.return_value = None
+        ratings = [
+            {
+                "album_id": "new",
+                "artist": "Artist",
+                "album": "New",
+                "score": "90",
+            },
+            {
+                "album_id": "changed",
+                "artist": "Artist",
+                "album": "Changed",
+                "score": "80",
+            },
+        ]
+        fake_data = MagicMock()
+        fake_data.fetch_ratings_live = AsyncMock(return_value=ratings)
+
+        instance = RatingMonitor(MagicMock())
+        instance._db_only_enabled = MagicMock(return_value=False)
+        instance._challenge_remaining_seconds = MagicMock(return_value=0.0)
+        instance._refresh_profile_if_due = AsyncMock()
+        instance.send_new_rating = AsyncMock(return_value=True)
+        instance.send_changed_rating = AsyncMock(return_value=True)
+        instance._sleep = AsyncMock()
+
+        with patch("monitor.DB", fake_db), patch("monitor.DATA", fake_data):
+            result = await instance.check_user("enso", allow_full=False)
+
+        self.assertEqual(result["sent_new"], 1)
+        self.assertEqual(result["sent_changed"], 1)
+        self.assertEqual(fake_db.mark_notification_delivered.call_count, 2)
 
 
 if __name__ == "__main__":

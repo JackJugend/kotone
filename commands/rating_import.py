@@ -111,10 +111,14 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             f"• dodane: **{result['added']}**\n"
             f"• zaktualizowane: **{result['updated']}**\n"
             f"• bez zmian: **{result['unchanged']}**\n"
+            f"• nowe powiadomienia w kolejce: "
+            f"**{result['queued_notifications']}**\n"
             f"• nierozpoznane/błędne: **{len(unresolved)}**\n"
             f"• duplikaty w CSV: **{parsed['duplicates']}**\n\n"
             "Istniejące reviews, likes, Track Ratings i metadane nie zostały "
-            "usunięte. Brakujące pozycje nie zostały oznaczone jako usunięte."
+            "usunięte. Brakujące pozycje nie zostały oznaczone jako usunięte. "
+            "Nowe rekordy ocenione po ostatnim potwierdzonym powiadomieniu "
+            "oczekują na pojedynczą wysyłkę monitora."
         )
         if unresolved:
             report = discord.File(
