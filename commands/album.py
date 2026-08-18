@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import Mapping
 
 import discord
 import requests
@@ -19,6 +20,57 @@ from shared import (
 from views import AlbumRatingView
 
 DISCOGRAPHY_CACHE_TTL = 900
+
+
+def _clean_presence_text(value) -> str | None:
+    value = str(value or "").strip()
+    if not value or value.casefold() in {"none", "unknown", "n/a"}:
+        return None
+    return value
+
+
+def _presence_asset_text(activity) -> str | None:
+    """Read the optional album caption exposed by compatible music RPCs."""
+
+    for source in (activity, getattr(activity, "assets", None)):
+        if source is None:
+            continue
+        value = getattr(source, "large_text", None)
+        if value:
+            return _clean_presence_text(value)
+        if isinstance(source, Mapping):
+            value = source.get("large_text")
+            if value:
+                return _clean_presence_text(value)
+    return None
+
+
+def _music_from_presence(member) -> tuple[str, str, str] | None:
+    """Return artist, album and source from structured Discord music presence.
+
+    Spotify is the only standardized Discord music activity. Other programs
+    (Tidal, Apple Music clients, Last.fm integrations, etc.) are accepted only
+    when their RPC exposes both an artist/state and an album asset caption; a
+    song title alone is never guessed to be an album.
+    """
+
+    for activity in getattr(member, "activities", ()) or ():
+        if isinstance(activity, discord.Spotify):
+            artists = list(getattr(activity, "artists", ()) or ())
+            artist = _clean_presence_text(", ".join(map(str, artists)))
+            album = _clean_presence_text(getattr(activity, "album", None))
+            if artist and album:
+                return artist, album, "Spotify"
+
+        album = _presence_asset_text(activity)
+        artist = _clean_presence_text(getattr(activity, "state", None))
+        if artist and artist.casefold().startswith("by "):
+            artist = artist[3:].strip() or None
+        source = _clean_presence_text(getattr(activity, "name", None))
+        if artist and album and source:
+            return artist, album, source
+
+    return None
 
 
 def setup_album_command(tree: discord.app_commands.CommandTree):
@@ -123,8 +175,8 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         description="Pokazuje wydanie z AOTY.",
     )
     @discord.app_commands.describe(
-        artist="Artysta na AOTY",
-        album="Wydanie — nazwa może być niedokładna",
+        artist="Artysta na AOTY (opcjonalnie)",
+        album="Wydanie — opcjonalnie; bez obu pól używa Rich Presence",
     )
     @discord.app_commands.autocomplete(
         artist=artist_autocomplete,
@@ -132,10 +184,32 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
     )
     async def album_command(
         interaction: discord.Interaction,
-        artist: str,
-        album: str,
+        artist: str | None = None,
+        album: str | None = None,
     ):
         await interaction.response.defer()
+
+        artist = str(artist or "").strip()
+        album = str(album or "").strip()
+        if bool(artist) != bool(album):
+            await interaction.followup.send(
+                "❌ Podaj jednocześnie **artist** i **album**, albo zostaw oba pola puste."
+            )
+            return
+
+        if not artist:
+            member = interaction.user
+            if interaction.guild is not None:
+                member = interaction.guild.get_member(interaction.user.id) or member
+            presence = _music_from_presence(member)
+            if presence is None:
+                await interaction.followup.send(
+                    "❌ Nie widzę aktywnego albumu w Twoim Rich Presence. "
+                    "Włącz Spotify/RPC i upewnij się, że Presence Intent jest aktywny."
+                )
+                return
+            artist, album, source = presence
+            print(f"[ALBUM] Rich Presence ({source}): {artist} — {album}")
 
         try:
             # A cached match is authoritative enough to select the requested

@@ -44,6 +44,10 @@ from settings import APPLICATION_ID, GUILD_ID, TOKEN
 
 
 intents = discord.Intents.default()
+# /album without arguments may read the invoking member's Spotify or compatible
+# Rich Presence. The matching privileged intent must also be enabled once in
+# Discord Developer Portal before Discord sends those activities to the bot.
+intents.presences = True
 
 activity = discord.Activity(
     type=discord.ActivityType.watching,
