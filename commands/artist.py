@@ -182,20 +182,20 @@ def _artist_relation_text(items):
 
 def _artist_header_text(discography):
     """Metadata block displayed above the releases in /artist."""
-    if discography.get("source") == "SQLite cache":
-        artist_name = display_romanized_name(
-            discography.get("artist") or "Nieznany artysta"
-        )
-        artist_url = discography.get("url")
-        artist_link = (
-            f"[{artist_name}]({artist_url})"
-            if artist_url
-            else artist_name
-        )
+    # if discography.get("source") == "kotone db":
+    #     artist_name = display_romanized_name(
+    #         discography.get("artist") or "Nieznany artysta"
+    #     )
+    #     artist_url = discography.get("url")
+    #     artist_link = (
+    #         f"[{artist_name}]({artist_url})"
+    #         if artist_url
+    #         else artist_name
+    #     )
         release_count = len(discography.get("releases") or [])
         lines = [
             f"**{artist_link}**\n"
-            f"💾 **Baza danych kotone: {release_count} zapisanych wydań.**"
+            f"\💾 **Baza danych kotone: {release_count} zapisanych wydań.**"
         ]
         genres_text = discography.get("genres_text")
         if genres_text:
@@ -839,7 +839,7 @@ class ArtistSortView(TimedDisableView):
             lines.append(
                 f"**{score_or_missing(variables.aoty_user_score)}**  "
                 f"**[{variables.display_album}]({release['url']})**"
-                f"  —  {variables.release_date}  ·  {variables.album_format}"
+                f"  —  {variables.release_date}  •  {variables.album_format}"
             )
 
 
