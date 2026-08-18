@@ -9,6 +9,7 @@ from settings import RATING_FORMATS
 from shared import (
     load_release_variables,
     rating_flags_text,
+    release_year_suffix,
     score_color,
     score_icon,
     set_aoty_footer,
@@ -32,7 +33,7 @@ def _rating_embed(username, item, avatar, variables):
         title=(
             f"{score_icon(variables.score)} "
             f"{variables.display_artist} — "
-            f"**{variables.display_album}** ({variables.year})"
+            f"**{variables.display_album}**{release_year_suffix(variables.year)}"
         ),
         url=variables.url,
         description="\n".join(description_lines),

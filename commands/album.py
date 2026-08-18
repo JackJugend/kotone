@@ -15,8 +15,10 @@ from presence_cache import PRESENCE_CACHE
 from shared import (
     load_release_variables,
     rating_flags_text,
+    release_year_suffix,
     score_color,
     score_icon,
+    score_or_nr,
     set_aoty_footer,
 )
 from views import AlbumRatingView
@@ -350,8 +352,8 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
         embed = discord.Embed(
             title=(
-                f"**{variables.display_album}** "
-                f"({variables.year})"
+                f"**{variables.display_album}**"
+                f"{release_year_suffix(variables.year)}"
             ),
             url=variables.url,
             description="\n".join(description_lines) or None,
@@ -399,7 +401,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             if rating is not None:
                 rating_value = f"{score_icon(rating)} {rating}{flags_text}"
             else:
-                rating_value = f"— **NR**{flags_text}"
+                rating_value = f"{score_or_nr(None)}{flags_text}"
 
             embed.add_field(
                 name=username,

@@ -9,6 +9,7 @@ from settings import RATING_FORMATS
 from shared import (
     load_release_variables,
     rating_flags_text,
+    release_year_suffix,
     score_color,
     score_icon,
     set_aoty_footer,
@@ -202,8 +203,8 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         embed = discord.Embed(
             title=(
                 f"{score_icon(variables.score)} "
-                f"{variables.display_artist} — **{variables.display_album}** "
-                f"({variables.year})"
+                f"{variables.display_artist} — **{variables.display_album}**"
+                f"{release_year_suffix(variables.year)}"
             ),
             url=variables.url,
             description="\n".join(description_lines),
@@ -270,36 +271,23 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             ),
         ]
 
-        if variables.genres:
-            details_lines.append(f"**Primary genres:** {variables.genres_text}")
-
-        if variables.secondary_genres:
-            details_lines.append(
+        details_lines.extend(
+            [
+                f"**Primary genres:** {variables.genres_text or '—'}",
                 (
-                    f"**Secondary genres:** "
-                    f"{', '.join(variables.secondary_genres)}"
-                )
-            )
-
-        if variables.vibes:
-            details_lines.append(
-                (
-                    f"**Vibes:** "
-                    f"{', '.join(variables.vibes)}"
-                )
-            )
-
-        if (
-            variables.year_ranking_text
-            and variables.year_ranking_text != "—"
-        ):
-            details_lines.append(
-                (
-                    f"**{variables.ranking_year or variables.year} "
-                    f"Ratings:** "
-                    f"{variables.year_ranking_text}"
-                )
-            )
+                    "**Secondary genres:** "
+                    f"{variables.secondary_genres_text or '—'}"
+                ),
+                f"**Vibes:** {variables.vibes_text or '—'}",
+            ]
+        )
+        ranking_year = variables.ranking_year or variables.year or "Year"
+        if ranking_year == "—":
+            ranking_year = "Year"
+        details_lines.append(
+            f"**{ranking_year} Ratings:** "
+            f"{variables.year_ranking_text or '—'}"
+        )
 
         details_embed = discord.Embed(
             title=(
@@ -338,14 +326,14 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             number = track.get("number") or "—"
             title = track.get("title") or "Nieznany utwór"
             duration = track.get("duration")
-            public_score = track.get("user_score") or "NR"
+            public_score = track.get("user_score")
 
             line = f"**{number}.** {title}"
 
             if duration:
                 line += f" `{duration}`"
 
-            line += f" — **{public_score}**"
+            line += f" — **{score_or_nr(public_score)}**"
             track_lines.append(line)
 
         if not track_lines:

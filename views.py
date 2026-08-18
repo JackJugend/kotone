@@ -14,6 +14,7 @@ from shared import (
     build_release_variables,
     load_release_variables,
     rating_flags_text,
+    score_or_nr,
     score_color,
     score_icon,
     set_aoty_footer,
@@ -131,6 +132,13 @@ def _artist_action_available(item: dict | None) -> bool:
     return bool(_artist_name(item))
 
 
+def _details_value(value: object) -> str:
+    """Normalize optional detail-tab values without hiding their fields."""
+
+    text = str(value or "").strip()
+    return text if text and text not in {"?", "Brak danych", "None"} else "—"
+
+
 async def build_release_details_embed(
     item: dict,
     *,
@@ -150,20 +158,20 @@ async def build_release_details_embed(
         f"**Duration:** {variables.duration}",
         f"**Format:** {variables.album_format}",
         f"**Label:** {variables.labels_text}",
+        f"**Genre:** {_details_value(variables.genres_text)}",
+        (
+            "**Secondary genres:** "
+            f"{_details_value(variables.secondary_genres_text)}"
+        ),
+        f"**Vibes:** {_details_value(variables.vibes_text)}",
     ]
-    if variables.genres:
-        lines.append(f"**Genre:** {variables.genres_text}")
-    if variables.secondary_genres:
-        lines.append(
-            f"**Secondary genres:** {', '.join(variables.secondary_genres)}"
-        )
-    if variables.vibes:
-        lines.append(f"**Vibes:** {', '.join(variables.vibes)}")
-    if variables.year_ranking_text and variables.year_ranking_text != "—":
-        lines.append(
-            f"**{variables.ranking_year or variables.year} Ratings:** "
-            f"{variables.year_ranking_text}"
-        )
+    ranking_year = _details_value(variables.ranking_year)
+    if ranking_year == "—":
+        ranking_year = _details_value(variables.year)
+    lines.append(
+        f"**{ranking_year if ranking_year != '—' else 'Year'} Ratings:** "
+        f"{_details_value(variables.year_ranking_text)}"
+    )
 
     embed = discord.Embed(
         title=f"{DETAILS_BUTTON} {variables.display_artist} — {variables.display_album}",
@@ -824,7 +832,7 @@ class RatingSelect(discord.ui.Select):
         for index, item in enumerate(items):
             artist = display_romanized_name(item.get("artist") or "—")
             album = display_romanized_name(item.get("album") or item.get("title") or "—")
-            score = item.get("score") or "NR"
+            score = score_or_nr(item.get("score"))
             flags = rating_flags_text(item)
             description = f"{score} {flags}".strip()
             options.append(
@@ -992,7 +1000,7 @@ class UserRatingSelect(discord.ui.Select):
 
         for username in usernames[:25]:
             info = rating_infos.get(username, {})
-            score = info.get("score") or "NR"
+            score = score_or_nr(info.get("score"))
             flags = rating_flags_text(info)
             options.append(
                 discord.SelectOption(
@@ -1302,7 +1310,7 @@ class ProfilePositionSelect(discord.ui.Select):
                     label=f"{artist} — {album}"[:100],
                     value=f"rating:{absolute_index}",
                     description=(
-                        f"Ocena • {item.get('score') or 'NR'} "
+                        f"Ocena • {score_or_nr(item.get('score'))} "
                         f"{rating_flags_text(item)}"
                     ).strip()[:100],
                     default=(

@@ -84,6 +84,24 @@ def score_icon(score: Any) -> str:
     return "\⚫"
 
 
+def score_or_nr(score: Any) -> str:
+    """Render every missing rating consistently as a white ``NR`` marker."""
+
+    text = str(score or "").strip()
+    if not text or text.casefold() in {"nr", "n/r", "—", "?"}:
+        return f"{score_icon(None)} NR"
+    return f"{score_icon(text)} {text}"
+
+
+def release_year_suffix(year: Any) -> str:
+    """Return a title suffix only for a real cached release year."""
+
+    text = str(year or "").strip()
+    if not text or text.casefold() in {"—", "?", "brak danych", "none"}:
+        return ""
+    return f" ({text})"
+
+
 @dataclass(slots=True)
 class ReleaseVariables:
     # Dane oceny użytkownika.
