@@ -177,6 +177,28 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     f"project dependencies unavailable: {PROJECT_IMPORT_ERROR}",
 )
 class BackgroundFairnessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_db_only_skips_aoty_but_allows_musicbrainz_fallback(self):
+        worker = background_module.BackgroundWorker(SimpleNamespace())
+        calls = []
+
+        async def enrich(username, *, musicbrainz_only=False):
+            calls.append((username, musicbrainz_only))
+            return {"releases": 1, "details": 0, "errors": 0}
+
+        with (
+            patch.object(background_module, "USERS", ["enso"]),
+            patch.object(background_module.HTTP, "db_only_enabled", return_value=True),
+            patch.object(worker, "_enrich_one_user", side_effect=enrich),
+            patch.object(
+                background_module.DATA,
+                "archive_profile_ratings",
+                side_effect=AssertionError("/dbonly must not call AOTY archive"),
+            ),
+        ):
+            await worker._run_once()
+
+        self.assertEqual(calls, [("enso", True)])
+
     async def test_cursor_advances_after_user_that_really_did_archive_work(self):
         worker = background_module.BackgroundWorker(SimpleNamespace())
         calls = []

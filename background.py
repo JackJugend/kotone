@@ -96,8 +96,20 @@ class BackgroundWorker:
         self.last_run_at = time.time()
 
         if HTTP.db_only_enabled():
+            # /dbonly means no AOTY requests, not no useful background work.
+            # MusicBrainz can still fill missing public metadata safely.
+            for username in self._ordered_users_from(self._enrich_cursor):
+                result = await self._enrich_one_user(
+                    username,
+                    musicbrainz_only=True,
+                )
+                if result.get("releases"):
+                    self._enrich_cursor = self._cursor_after(username)
+                    self.last_success_at = time.time()
+                    self.last_error = None
+                    return ENRICH_WORKER_REST_SECONDS
             self.last_success_at = self.last_run_at
-            self.last_error = "Tryb /dbonly aktywny; maintenance AOTY pominięty."
+            self.last_error = "Tryb /dbonly aktywny; AOTY pominięte."
             return ARCHIVE_WORKER_IDLE_SECONDS
 
         # During a real AOTY challenge there is no value in retrying an AOTY
