@@ -234,6 +234,19 @@ AOTY_CHALLENGE_STATE_FILE = os.path.join(
     DATA_DIR or BASE_DIR,
     "aoty_challenge_state.json",
 )
+# Operator-controlled hard pause.  This lives beside the challenge cooldown on
+# the persistent Railway volume, so toggling /dbonly never requires a deploy.
+AOTY_DB_ONLY_STATE_FILE = os.path.join(
+    DATA_DIR or BASE_DIR,
+    "aoty_db_only_state.json",
+)
+# Discord username allowed to toggle the global AOTY pause.  An optional
+# config override keeps the code reusable without granting the control to
+# every configured AOTY profile.
+AOTY_DB_ONLY_ADMIN_USERNAME = (
+    str(CONFIG.get("aoty_db_only_admin_username", "enso")).strip().casefold()
+    or "enso"
+)
 AOTY_CACHE_MAX_ENTRIES = _runtime_int("aoty_cache_max_entries", 512, 32)
 AOTY_REQUEST_TIMEOUT_CONNECT = _runtime_float("aoty_connect_timeout", 8.0, 2.0)
 AOTY_REQUEST_TIMEOUT_READ = _runtime_float("aoty_read_timeout", 25.0, 5.0)

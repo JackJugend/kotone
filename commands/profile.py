@@ -67,13 +67,16 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         username = username.strip()
 
         try:
-            # For configured users this is a zero-request SQLite read. For an
-            # outside profile, get_profile performs the single compact AOTY
-            # lookup itself, avoiding a separate existence request.
+            # Command rendering is always SQLite-only. AOTY updates happen
+            # exclusively through the monitor/background worker.
             profile = await DATA.get_profile(
                 username,
                 recent_limit=50,
+                allow_network=False,
             )
+        except ValueError as exc:
+            await interaction.followup.send(f"ℹ️ {exc}")
+            return
         except aoty.AOTYUserNotFound:
             await interaction.followup.send(
                 f"❌ Konto AOTY **{username}** nie istnieje."

@@ -37,6 +37,7 @@ from settings import (
     AOTY_CACHE_MAX_ENTRIES,
     AOTY_CHALLENGE_COOLDOWN,
     AOTY_CHALLENGE_STATE_FILE,
+    AOTY_DB_ONLY_STATE_FILE,
     AOTY_CIRCUIT_COOLDOWN,
     AOTY_CIRCUIT_FAILURES,
     AOTY_MAX_RETRIES,
@@ -73,6 +74,10 @@ class ExternalChallenge(ExternalUnavailable):
     def __init__(self, message: str, retry_after: float):
         super().__init__(message)
         self.retry_after = max(0.0, float(retry_after))
+
+
+class ExternalRequestsPaused(ExternalUnavailable):
+    """AOTY access was deliberately paused through the /dbonly switch."""
 
 
 @dataclass(slots=True)
@@ -217,10 +222,14 @@ class ResilientHTTPClient:
         self._challenge_open_until = 0.0
         self._challenge_until_epoch = 0.0
         self._challenge_last_error: str | None = None
+        self._db_only_enabled = False
+        self._db_only_updated_at: float | None = None
+        self._db_only_updated_by: str | None = None
         self._last_error: str | None = None
         self._request_count = 0
         self._cache_hits = 0
         self._restore_challenge_state()
+        self._restore_db_only_state()
 
     def configure_headers(self, headers: dict[str, str]) -> None:
         self.session.headers.update(headers)
@@ -358,6 +367,68 @@ class ResilientHTTPClient:
         except OSError:
             pass
 
+    def _restore_db_only_state(self) -> None:
+        """Restore the deliberate AOTY pause after a restart or deploy."""
+
+        try:
+            with open(AOTY_DB_ONLY_STATE_FILE, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+
+        if not isinstance(payload, dict):
+            return
+        self._db_only_enabled = bool(payload.get("enabled"))
+        try:
+            self._db_only_updated_at = float(payload.get("updated_at") or 0) or None
+        except (TypeError, ValueError):
+            self._db_only_updated_at = None
+        actor = str(payload.get("updated_by") or "").strip()
+        self._db_only_updated_by = actor or None
+
+    def _persist_db_only_state_locked(self) -> None:
+        """Persist the manual pause atomically; never block bot operation."""
+
+        path = AOTY_DB_ONLY_STATE_FILE
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            temporary = f"{path}.tmp"
+            with open(temporary, "w", encoding="utf-8") as file:
+                json.dump(
+                    {
+                        "enabled": self._db_only_enabled,
+                        "updated_at": self._db_only_updated_at,
+                        "updated_by": self._db_only_updated_by,
+                    },
+                    file,
+                )
+            os.replace(temporary, path)
+        except OSError:
+            pass
+
+    def set_db_only(self, enabled: bool, *, actor: str | None = None) -> bool:
+        """Toggle the persisted global no-request mode and return its state."""
+
+        with self._circuit_lock:
+            self._db_only_enabled = bool(enabled)
+            self._db_only_updated_at = time.time()
+            clean_actor = str(actor or "").strip()
+            self._db_only_updated_by = clean_actor or None
+            self._persist_db_only_state_locked()
+            return self._db_only_enabled
+
+    def db_only_enabled(self) -> bool:
+        with self._circuit_lock:
+            return self._db_only_enabled
+
+    def _active_db_only_pause(self) -> ExternalRequestsPaused | None:
+        with self._circuit_lock:
+            if not self._db_only_enabled:
+                return None
+        return ExternalRequestsPaused(
+            "Tryb /dbonly jest aktywny: AOTY nie jest teraz sprawdzane."
+        )
+
     @staticmethod
     def _challenge_issue(text: str) -> str | None:
         """Return a reason when a response is an anti-bot interstitial."""
@@ -475,6 +546,14 @@ class ResilientHTTPClient:
                 return fresh
 
         stale_result = self._cache_get(url, stale=True) if allow_stale else None
+
+        manual_pause = self._active_db_only_pause()
+        if manual_pause is not None:
+            # Reading an in-memory cached page does not contact AOTY. It keeps
+            # an already-open command useful while guaranteeing no new probe.
+            if stale_result is not None:
+                return stale_result
+            raise manual_pause
 
         active_challenge = self._active_challenge()
         if active_challenge is not None:
@@ -666,6 +745,9 @@ class ResilientHTTPClient:
                 else None
             ),
             "challenge_last_error": challenge_last_error,
+            "db_only": self._db_only_enabled,
+            "db_only_updated_at": self._db_only_updated_at,
+            "db_only_updated_by": self._db_only_updated_by,
             "consecutive_failures": consecutive_failures,
             "last_error": last_error,
             "cache_entries": cache_entries,

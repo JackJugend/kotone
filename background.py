@@ -13,7 +13,7 @@ import time
 import discord
 
 from database import DB
-from http_client import PRIORITY_MAINTENANCE
+from http_client import HTTP, PRIORITY_MAINTENANCE
 from services import DATA
 from settings import (
     ARCHIVE_WORKER_ERROR_SLEEP,
@@ -88,6 +88,11 @@ class BackgroundWorker:
     async def _run_once(self) -> float:
         """Do one bounded unit of maintenance and return the next sleep time."""
         self.last_run_at = time.time()
+
+        if HTTP.db_only_enabled():
+            self.last_success_at = self.last_run_at
+            self.last_error = "Tryb /dbonly aktywny; maintenance AOTY pominięty."
+            return ARCHIVE_WORKER_IDLE_SECONDS
 
         # Phase 1: ratings first. Exactly one configured user's bounded format
         # batch per pass keeps pressure predictable, while the short rest means

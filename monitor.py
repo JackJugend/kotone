@@ -65,6 +65,14 @@ class RatingMonitor:
             return 0.0
 
     @staticmethod
+    def _db_only_enabled() -> bool:
+        """Read the operator switch without sending an AOTY request."""
+        try:
+            return bool(aoty.HTTP.status().get("db_only"))
+        except Exception:
+            return False
+
+    @staticmethod
     def _cooldown_text(seconds: float) -> str:
         total = max(0, int(float(seconds) + 0.999))
         hours, remainder = divmod(total, 3600)
@@ -244,6 +252,14 @@ class RatingMonitor:
 
         async with lock:
             prefix = "MANUAL" if manual else "AOTY"
+            if self._db_only_enabled():
+                return {
+                    "db_only": True,
+                    "error": (
+                        "Tryb /dbonly jest aktywny; synchronizacja AOTY "
+                        "została celowo pominięta."
+                    ),
+                }
             cooldown_seconds = self._challenge_remaining_seconds()
             if cooldown_seconds > 0:
                 message = (
@@ -473,6 +489,18 @@ class RatingMonitor:
         while not self.client.is_closed() and not self._stop_event.is_set():
             self.last_cycle_at = time.time()
             cycle_ok = True
+
+            if self._db_only_enabled():
+                message = (
+                    "Tryb /dbonly aktywny; pominięto cały cykl synchronizacji "
+                    "bez requestów do AOTY."
+                )
+                print(f"[AOTY] {message}")
+                self.last_success_at = time.time()
+                self.last_error = message
+                print(f"[BOT] Następne sprawdzenie za {CHECK_INTERVAL} sekund.")
+                await self._sleep(CHECK_INTERVAL)
+                continue
 
             cooldown_seconds = self._challenge_remaining_seconds()
             if cooldown_seconds > 0:

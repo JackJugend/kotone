@@ -28,6 +28,7 @@ import services  # noqa: E402
 from database import Database  # noqa: E402
 from http_client import (  # noqa: E402
     ExternalChallenge,
+    ExternalRequestsPaused,
     PageResult,
     ResilientHTTPClient,
 )
@@ -464,12 +465,42 @@ class HTTPRetryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="kotone-http-test-"))
         self.challenge_file = self.tmp / "challenge.json"
+        self.db_only_file = self.tmp / "db-only.json"
         self.original_challenge_file = http_client.AOTY_CHALLENGE_STATE_FILE
+        self.original_db_only_file = http_client.AOTY_DB_ONLY_STATE_FILE
         http_client.AOTY_CHALLENGE_STATE_FILE = str(self.challenge_file)
+        http_client.AOTY_DB_ONLY_STATE_FILE = str(self.db_only_file)
 
     def tearDown(self):
         http_client.AOTY_CHALLENGE_STATE_FILE = self.original_challenge_file
+        http_client.AOTY_DB_ONLY_STATE_FILE = self.original_db_only_file
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_db_only_pause_blocks_requests_and_survives_restart(self):
+        client = ResilientHTTPClient()
+        calls = []
+
+        def forbidden_get(*_args, **_kwargs):
+            calls.append(True)
+            raise AssertionError("/dbonly must not contact AOTY")
+
+        client.session.get = forbidden_get
+        self.assertTrue(client.set_db_only(True, actor="enso"))
+        self.assertTrue(self.db_only_file.exists())
+        self.assertTrue(client.status()["db_only"])
+
+        with self.assertRaises(ExternalRequestsPaused):
+            client.get(
+                "https://www.albumoftheyear.org/user/enso/",
+                use_cache=False,
+                allow_stale=False,
+            )
+        self.assertEqual(calls, [])
+
+        restarted = ResilientHTTPClient()
+        self.assertTrue(restarted.db_only_enabled())
+        self.assertFalse(restarted.set_db_only(False, actor="enso"))
+        self.assertFalse(restarted.status()["db_only"])
 
     def test_user_detail_does_not_fallback_during_global_challenge(self):
         original_fetch = aoty._fetch_user_release_page

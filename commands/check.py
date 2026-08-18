@@ -72,6 +72,13 @@ def setup_check_command(tree: discord.app_commands.CommandTree, monitor):
             )
             return
 
+        if result.get("db_only"):
+            await interaction.followup.send(
+                "⏸ AOTY jest chwilowo zablokowane przez `/dbonly`; "
+                "nie wysłano żadnego requestu."
+            )
+            return
+
         if result.get("error"):
             await interaction.followup.send(
                 f"❌ **{username}**: {result['error']}"

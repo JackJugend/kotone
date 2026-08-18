@@ -403,7 +403,13 @@ class DataService:
             DB.mark_sync_error(username, f"profile: {type(exc).__name__}: {exc}")
             raise
 
-    async def get_profile(self, username: str, *, recent_limit: int = 50) -> dict:
+    async def get_profile(
+        self,
+        username: str,
+        *,
+        recent_limit: int = 50,
+        allow_network: bool = True,
+    ) -> dict:
         """Return a cached profile, or one lightweight non-persistent lookup.
 
         Profiles outside config.json are deliberately never written to SQLite.
@@ -415,6 +421,11 @@ class DataService:
         username = str(username).strip()
 
         if not DB.is_monitored(username):
+            if not allow_network:
+                raise ValueError(
+                    "Profil nie jest w lokalnej bazie SQLite; "
+                    "Kotone nie sprawdza AOTY w komendach."
+                )
             profile = await _thread_call(
                 PRIORITY_INTERACTIVE,
                 aoty.get_profile_data,
@@ -569,6 +580,8 @@ class DataService:
         count = max(1, min(50, int(count)))
 
         if not DB.is_monitored(username):
+            if not allow_network:
+                return []
             return await _thread_call(
                 PRIORITY_INTERACTIVE,
                 aoty.get_recent_ratings,
