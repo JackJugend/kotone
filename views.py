@@ -377,7 +377,7 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
         embed.set_thumbnail(url=variables.cover)
     set_aoty_footer(
         embed,
-        f"AOTY track scores • {variables.album_format} • oceny userów z configu",
+        f"AOTY tracklist • {variables.album_format} • oceny użytkowników",
     )
     return embed
 
