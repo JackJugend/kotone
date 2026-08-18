@@ -245,7 +245,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         # Dodatkowy tab: Szczegóły.
         details_lines = [
             (
-                f"**AOTY User Score:** "
+                f"**AOTY Score:** "
                 f"{variables.aoty_user_score}"
             ),
             (
@@ -271,7 +271,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         ]
 
         if variables.genres:
-            details_lines.append(f"**Genre:** {variables.genres_text}")
+            details_lines.append(f"**Primary genres:** {variables.genres_text}")
 
         if variables.secondary_genres:
             details_lines.append(
