@@ -28,6 +28,7 @@ try:
     import discord  # noqa: E402
     from commands.artist import (  # noqa: E402
         ARTIST_VIEW_TIMEOUT_SECONDS,
+        MAX_ARTIST_RELEASES,
         ArtistSortView,
         _artist_header_text,
         setup_artist_command,
@@ -182,6 +183,45 @@ class ArtistViewTests(unittest.TestCase):
         header = _artist_header_text(discography)
         self.assertNotIn("**Fievel Is Glauque**", header)
         self.assertIn("Jazz Pop", header)
+        self.assertNotIn("Genre:", header)
+
+    def test_artist_pagination_only_appears_when_releases_need_two_pages(self):
+        discography = {"artist": "Artist", "url": "https://example.test"}
+        releases = [
+            {
+                "album_id": str(index),
+                "artist": "Artist",
+                "album": f"Album {index}",
+                "url": f"https://example.test/{index}",
+                "year": "2021",
+                "album_format": "LP",
+                "user_score": "80",
+            }
+            for index in range(MAX_ARTIST_RELEASES + 1)
+        ]
+        view = ArtistSortView(discography=discography, releases=releases)
+        button_ids = {
+            child.custom_id for child in view.children if isinstance(child, discord.ui.Button)
+        }
+        self.assertIn("artist_previous_page", button_ids)
+        self.assertIn("artist_next_page", button_ids)
+        self.assertTrue(view.previous_page_button.disabled)
+        self.assertFalse(view.next_page_button.disabled)
+        self.assertEqual(view.score_desc_button.label, "Ocena ↓")
+        self.assertEqual(view.title_asc_button.label, "A–Z")
+        self.assertEqual(view.newest_button.label, "Najnowsze")
+
+        one_page = ArtistSortView(
+            discography=discography,
+            releases=releases[:MAX_ARTIST_RELEASES],
+        )
+        one_page_ids = {
+            child.custom_id
+            for child in one_page.children
+            if isinstance(child, discord.ui.Button)
+        }
+        self.assertNotIn("artist_previous_page", one_page_ids)
+        self.assertNotIn("artist_next_page", one_page_ids)
 
     def test_genre_dropdown_refreshes_its_active_filter_label(self):
         discography = {"artist": "Artist", "url": "https://example.test"}

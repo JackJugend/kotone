@@ -207,9 +207,9 @@ def _artist_header_text(discography):
     genres_text = genres_text or discography.get("genres_text")
 
     if genres_text:
-        lines.append(
-            f"**Genre:** {genres_text}"
-        )
+        # The line already follows the score summary; a ``Genre:`` label made
+        # long cached genre lists wrap unnecessarily.
+        lines.append(genres_text)
 
     relation_label = discography.get(
         "relation_label"
@@ -294,6 +294,7 @@ class ArtistFormatSelect(discord.ui.Select):
 
         view = self.artist_view
         view.selected_format = self.values[0]
+        view.reset_page()
 
         if view.selected_year not in {None, *view.available_years()}:
             view.selected_year = None
@@ -379,6 +380,7 @@ class ArtistPeriodSelect(discord.ui.Select):
             view.selected_year = value.split(":", 1)[1]
         elif value.startswith("decade:"):
             view.selected_decade = int(value.split(":", 1)[1])
+        view.reset_page()
         view.refresh_controls()
         await interaction.edit_original_response(
             embed=await view.build_embed(),
@@ -430,6 +432,7 @@ class ArtistGenreSelect(discord.ui.Select):
         await interaction.response.defer()
         view = self.artist_view
         view.selected_genre = self.values[0]
+        view.reset_page()
         if view.selected_year not in {None, *view.available_years()}:
             view.selected_year = None
         if view.selected_decade not in {None, *view.available_decades()}:
@@ -473,6 +476,9 @@ class ArtistSortView(TimedDisableView):
         self.selected_decade = int(decade) if decade is not None else None
         self.aoty_min = aoty_min
         self.aoty_max = aoty_max
+        # Pages are calculated from the locally cached discography; switching
+        # them never asks AOTY for more data.
+        self.page_index = 0
 
         # Cache public release details inside this message.
         # Switching filters/sort does not repeatedly fetch the same release.
@@ -635,28 +641,65 @@ class ArtistSortView(TimedDisableView):
 
         return releases
 
+    def _sorted_filtered_releases(self):
+        """Return the selected local catalogue in the active sort order."""
+
+        return _sort_releases(self.filtered_releases(), self.sort_key)
+
+    def _page_count(self) -> int:
+        total = len(self._sorted_filtered_releases())
+        return max(1, (total + MAX_ARTIST_RELEASES - 1) // MAX_ARTIST_RELEASES)
+
+    def reset_page(self) -> None:
+        """Return to the beginning after any sort or filter adjustment."""
+
+        self.page_index = 0
+
+    def _refresh_pagination_controls(self) -> None:
+        """Show arrows only when the current filter needs more than one page."""
+
+        page_count = self._page_count()
+        self.page_index = min(max(self.page_index, 0), page_count - 1)
+        controls = (self.previous_page_button, self.next_page_button)
+
+        if page_count == 1:
+            for control in controls:
+                if control in self.children:
+                    self.remove_item(control)
+            return
+
+        for control in controls:
+            if control not in self.children:
+                self.add_item(control)
+        self.previous_page_button.disabled = self.page_index == 0
+        self.next_page_button.disabled = self.page_index >= page_count - 1
+
     def refresh_controls(self):
         self._refresh_button_styles()
+        self._refresh_pagination_controls()
         self.format_select.refresh_options()
         self.period_select.refresh_options()
         self.genre_select.refresh_options()
 
     def _refresh_button_styles(self):
-        for child in self.children:
-            if not isinstance(
-                child,
-                discord.ui.Button,
-            ):
-                continue
+        # One button represents both sort directions.  Its text reflects the
+        # active direction and the blue state marks the active sort family.
+        pairs = (
+            (self.score_desc_button, "score_desc", "score_asc", "Ocena ↓", "Ocena ↑"),
+            (self.title_asc_button, "title_asc", "title_desc", "A–Z", "Z–A"),
+            (self.newest_button, "newest", "oldest", "Najnowsze", "Najstarsze"),
+        )
+        for button, primary, alternate, primary_label, alternate_label in pairs:
+            is_active = self.sort_key in {primary, alternate}
+            button.style = (
+                discord.ButtonStyle.primary
+                if is_active
+                else discord.ButtonStyle.secondary
+            )
+            button.label = alternate_label if self.sort_key == alternate else primary_label
 
-            if child.custom_id == self.sort_key:
-                child.style = (
-                    discord.ButtonStyle.primary
-                )
-            else:
-                child.style = (
-                    discord.ButtonStyle.secondary
-                )
+        for button in (self.previous_page_button, self.next_page_button):
+            button.style = discord.ButtonStyle.secondary
 
     async def _variables_for_release(self, release):
         release_id = str(
@@ -688,15 +731,11 @@ class ArtistSortView(TimedDisableView):
 
     async def build_embed(self):
         filtered = self.filtered_releases()
-
-        sorted_releases = _sort_releases(
-            filtered,
-            self.sort_key,
-        )
-
-        shown = sorted_releases[
-            :MAX_ARTIST_RELEASES
-        ]
+        sorted_releases = self._sorted_filtered_releases()
+        page_count = self._page_count()
+        self.page_index = min(self.page_index, page_count - 1)
+        page_start = self.page_index * MAX_ARTIST_RELEASES
+        shown = sorted_releases[page_start : page_start + MAX_ARTIST_RELEASES]
 
         lines = []
 
@@ -706,9 +745,9 @@ class ArtistSortView(TimedDisableView):
             )
 
             lines.append(
-                f"**{score_or_missing(variables.aoty_user_score)}  •  **"
-                f"**[{variables.display_album}]({release['url']})  •  **"
-                f"{variables.album_format}  •  {variables.release_date}"
+                f"{score_or_missing(variables.aoty_user_score)} • "
+                f"**[{variables.display_album}]({release['url']})** • "
+                f"{variables.album_format} • {variables.release_date}"
             )
 
 
@@ -718,7 +757,7 @@ class ArtistSortView(TimedDisableView):
             )
         else:
             releases_text = (
-                "Brak releases dla wybranych filtrów."
+                "Brak wydań dla wybranych filtrów."
             )
 
         header_text = _artist_header_text(
@@ -766,12 +805,14 @@ class ArtistSortView(TimedDisableView):
         if len(filtered) > len(shown):
             footer = (
                 f"{filter_text}  •  "
-                f"pokazano {len(shown)} z {len(filtered)} releases."
+                f"pokazano {page_start + 1}–{page_start + len(shown)} "
+                f"z {len(filtered)} wydań • strona "
+                f"{self.page_index + 1}/{page_count}."
             )
         else:
             footer = (
                 f"{filter_text}  •  "
-                f"{len(shown)} releases."
+                f"{len(shown)} wydań."
             )
 
         set_aoty_footer(embed, footer)
@@ -785,13 +826,60 @@ class ArtistSortView(TimedDisableView):
     ):
         await interaction.response.defer()
 
-        self.sort_key = sort_key
+        # Each of the three controls is a direction toggle.  It replaces the
+        # former doubled set of six sorting buttons without losing a mode.
+        pairs = {
+            "score_desc": ("score_desc", "score_asc"),
+            "title_asc": ("title_asc", "title_desc"),
+            "newest": ("newest", "oldest"),
+        }
+        primary, alternate = pairs[sort_key]
+        self.sort_key = alternate if self.sort_key == primary else primary
+        self.reset_page()
         self.refresh_controls()
 
         embed = await self.build_embed()
 
         await interaction.edit_original_response(
             embed=embed,
+            view=self,
+        )
+
+    @discord.ui.button(
+        label="←",
+        style=discord.ButtonStyle.secondary,
+        custom_id="artist_previous_page",
+        row=1,
+    )
+    async def previous_page_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.defer()
+        self.page_index = max(0, self.page_index - 1)
+        self.refresh_controls()
+        await interaction.edit_original_response(
+            embed=await self.build_embed(),
+            view=self,
+        )
+
+    @discord.ui.button(
+        label="→",
+        style=discord.ButtonStyle.secondary,
+        custom_id="artist_next_page",
+        row=1,
+    )
+    async def next_page_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.defer()
+        self.page_index = min(self._page_count() - 1, self.page_index + 1)
+        self.refresh_controls()
+        await interaction.edit_original_response(
+            embed=await self.build_embed(),
             view=self,
         )
 
@@ -812,22 +900,6 @@ class ArtistSortView(TimedDisableView):
         )
 
     @discord.ui.button(
-        label="Ocena ↑",
-        style=discord.ButtonStyle.secondary,
-        custom_id="score_asc",
-        row=0,
-    )
-    async def score_asc_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-        await self._apply_sort(
-            interaction,
-            "score_asc",
-        )
-
-    @discord.ui.button(
         label="A–Z",
         style=discord.ButtonStyle.secondary,
         custom_id="title_asc",
@@ -844,22 +916,6 @@ class ArtistSortView(TimedDisableView):
         )
 
     @discord.ui.button(
-        label="Z–A",
-        style=discord.ButtonStyle.secondary,
-        custom_id="title_desc",
-        row=0,
-    )
-    async def title_desc_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-        await self._apply_sort(
-            interaction,
-            "title_desc",
-        )
-
-    @discord.ui.button(
         label="Najnowsze",
         style=discord.ButtonStyle.primary,
         custom_id="newest",
@@ -873,22 +929,6 @@ class ArtistSortView(TimedDisableView):
         await self._apply_sort(
             interaction,
             "newest",
-        )
-
-    @discord.ui.button(
-        label="Najstarsze",
-        style=discord.ButtonStyle.secondary,
-        custom_id="oldest",
-        row=1,
-    )
-    async def oldest_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
-        await self._apply_sort(
-            interaction,
-            "oldest",
         )
 
 
