@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def _json_dump(value) -> str:
@@ -871,10 +871,15 @@ class Database:
                     ranking_year TEXT,
                     year_ranking TEXT,
                     year_ranking_text TEXT,
+                    metadata_source TEXT,
                     fetched_at REAL NOT NULL
                 )
                 """
             )
+            # v11: distinguish authoritative AOTY snapshots from fallback and
+            # legacy partial rows. Existing rows intentionally remain NULL so
+            # the background worker can offer them to MusicBrainz immediately.
+            self._ensure_column("releases", "metadata_source", "TEXT")
 
             self.connection.execute(
                 """
@@ -2435,8 +2440,8 @@ class Database:
                     user_score, ratings_count, release_date, year,
                     album_format, label, labels_json, genres_json,
                     secondary_genres_json, vibes_json, ranking_year,
-                    year_ranking, year_ranking_text, fetched_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    year_ranking, year_ranking_text, metadata_source, fetched_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(album_id) DO UPDATE SET
                     artist = COALESCE(excluded.artist, releases.artist),
                     artist_url = COALESCE(excluded.artist_url, releases.artist_url),
@@ -2475,6 +2480,10 @@ class Database:
                     year_ranking_text = CASE WHEN ? THEN
                         excluded.year_ranking_text
                         ELSE releases.year_ranking_text END,
+                    metadata_source = COALESCE(
+                        excluded.metadata_source,
+                        releases.metadata_source
+                    ),
                     fetched_at = excluded.fetched_at
                 """,
                 (
@@ -2497,6 +2506,7 @@ class Database:
                     details.get("ranking_year"),
                     details.get("year_ranking"),
                     details.get("year_ranking_text"),
+                    details.get("source"),
                     now,
                     section_complete("score"),
                     section_complete("score"),
@@ -2603,6 +2613,7 @@ class Database:
             "ranking_year": row["ranking_year"],
             "year_ranking": row["year_ranking"],
             "year_ranking_text": row["year_ranking_text"],
+            "metadata_source": row["metadata_source"],
             "tracklist": [
                 {
                     "number": track["track_number"],
@@ -2735,12 +2746,14 @@ class Database:
         limit: int,
         *,
         fallback_stale_before: float | None = None,
+        aoty_stale_before: float | None = None,
     ) -> list[dict]:
-        """Return missing releases and old MusicBrainz fallback rows.
+        """Return missing, legacy-partial, and stale release-cache rows.
 
-        A fallback row intentionally has no AOTY rating-count data.  It is
-        retried only after a long interval, so AOTY remains authoritative once
-        it recovers without turning every worker pass into a request.
+        ``metadata_source`` was introduced in v11. Legacy partial rows have no
+        source and are due immediately, while known MusicBrainz and AOTY rows
+        use separate retry cutoffs. This prevents a cover-only legacy row from
+        postponing fallback enrichment for a full day.
         """
         canonical = self.canonical_username(username)
         if canonical is None or limit <= 0:
@@ -2749,6 +2762,11 @@ class Database:
         fallback_stale_before = (
             float(fallback_stale_before)
             if fallback_stale_before is not None
+            else -1.0
+        )
+        aoty_stale_before = (
+            float(aoty_stale_before)
+            if aoty_stale_before is not None
             else -1.0
         )
 
@@ -2765,13 +2783,28 @@ class Database:
                         rel.album_id IS NULL
                         OR (
                             rel.ratings_count IS NULL
-                            AND rel.fetched_at <= ?
+                            AND (
+                                NULLIF(TRIM(COALESCE(rel.metadata_source, '')), '') IS NULL
+                                OR (
+                                    LOWER(rel.metadata_source) = 'musicbrainz'
+                                    AND rel.fetched_at <= ?
+                                )
+                                OR (
+                                    LOWER(rel.metadata_source) != 'musicbrainz'
+                                    AND rel.fetched_at <= ?
+                                )
+                            )
                         )
                   )
                 ORDER BY COALESCE(r.sort_timestamp, r.first_seen_at, 0) DESC
                 LIMIT ?
                 """,
-                (canonical, fallback_stale_before, int(limit)),
+                (
+                    canonical,
+                    fallback_stale_before,
+                    aoty_stale_before,
+                    int(limit),
+                ),
             ).fetchall()
         return [self._row_to_rating(row) for row in rows]
 

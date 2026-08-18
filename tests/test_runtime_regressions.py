@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -449,6 +450,7 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         def fallback(*args, **kwargs):
             calls.append((args, kwargs))
             return {
+                "source": "musicbrainz",
                 "artist": "Artist",
                 "album": "Fallback Album",
                 "release_date": "2025-01-02",
@@ -483,6 +485,7 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["musicbrainz"], 1)
         self.assertEqual(len(calls), 1)
         cached = self.db.get_release_details("mb-fallback")
+        self.assertEqual(cached["metadata_source"], "musicbrainz")
         self.assertEqual(cached["genres"], ["Art Pop"])
         self.assertEqual(cached["tracklist"][0]["duration"], "3:00")
 
@@ -532,6 +535,10 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.db.get_release_details("aoty-priority")["ratings_count"],
             "123",
+        )
+        self.assertEqual(
+            self.db.get_release_details("aoty-priority")["metadata_source"],
+            "aoty",
         )
 
     async def test_enrichment_stops_after_one_global_challenge(self):
@@ -814,6 +821,55 @@ class ReleaseEnrichmentCandidateTests(unittest.TestCase):
         self.assertEqual(
             [item["album_id"] for item in candidates],
             ["valid-url"],
+        )
+
+    def test_legacy_partial_release_is_immediately_due_for_fallback(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "legacy-partial",
+                "artist": "Bloodthirsty Butchers",
+                "album": "Kocorono",
+                "url": "https://www.albumoftheyear.org/album/1-kocorono.php",
+                "score": "85",
+            },
+        )
+        self.assertTrue(
+            self.db.save_release_details(
+                "legacy-partial",
+                {"cover": "https://example.test/cover.jpg", "album_format": "LP"},
+            )
+        )
+
+        candidates = self.db.release_enrichment_candidates(
+            "enso",
+            10,
+            fallback_stale_before=time.time() - 24 * 60 * 60,
+            aoty_stale_before=time.time() - 12 * 60 * 60,
+        )
+        self.assertEqual(
+            [item["album_id"] for item in candidates],
+            ["legacy-partial"],
+        )
+
+        self.assertTrue(
+            self.db.save_release_details(
+                "legacy-partial",
+                {
+                    "source": "musicbrainz",
+                    "release_date": "1996-12-01",
+                    "_section_complete": {"release_date": True},
+                },
+            )
+        )
+        self.assertEqual(
+            self.db.release_enrichment_candidates(
+                "enso",
+                10,
+                fallback_stale_before=time.time() - 24 * 60 * 60,
+                aoty_stale_before=time.time() - 12 * 60 * 60,
+            ),
+            [],
         )
 
 

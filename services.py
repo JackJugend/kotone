@@ -906,6 +906,8 @@ class DataService:
                 aoty.get_album_details,
                 url,
             )
+            details = dict(details or {})
+            details["source"] = "aoty"
             if album_id:
                 # save_release_details() itself checks whether the album is in
                 # the configured-user scope. Public searches are never enough
@@ -1128,6 +1130,9 @@ class DataService:
                 fallback_stale_before=(
                     now - MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
                 ),
+                aoty_stale_before=(
+                    now if musicbrainz_only else now - RELEASE_DETAIL_TTL
+                ),
             )
         )
 
@@ -1160,6 +1165,8 @@ class DataService:
                     aoty.get_album_details,
                     item.get("url"),
                 )
+                details = dict(details or {})
+                details["source"] = "aoty"
                 DB.save_release_details(album_id, details)
                 self._release_retry_after.pop(album_id, None)
                 release_done += 1

@@ -168,7 +168,7 @@ def release_to_details(release: dict, *, requested_format: object = None) -> dic
             "ranking": False,
             "tracklist": bool(tracks),
         },
-        "source": "MusicBrainz fallback",
+        "source": "musicbrainz",
     }
 
 
