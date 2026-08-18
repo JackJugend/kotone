@@ -171,12 +171,12 @@ def _artist_header_text(discography):
     if discography.get("source") == "kotone db":
         release_count = len(discography.get("releases") or [])
         lines = [
-            f"💾 **Baza danych Kotone: {release_count} zapisanych wydań.**"
+            f"\💾 **Baza danych Kotone: {release_count} zapisanych releases.**"
         ]
         genres_text = ", ".join(display_genres(discography.get("genres") or []))
         genres_text = genres_text or discography.get("genres_text")
         if genres_text:
-            lines.append(f"**Genre:** {genres_text}")
+            lines.append(f"> {genres_text}")
         return "\n".join(lines)
 
     score = score_or_missing(discography.get("artist_user_score"))
@@ -197,7 +197,7 @@ def _artist_header_text(discography):
 
     lines = [
         (
-            f"<:aoty:1539095897084924004> **{score}  •  **"
+            f"<:aoty:1539095897084924004> {score}**  •  **"
             f"**{ratings_count} ratings  •  **"
             f"**{followers} followers**"
         )
