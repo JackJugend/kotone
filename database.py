@@ -2100,6 +2100,490 @@ class Database:
             )
             return result
 
+    def import_official_ratings(
+        self,
+        username: str,
+        records: Iterable[dict],
+    ) -> dict:
+        """Merge a validated official AOTY CSV without erasing rich details.
+
+        The official export does not contain AOTY album IDs. Matching is
+        therefore intentionally conservative: an existing rating for the same
+        user wins, otherwise a unique config-scoped release identity may be
+        reused. Ambiguous or unknown releases are returned to the caller and
+        never receive invented IDs.
+        """
+
+        from rating_import import (  # Local import avoids a persistence cycle.
+            normalized_format,
+            normalized_identity,
+            normalized_text,
+        )
+
+        canonical = self._require_monitored(username)
+        records = list(records)
+        now = _now()
+        summary = {
+            "total": len(records),
+            "added": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "unmatched": [],
+        }
+        release_detail_hints: dict[str, dict] = {}
+
+        def add_candidate(target: dict, row) -> None:
+            key = normalized_identity(row["artist"], row["album"])
+            if not all(key):
+                return
+            album_id = str(row["album_id"] or "").strip()
+            if not album_id:
+                return
+            bucket = target.setdefault(key, {})
+            current = bucket.get(album_id, {})
+            try:
+                candidate_year = int(row["year"]) if row["year"] is not None else None
+            except (TypeError, ValueError):
+                candidate_year = None
+            bucket[album_id] = {
+                "album_id": album_id,
+                "artist": row["artist"] or current.get("artist"),
+                "album": row["album"] or current.get("album"),
+                "release_format": (
+                    row["release_format"] or current.get("release_format")
+                ),
+                "score": (
+                    row["score"]
+                    if row["score"] is not None
+                    else current.get("score")
+                ),
+                "year": (
+                    candidate_year
+                    if candidate_year is not None
+                    else current.get("year")
+                ),
+                "artist_url": row["artist_url"] or current.get("artist_url"),
+                "album_url": row["album_url"] or current.get("album_url"),
+                "cover_url": row["cover_url"] or current.get("cover_url"),
+            }
+
+        def add_title_candidate(target: dict, row) -> None:
+            title_key = normalized_text(row["album"])
+            if not title_key:
+                return
+            identity_target: dict = {}
+            add_candidate(identity_target, row)
+            if not identity_target:
+                return
+            identity_bucket = next(iter(identity_target.values()))
+            candidate = next(iter(identity_bucket.values()))
+            bucket = target.setdefault(title_key, {})
+            current = bucket.get(candidate["album_id"], {})
+            bucket[candidate["album_id"]] = {**current, **candidate}
+
+        def choose_candidate(pool: dict, record: dict) -> tuple[dict | None, str | None]:
+            candidates = list(pool.values())
+            if len(candidates) > 1 and record.get("year") is not None:
+                by_year = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.get("year") is not None
+                    and int(candidate["year"]) == int(record["year"])
+                ]
+                if by_year:
+                    candidates = by_year
+            if len(candidates) > 1 and record.get("release_format"):
+                wanted = normalized_format(record["release_format"])
+                by_format = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.get("release_format")
+                    and normalized_format(candidate["release_format"]) == wanted
+                ]
+                if by_format:
+                    candidates = by_format
+            if len(candidates) > 1 and record.get("score") is not None:
+                by_score = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.get("score") is not None
+                    and str(candidate["score"]) == str(record["score"])
+                ]
+                if len(by_score) == 1:
+                    candidates = by_score
+            if len(candidates) == 1:
+                return candidates[0], None
+            if not candidates:
+                return None, "nie znaleziono albumu w bazie bota"
+            return None, "niejednoznaczne dopasowanie albumu"
+
+        with self._lock, self.connection:
+            current_rows = self.connection.execute(
+                """
+                SELECT r.album_id, r.artist, r.album, r.release_format,
+                       r.score,
+                       rel.year,
+                       COALESCE(r.artist_url, rel.artist_url) AS artist_url,
+                       COALESCE(r.album_url, rel.url) AS album_url,
+                       COALESCE(r.cover_url, rel.cover_url) AS cover_url
+                FROM ratings r
+                LEFT JOIN releases rel ON rel.album_id = r.album_id
+                WHERE r.username = ?
+                """,
+                (canonical,),
+            ).fetchall()
+            scoped_rows = self.connection.execute(
+                """
+                SELECT r.album_id, r.artist, r.album,
+                       COALESCE(r.release_format, rel.album_format)
+                           AS release_format,
+                       r.score,
+                       rel.year,
+                       COALESCE(r.artist_url, rel.artist_url) AS artist_url,
+                       COALESCE(r.album_url, rel.url) AS album_url,
+                       COALESCE(r.cover_url, rel.cover_url) AS cover_url
+                FROM ratings r
+                LEFT JOIN releases rel ON rel.album_id = r.album_id
+                UNION ALL
+                SELECT rel.album_id, rel.artist, rel.album, rel.album_format,
+                       NULL AS score, rel.year, rel.artist_url, rel.url,
+                       rel.cover_url
+                FROM releases rel
+                WHERE EXISTS(
+                    SELECT 1 FROM ratings scoped
+                    WHERE scoped.album_id = rel.album_id
+                )
+                """
+            ).fetchall()
+
+            current_candidates: dict = {}
+            current_title_candidates: dict = {}
+            scoped_candidates: dict = {}
+            for row in current_rows:
+                add_candidate(current_candidates, row)
+                add_title_candidate(current_title_candidates, row)
+            for row in scoped_rows:
+                add_candidate(scoped_candidates, row)
+
+            current_identity_matches = sum(
+                1
+                for record in records
+                if normalized_identity(
+                    record.get("artist"),
+                    record.get("album"),
+                ) in current_candidates
+            )
+            if (
+                len(records) >= 10
+                and current_identity_matches / len(records) < 0.60
+            ):
+                raise ValueError(
+                    "CSV nie pasuje do archiwum tego użytkownika "
+                    f"({current_identity_matches}/{len(records)} zgodnych pozycji). "
+                    "Sprawdź, czy nie wybrano eksportu innego konta."
+                )
+
+            imported_album_ids: set[str] = set()
+            for record in records:
+                key = normalized_identity(record.get("artist"), record.get("album"))
+                pool = (
+                    current_candidates.get(key)
+                    or current_title_candidates.get(
+                        normalized_text(record.get("album"))
+                    )
+                    or scoped_candidates.get(key)
+                )
+                hinted_album_id = str(record.get("album_id_hint") or "").strip()
+                if hinted_album_id:
+                    hinted_candidate = (pool or {}).get(hinted_album_id)
+                    pool = {
+                        hinted_album_id: hinted_candidate
+                        or {
+                            "album_id": hinted_album_id,
+                            "artist": record.get("artist"),
+                            "album": record.get("album"),
+                            "release_format": record.get("release_format"),
+                            "score": record.get("score"),
+                            "year": record.get("year"),
+                            "artist_url": None,
+                            "album_url": record.get("album_url_hint"),
+                            "cover_url": (
+                                record.get("release_details_hint") or {}
+                            ).get("cover"),
+                        }
+                    }
+                if not pool:
+                    unresolved = dict(record)
+                    unresolved["reason"] = "nie znaleziono albumu w bazie bota"
+                    summary["unmatched"].append(unresolved)
+                    continue
+                candidate, reason = choose_candidate(pool, record)
+                if candidate is None:
+                    unresolved = dict(record)
+                    unresolved["reason"] = reason
+                    summary["unmatched"].append(unresolved)
+                    continue
+
+                album_id = candidate["album_id"]
+                if album_id in imported_album_ids:
+                    unresolved = dict(record)
+                    unresolved["reason"] = "drugi rekord wskazuje ten sam album_id"
+                    summary["unmatched"].append(unresolved)
+                    continue
+                imported_album_ids.add(album_id)
+                if record.get("release_details_hint"):
+                    release_detail_hints[album_id] = {
+                        **record["release_details_hint"],
+                        "url": record.get("album_url_hint"),
+                    }
+
+                existing = self.connection.execute(
+                    """
+                    SELECT score, date, sort_timestamp, release_format, active
+                    FROM ratings
+                    WHERE username = ? AND album_id = ?
+                    """,
+                    (canonical, album_id),
+                ).fetchone()
+                if existing is None:
+                    item = {
+                        "album_id": album_id,
+                        "artist": candidate.get("artist") or record.get("artist"),
+                        "artist_url": candidate.get("artist_url"),
+                        "album": candidate.get("album") or record.get("album"),
+                        "url": candidate.get("album_url"),
+                        "cover": candidate.get("cover_url"),
+                        "score": record.get("score"),
+                        "date": record.get("date"),
+                        "sort_timestamp": record.get("sort_timestamp"),
+                        "release_format": record.get("release_format"),
+                        "has_review": False,
+                        "has_track_ratings": False,
+                        "liked": False,
+                    }
+                    self._upsert_rating_locked(
+                        canonical,
+                        item,
+                        record_history=True,
+                        active=True,
+                        record_changes=True,
+                        source="official_csv_import",
+                    )
+                    self.connection.execute(
+                        """
+                        UPDATE ratings SET notify_pending = 0
+                        WHERE username = ? AND album_id = ?
+                        """,
+                        (canonical, album_id),
+                    )
+                    summary["added"] += 1
+                    continue
+
+                old_score = str(existing["score"] or "")
+                new_score = str(record.get("score") or "")
+                old_format = str(existing["release_format"] or "")
+                new_format = str(record.get("release_format") or "")
+                changed = (
+                    old_score != new_score
+                    or str(existing["date"] or "") != str(record.get("date") or "")
+                    or not bool(existing["active"])
+                    or (not old_format and bool(new_format))
+                    or existing["sort_timestamp"] is None
+                )
+                self.connection.execute(
+                    """
+                    UPDATE ratings
+                    SET score = ?, date = ?,
+                        sort_timestamp = COALESCE(sort_timestamp, ?),
+                        release_format = COALESCE(NULLIF(release_format, ''), ?),
+                        artist = COALESCE(NULLIF(artist, ''), ?),
+                        album = COALESCE(NULLIF(album, ''), ?),
+                        last_seen_at = ?, active = 1, notify_pending = 0
+                    WHERE username = ? AND album_id = ?
+                    """,
+                    (
+                        new_score,
+                        record.get("date"),
+                        record.get("sort_timestamp"),
+                        new_format or None,
+                        record.get("artist"),
+                        record.get("album"),
+                        now,
+                        canonical,
+                        album_id,
+                    ),
+                )
+
+                event_type = None
+                if old_score != new_score:
+                    event_type = "score_changed"
+                    self.connection.execute(
+                        """
+                        INSERT INTO rating_history(
+                            username, album_id, event_type,
+                            old_score, new_score, changed_at
+                        ) VALUES(?, ?, 'score', ?, ?, ?)
+                        """,
+                        (canonical, album_id, old_score, new_score, now),
+                    )
+                elif not bool(existing["active"]):
+                    event_type = "rating_restored"
+
+                if event_type:
+                    self._record_change_locked(
+                        canonical,
+                        entity_type="rating",
+                        event_type=event_type,
+                        album_id=album_id,
+                        field_name="score",
+                        old_value=old_score,
+                        new_value=new_score,
+                        source="official_csv_import",
+                        detected_at=now,
+                    )
+
+                if changed:
+                    summary["updated"] += 1
+                else:
+                    summary["unchanged"] += 1
+
+            self.connection.execute(
+                "UPDATE users SET updated_at = ? WHERE username = ?",
+                (now, canonical),
+            )
+        for album_id, details in release_detail_hints.items():
+            self.save_release_details(album_id, details)
+        return summary
+
+    def manual_update_rating_detail(
+        self,
+        username: str,
+        album_id: str,
+        action: str,
+        *,
+        review_text: str | None = None,
+    ) -> dict:
+        """Apply a temporary config-user review/like edit.
+
+        Manual values make the row immediately due for enrichment. A later
+        complete AOTY user-release response remains authoritative and replaces
+        these fields through ``save_rating_detail``.
+        """
+
+        canonical = self._require_monitored(username)
+        album_id = str(album_id or "").strip()
+        action = str(action or "").strip().casefold()
+        if action not in {"like_on", "like_off", "review_set", "review_remove"}:
+            raise ValueError("Nieznana akcja ręcznej edycji.")
+        cleaned_review = str(review_text or "").strip()
+        if action == "review_set" and not cleaned_review:
+            raise ValueError("Treść recenzji nie może być pusta.")
+        if len(cleaned_review) > 4000:
+            raise ValueError("Recenzja może mieć maksymalnie 4000 znaków.")
+
+        with self._lock, self.connection:
+            row = self.connection.execute(
+                """
+                SELECT album_id, artist, album, active, liked,
+                       has_review, review_text
+                FROM ratings
+                WHERE username = ? AND album_id = ?
+                """,
+                (canonical, album_id),
+            ).fetchone()
+            if row is None or not bool(row["active"]):
+                raise ValueError("Wybrany album nie istnieje w aktywnym archiwum użytkownika.")
+
+            old_liked = bool(row["liked"])
+            old_has_review = bool(row["has_review"])
+            old_review = str(row["review_text"] or "")
+            new_liked = old_liked
+            new_has_review = old_has_review
+            new_review = old_review
+
+            if action == "like_on":
+                new_liked = True
+            elif action == "like_off":
+                new_liked = False
+            elif action == "review_set":
+                new_has_review = True
+                new_review = cleaned_review
+            elif action == "review_remove":
+                new_has_review = False
+                new_review = ""
+
+            changed = (
+                new_liked != old_liked
+                or new_has_review != old_has_review
+                or new_review != old_review
+            )
+            now = _now()
+            self.connection.execute(
+                """
+                UPDATE ratings
+                SET liked = ?, has_review = ?, review_text = ?,
+                    detail_complete = 0, detail_synced_at = 0,
+                    last_seen_at = ?
+                WHERE username = ? AND album_id = ?
+                """,
+                (
+                    _bool_int(new_liked),
+                    _bool_int(new_has_review),
+                    new_review or None,
+                    now,
+                    canonical,
+                    album_id,
+                ),
+            )
+
+            if changed and new_liked != old_liked:
+                self._record_change_locked(
+                    canonical,
+                    entity_type="like",
+                    event_type="like_added" if new_liked else "like_removed",
+                    album_id=album_id,
+                    field_name="liked",
+                    old_value=old_liked,
+                    new_value=new_liked,
+                    source="manual_discord",
+                    detected_at=now,
+                )
+            if changed and (
+                new_has_review != old_has_review or new_review != old_review
+            ):
+                if not old_has_review and new_has_review:
+                    event_type = "review_added"
+                elif old_has_review and not new_has_review:
+                    event_type = "review_removed"
+                else:
+                    event_type = "review_edited"
+                self._record_change_locked(
+                    canonical,
+                    entity_type="review",
+                    event_type=event_type,
+                    album_id=album_id,
+                    field_name="review_text",
+                    old_value=old_review or None,
+                    new_value=new_review or None,
+                    source="manual_discord",
+                    detected_at=now,
+                )
+
+            self.connection.execute(
+                "UPDATE users SET updated_at = ? WHERE username = ?",
+                (now, canonical),
+            )
+            return {
+                "username": canonical,
+                "album_id": album_id,
+                "artist": row["artist"],
+                "album": row["album"],
+                "liked": new_liked,
+                "has_review": new_has_review,
+                "review_text": new_review or None,
+                "changed": changed,
+            }
+
     def upsert_ratings(
         self,
         username: str,

@@ -27,8 +27,10 @@ from commands.check import setup_check_command
 from commands.dbonly import setup_dbonly_command
 from commands.dbstats import setup_dbstats_command
 from commands.history import setup_history_command
+from commands.manual import setup_manual_command
 from commands.last import setup_last_command
 from commands.profile import setup_profile_command
+from commands.rating_import import setup_rating_import_command
 from commands.recent import setup_recent_command
 from database import DB
 from health import HealthServer
@@ -76,10 +78,12 @@ setup_recent_command(tree)
 setup_artist_command(tree)
 setup_album_command(tree)
 setup_profile_command(tree)
+setup_rating_import_command(tree)
 setup_check_command(tree, monitor)
 setup_dbonly_command(tree)
 setup_dbstats_command(tree)
 setup_history_command(tree)
+setup_manual_command(tree)
 setup_analytics_commands(tree)
 
 
