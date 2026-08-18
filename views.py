@@ -178,10 +178,15 @@ async def build_release_details_embed(
             name=f"{username}  •  {variables.date}",
             url=f"https://www.albumoftheyear.org/user/{username}/",
         )
-    set_aoty_footer(
-        embed,
-        f"AOTY • {score_icon(variables.score)[1:]} {variables.score or 'NR'}",
+    # /album has no selected AOTY user.  Its shared tabs must not pretend that
+    # the release itself has a personal NR score.  User-specific commands keep
+    # their score in the footer as before.
+    footer_text = (
+        f"AOTY • {score_icon(variables.score)[1:]} {variables.score or 'NR'}"
+        if username
+        else "AOTY"
     )
+    set_aoty_footer(embed, footer_text)
     return embed
 
 
