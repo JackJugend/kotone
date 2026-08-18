@@ -1346,6 +1346,96 @@ class Database:
             return None, 0
         return float(row["average_score"]), int(row["score_count"])
 
+    def get_analytics_rows(self, username: str) -> list[dict]:
+        """Return one SQLite-only analytics row per active saved rating.
+
+        Statistics commands deliberately use this single read model instead
+        of the scraper/services layer.  The joined release metadata remains
+        limited to albums rated by config users, and opening a statistic can
+        therefore never cause an AOTY or MusicBrainz request.
+        """
+
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return []
+
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT
+                    r.album_id,
+                    r.score,
+                    r.date AS rating_date,
+                    r.sort_timestamp,
+                    r.artist,
+                    r.album,
+                    r.release_format,
+                    r.has_review,
+                    r.has_track_ratings,
+                    r.liked,
+                    rel.user_score AS aoty_score,
+                    rel.ratings_count AS aoty_ratings_count,
+                    rel.release_date,
+                    rel.year AS release_year,
+                    rel.album_format,
+                    rel.genres_json,
+                    rel.secondary_genres_json,
+                    rel.vibes_json,
+                    COALESCE(track_counts.track_score_count, 0)
+                        AS track_score_count
+                FROM ratings r
+                LEFT JOIN releases rel ON rel.album_id = r.album_id
+                LEFT JOIN (
+                    SELECT username, album_id, COUNT(*) AS track_score_count
+                    FROM user_track_ratings
+                    GROUP BY username, album_id
+                ) track_counts
+                    ON track_counts.username = r.username
+                   AND track_counts.album_id = r.album_id
+                WHERE r.username = ? AND r.active = 1
+                ORDER BY
+                    COALESCE(
+                        r.sort_timestamp,
+                        r.last_seen_at,
+                        r.first_seen_at,
+                        0
+                    ) DESC,
+                    r.rowid DESC
+                """,
+                (canonical,),
+            ).fetchall()
+
+        result: list[dict] = []
+        for row in rows:
+            result.append(
+                {
+                    "album_id": str(row["album_id"]),
+                    "score": row["score"],
+                    "rating_date": row["rating_date"],
+                    "sort_timestamp": row["sort_timestamp"],
+                    "artist": row["artist"],
+                    "album": row["album"],
+                    "release_format": (
+                        row["release_format"] or row["album_format"]
+                    ),
+                    "has_review": bool(row["has_review"]),
+                    "has_track_ratings": bool(row["has_track_ratings"]),
+                    "liked": bool(row["liked"]),
+                    "track_score_count": int(row["track_score_count"] or 0),
+                    "aoty_score": row["aoty_score"],
+                    "aoty_ratings_count": row["aoty_ratings_count"],
+                    "release_date": row["release_date"],
+                    "release_year": row["release_year"],
+                    "genres": _json_load(row["genres_json"], []),
+                    "secondary_genres": _json_load(
+                        row["secondary_genres_json"],
+                        [],
+                    ),
+                    "vibes": _json_load(row["vibes_json"], []),
+                }
+            )
+        return result
+
     def get_avatar(self, username: str) -> str | None:
         canonical = self.canonical_username(username)
         if canonical is None:

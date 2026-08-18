@@ -21,6 +21,7 @@ import discord
 
 from background import BackgroundWorker
 from commands.album import setup_album_command
+from commands.analytics import setup_analytics_commands
 from commands.artist import setup_artist_command
 from commands.check import setup_check_command
 from commands.dbonly import setup_dbonly_command
@@ -79,6 +80,7 @@ setup_check_command(tree, monitor)
 setup_dbonly_command(tree)
 setup_dbstats_command(tree)
 setup_history_command(tree)
+setup_analytics_commands(tree)
 
 
 @client.event
