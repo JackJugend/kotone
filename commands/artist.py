@@ -839,7 +839,7 @@ class ArtistSortView(TimedDisableView):
             lines.append(
                 f"•  **[{variables.display_album}]({release['url']})**"
                 f" — {variables.release_date} · {variables.album_format}"
-                f" — **{score_or_missingr(variables.aoty_user_score)}**"
+                f" — **{score_or_missing(variables.aoty_user_score)}**"
             )
 
 
