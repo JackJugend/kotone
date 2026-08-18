@@ -240,6 +240,35 @@ class RatingImportDatabaseTests(unittest.TestCase):
             self.db.get_rating("enso", "newer-id")["notify_pending"]
         )
 
+    def test_recent_unnotified_cached_row_is_also_queued_by_import(self):
+        cutoff = 1_700_000_000.0
+        self.db.mark_notification_delivered("enso", delivered_at=cutoff)
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "cached-id",
+                "artist": "Cached Artist",
+                "album": "Cached Album",
+                "score": "90",
+                "release_format": "Single",
+            },
+        )
+        record = {
+            **self._record(
+                artist="Cached Artist",
+                album="Cached Album",
+                score="90",
+            ),
+            "release_format": "Single",
+            "sort_timestamp": cutoff + 1,
+        }
+        result = self.db.import_official_ratings("enso", [record])
+        self.assertEqual(result["added"], 0)
+        self.assertEqual(result["queued_notifications"], 1)
+        self.assertTrue(
+            self.db.get_rating("enso", "cached-id")["notify_pending"]
+        )
+
     def test_manual_review_and_like_preserve_tracks_and_become_due(self):
         self.db.upsert_rating(
             "enso",

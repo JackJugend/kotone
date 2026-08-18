@@ -2191,6 +2191,18 @@ class Database:
             "unmatched": [],
         }
         release_detail_hints: dict[str, dict] = {}
+        notified_album_ids: set[str] = set()
+
+        def should_queue_notification(record: dict, album_id: str) -> bool:
+            try:
+                rated_at = float(record.get("sort_timestamp") or 0)
+            except (TypeError, ValueError):
+                rated_at = 0.0
+            return bool(
+                notification_cutoff is not None
+                and rated_at > notification_cutoff
+                and str(album_id) not in notified_album_ids
+            )
 
         def add_candidate(target: dict, row) -> None:
             key = normalized_identity(row["artist"], row["album"])
@@ -2278,6 +2290,20 @@ class Database:
             return None, "niejednoznaczne dopasowanie albumu"
 
         with self._lock, self.connection:
+            notified_album_ids = {
+                str(row["album_id"])
+                for row in self.connection.execute(
+                    """
+                    SELECT DISTINCT album_id
+                    FROM change_history
+                    WHERE username = ?
+                      AND entity_type = 'rating'
+                      AND source = 'monitor'
+                      AND album_id IS NOT NULL
+                    """,
+                    (canonical,),
+                ).fetchall()
+            }
             current_rows = self.connection.execute(
                 """
                 SELECT r.album_id, r.artist, r.album, r.release_format,
@@ -2399,7 +2425,8 @@ class Database:
 
                 existing = self.connection.execute(
                     """
-                    SELECT score, date, sort_timestamp, release_format, active
+                    SELECT score, date, sort_timestamp, release_format,
+                           active, notify_pending
                     FROM ratings
                     WHERE username = ? AND album_id = ?
                     """,
@@ -2433,13 +2460,9 @@ class Database:
                         source="official_csv_import",
                         record_new_change=False,
                     )
-                    try:
-                        rated_at = float(record.get("sort_timestamp") or 0)
-                    except (TypeError, ValueError):
-                        rated_at = 0.0
-                    queue_notification = bool(
-                        notification_cutoff is not None
-                        and rated_at > notification_cutoff
+                    queue_notification = should_queue_notification(
+                        record,
+                        album_id,
                     )
                     self.connection.execute(
                         """
@@ -2464,6 +2487,9 @@ class Database:
                     or (not old_format and bool(new_format))
                     or existing["sort_timestamp"] is None
                 )
+                queue_notification = should_queue_notification(record, album_id)
+                pending_before = bool(existing["notify_pending"])
+                pending_after = pending_before or queue_notification
                 self.connection.execute(
                     """
                     UPDATE ratings
@@ -2472,7 +2498,7 @@ class Database:
                         release_format = COALESCE(NULLIF(release_format, ''), ?),
                         artist = COALESCE(NULLIF(artist, ''), ?),
                         album = COALESCE(NULLIF(album, ''), ?),
-                        last_seen_at = ?, active = 1, notify_pending = 0
+                        last_seen_at = ?, active = 1, notify_pending = ?
                     WHERE username = ? AND album_id = ?
                     """,
                     (
@@ -2483,10 +2509,13 @@ class Database:
                         record.get("artist"),
                         record.get("album"),
                         now,
+                        int(pending_after),
                         canonical,
                         album_id,
                     ),
                 )
+                if queue_notification and not pending_before:
+                    summary["queued_notifications"] += 1
 
                 event_type = None
                 if old_score != new_score:
