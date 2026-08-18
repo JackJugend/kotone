@@ -283,7 +283,7 @@ class AnalyticsViewTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
 
-    async def test_all_commands_share_four_stable_tabs(self):
+    async def test_wrapped_view_has_four_stable_tabs(self):
         sections = {
             key: discord.Embed(title=key)
             for key in ("home", "data", "top", "graphic")

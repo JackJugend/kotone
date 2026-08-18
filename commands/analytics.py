@@ -41,10 +41,6 @@ def _metric(value) -> str:
     return "—" if value is None else f"{float(value):.1f}"
 
 
-def _percent(value) -> str:
-    return "—" if value is None else f"{float(value):.1f}%"
-
-
 def _pairs(items: list[tuple[str, int]], *, empty: str = "—") -> str:
     if not items:
         return empty
@@ -59,36 +55,6 @@ def _top_ratings(items: list[dict]) -> str:
         f"{item['artist']} — {item['album']}"
         for item in items
     )[:1024]
-
-
-def _differences(items: list[dict], user_a: str, user_b: str) -> str:
-    if not items:
-        return "—"
-    return "\n".join(
-        f"**Różnica {item['gap']:.0f}** · {item['artist']} — {item['album']}\n"
-        f"{user_a}: {score_icon(item['score_a'])} **{item['score_a']:.0f}** · "
-        f"{user_b}: {score_icon(item['score_b'])} **{item['score_b']:.0f}**"
-        for item in items
-    )[:4000]
-
-
-def _shared_top(items: list[dict], user_a: str, user_b: str) -> str:
-    if not items:
-        return "—"
-    return "\n".join(
-        f"**{item['mean']:.1f} średnio** · {item['artist']} — {item['album']}\n"
-        f"{user_a}: {score_icon(item['score_a'])} **{item['score_a']:.0f}** · "
-        f"{user_b}: {score_icon(item['score_b'])} **{item['score_b']:.0f}**"
-        for item in items
-    )[:4000]
-
-
-def _distribution(data: dict) -> str:
-    width = max((len(label) for label, _ in data["score_buckets"]), default=1)
-    return "```text\n" + "\n".join(
-        f"{label:<{width}}  {count:>4}"
-        for label, count in data["score_buckets"]
-    ) + "\n```"
 
 
 def _new_embed(
@@ -382,7 +348,7 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
 
     @tree.command(
         name="stats",
-        description="Statystyki ocen użytkownika zapisane przez Kotone",
+        description="Graficzne statystyki ocen użytkownika zapisane przez Kotone",
     )
     @discord.app_commands.describe(username="Użytkownik z configu")
     @discord.app_commands.autocomplete(username=username_autocomplete)
@@ -396,64 +362,30 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             asyncio.to_thread(DB.get_avatar, canonical),
         )
         data = summarize(canonical, rows)
-        data["avatar_items"] = [
+        avatar_items = [
             {"username": canonical, "cover": avatar}
         ] if avatar else []
-        color = score_color(data["average"])
-
-        home = _new_embed(
-            "Statystyki ocen",
-            description=(
-                f"**{data['ratings']}** ocen · średnia **{_metric(data['average'])}** "
-                f"· mediana **{_metric(data['median'])}**\n\n"
-                f"Recenzje **{data['reviews']}** · polubienia **{data['likes']}**\n"
-                f"Ocenione tracklisty **{data['track_albums']}** · "
-                f"zapisane oceny utworów **{data['track_scores']}**"
+        cover_images, avatar_images = await asyncio.gather(
+            asyncio.to_thread(
+                load_cover_images,
+                list(data.get("top_ratings") or []),
+                limit=3,
             ),
-            color=color,
+            asyncio.to_thread(
+                load_cover_images,
+                avatar_items,
+                limit=1,
+            ),
         )
-        data_embed = _new_embed(
-            "Rozkład ocen",
-            description=_distribution(data),
-            color=color,
+        data["_cover_images"] = cover_images
+        data["_avatar_images"] = avatar_images
+        graphic = await asyncio.to_thread(render_stats, data)
+        await interaction.followup.send(
+            file=discord.File(
+                io.BytesIO(graphic.getvalue()),
+                filename=f"stats-{canonical}.png",
+            )
         )
-        data_embed.add_field(
-            name="Najczęstsze gatunki",
-            value=_pairs(data["top_genres"]),
-            inline=True,
-        )
-        data_embed.add_field(
-            name="Najczęstsze formaty",
-            value=_pairs(data["top_formats"]),
-            inline=True,
-        )
-        top = _new_embed("Rankingi", color=color)
-        top.add_field(
-            name="Najczęściej oceniani artyści",
-            value=_pairs(data["top_artists"]),
-            inline=False,
-        )
-        top.add_field(
-            name="Najwyższe oceny",
-            value=_top_ratings(data["top_ratings"]),
-            inline=False,
-        )
-        graphic = _new_embed(
-            "Graficzne podsumowanie",
-            description="Rozkład ocen, najczęstsze gatunki i najwyżej ocenione albumy.",
-            color=color,
-        )
-        for embed in (home, data_embed, top, graphic):
-            _set_user_author(embed, canonical, avatar)
-
-        view = AnalyticsView(
-            sections={"home": home, "data": data_embed, "top": top, "graphic": graphic},
-            renderer=render_stats,
-            payload=data,
-            filename=f"stats-{canonical}.png",
-            data_label="▤ Rozkład",
-        )
-        await _send_view(interaction, view=view)
 
     @tree.command(
         name="ratingdistribution",
@@ -603,59 +535,28 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             )
             if avatar
         ]
-        mean_score = None
-        averages = [value for value in (data["average_a"], data["average_b"]) if value is not None]
-        if averages:
-            mean_score = sum(averages) / len(averages)
-        color = score_color(mean_score)
-
-        home = _new_embed(
-            f"{canonical_a} × {canonical_b}",
-            description=(
-                f"Wspólne oceny: **{data['common_count']}**\n"
-                f"Średnia {canonical_a}: **{_metric(data['average_a'])}**\n"
-                f"Średnia {canonical_b}: **{_metric(data['average_b'])}**\n\n"
-                f"Zgodność: **{_percent(data['agreement'])}** · "
-                f"średnia różnica: **{_metric(data['mean_gap'])}**"
+        cover_items = data.get("shared_favorites") or data.get("disagreements") or []
+        cover_images, avatar_images = await asyncio.gather(
+            asyncio.to_thread(
+                load_cover_images,
+                list(cover_items),
+                limit=3,
             ),
-            color=color,
-        )
-        differences = _new_embed(
-            "Największe różnice",
-            description=_differences(
-                data["disagreements"],
-                canonical_a,
-                canonical_b,
+            asyncio.to_thread(
+                load_cover_images,
+                data["avatar_items"],
+                limit=2,
             ),
-            color=color,
         )
-        top = _new_embed(
-            "Wspólne najwyżej ocenione",
-            description=_shared_top(
-                data["shared_favorites"],
-                canonical_a,
-                canonical_b,
-            ),
-            color=color,
+        data["_cover_images"] = cover_images
+        data["_avatar_images"] = avatar_images
+        graphic = await asyncio.to_thread(render_compare, data)
+        await interaction.followup.send(
+            file=discord.File(
+                io.BytesIO(graphic.getvalue()),
+                filename=f"compare-{canonical_a}-{canonical_b}.png",
+            )
         )
-        top.add_field(
-            name="Wspólne gatunki",
-            value=_pairs(data["shared_genres"]),
-            inline=False,
-        )
-        graphic = _new_embed(
-            "Graficzne porównanie",
-            description="Średnie, zgodność, największe różnice i wspólne albumy.",
-            color=color,
-        )
-        view = AnalyticsView(
-            sections={"home": home, "data": differences, "top": top, "graphic": graphic},
-            renderer=render_compare,
-            payload=data,
-            filename=f"compare-{canonical_a}-{canonical_b}.png",
-            data_label="⇄ Różnice",
-        )
-        await _send_view(interaction, view=view)
 
     @tree.command(
         name="wrapped",
