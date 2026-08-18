@@ -192,11 +192,8 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         # W aktualnym wyglądzie brak secondary genres / vibes daje pustą
         # linię, nie znak zapytania. Zachowujemy to 1:1.
-        secondary_genres_display = (
-            f"*{variables.secondary_genres_text}*"
-            if variables.secondary_genres
-            else " "
-        )
+        
+        secondary_genres_display = f"*{variables.secondary_genres_text}*" if variables.secondary_genres else " "
         vibes_display = f"-# {variables.vibes_text}" if variables.vibes else " "
 
         # Wygląd zachowany z obecnej wersji /last.
