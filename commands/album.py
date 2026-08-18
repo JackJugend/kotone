@@ -358,9 +358,14 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             color=score_color(variables.aoty_user_score),
         )
 
+        if variables.aoty_user_score is not None:
+                aoty_score = variables.aoty_user_score
+        else:
+                aoty_score = "—"
+
         embed.add_field(
                 name="AOTY",
-                value=f"{score_icon(variables.aoty_user_score)} **{variables.aoty_user_score}**",
+                value=f"{score_icon(variables.aoty_user_score)} **{aoty_score}**",
                 inline=True,
         )
 

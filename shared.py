@@ -200,7 +200,7 @@ def build_profile_variables(
         average_rating=profile.get("average_rating"),
         average_rating_text=str(
             profile.get("average_rating_text")
-            or "Brak danych"
+            or "—"
         ),
         favorite_kind=profile.get("favorite_kind"),
         favorites=list(profile.get("favorites") or []),
