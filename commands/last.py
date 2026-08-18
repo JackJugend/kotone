@@ -193,6 +193,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         # W aktualnym wyglądzie brak secondary genres / vibes daje pustą
         # linię, nie znak zapytania. Zachowujemy to 1:1.
         
+        primary_genres_display = variables.all_genres_text if variables.vibes else " "
         secondary_genres_display = f"*{variables.secondary_genres_text}*" if variables.secondary_genres else " "
         vibes_display = f"-# {variables.vibes_text}" if variables.vibes else " "
 
@@ -207,7 +208,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             description=(
                 f"# — \⭐ **{variables.score}** \⭐ — \n"
                 f"{variables.all_genres_text}\n"
-                f"*{secondary_genres_display}*\n"
+                f"{secondary_genres_display}\n"
                 f"{vibes_display}"
             ),
             color=score_color(variables.score),
@@ -295,7 +296,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         if (
             variables.year_ranking_text
-            and variables.year_ranking_text != "?"
+            and variables.year_ranking_text != "—"
         ):
             details_lines.append(
                 (
