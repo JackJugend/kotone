@@ -164,7 +164,7 @@ def release_to_details(release: dict, *, requested_format: object = None) -> dic
         "album_format": _release_format(release, requested_format),
         "label": labels[0] if labels else None,
         "labels": labels,
-        "genres": genres,
+        "genres": genres.title(),
         "tracklist": tracks,
         "_section_complete": {
             "score": False,
