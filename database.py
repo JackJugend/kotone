@@ -1805,6 +1805,15 @@ class Database:
             for row in rows
         }
 
+    def get_score_emoji_states(self) -> dict[int, dict]:
+        """Return Discord IDs and renderer revisions for managed score emoji."""
+
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT score, emoji_id, emoji_name, render_version FROM score_emojis"
+            ).fetchall()
+        return {int(row["score"]): dict(row) for row in rows}
+
     def used_rating_scores(self) -> list[int]:
         """Return real cached rating values first for fast emoji bootstrap."""
 
@@ -1863,6 +1872,15 @@ class Database:
             str(row["emoji_key"]): f"<:{row['emoji_name']}:{row['emoji_id']}>"
             for row in rows
         }
+
+    def get_status_emoji_states(self) -> dict[str, dict]:
+        """Return Discord IDs and renderer revisions for managed flag emoji."""
+
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT emoji_key, emoji_id, emoji_name, render_version FROM status_emojis"
+            ).fetchall()
+        return {str(row["emoji_key"]): dict(row) for row in rows}
 
     def save_status_emoji(
         self,

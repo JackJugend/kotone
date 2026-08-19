@@ -20,10 +20,10 @@ from score_emoji_registry import set_score_emojis
 from status_emoji_registry import set_status_emojis
 
 SCORE_EMOJI_PREFIX = "score_"
-SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v3"
+SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v4-transparent"
 SCORE_EMOJI_SIZE = 96
 SCORE_EMOJI_MAX_BYTES = 256 * 1024
-STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v2-transparent"
+STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v3-transparent"
 STATUS_EMOJI_NAMES = {
     "like": "like",
     "tracklist": "tracklist",
@@ -78,6 +78,21 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+def _regular_font(size: int) -> ImageFont.FreeTypeFont:
+    """AOTY-like light score numerals, bundled with the bot."""
+
+    for path in (
+        Path(__file__).with_name("assets") / "NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
 def render_score_emoji(score: int | None) -> bytes:
     """Render one compact, legible rating tile as a Discord-safe PNG."""
 
@@ -86,25 +101,21 @@ def render_score_emoji(score: int | None) -> bytes:
         raise ValueError("score emoji musi mieścić się w zakresie NR albo 0–100")
 
     size = SCORE_EMOJI_SIZE
-    # The emoji canvas is transparent. The compact rating card itself is the
-    # only black area, matching AOTY's original score presentation.
+    # AOTY's number and progress bar float directly over Discord's background;
+    # the PNG itself remains transparent around and between both elements.
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    tile_left, tile_top, tile_right, tile_bottom = 2, 13, size - 3, 83
-    draw.rectangle((tile_left, tile_top, tile_right, tile_bottom), fill=(0, 0, 0, 255))
 
-    # Source pixels are intentionally large; Discord's own scaling then keeps
-    # the number sharp instead of the previous blurred/undersized version.
-    font = _font(53 if value is None or value < 100 else 42)
+    font = _regular_font(59 if value is None or value < 100 else 47)
     text = "NR" if value is None else str(value)
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     width = right - left
     height = bottom - top
     draw.text(
-        ((size - width) / 2 - left, tile_top + 1 + (50 - height) / 2 - top),
+        ((size - width) / 2 - left, 4 + (61 - height) / 2 - top),
         text,
         font=font,
-        fill=(255, 255, 255, 255),
+        fill=(230, 232, 235, 255),
     )
 
     if value is None:
@@ -112,8 +123,7 @@ def render_score_emoji(score: int | None) -> bytes:
         image.save(output, format="PNG", optimize=True)
         return output.getvalue()
 
-    bar_left, bar_top, bar_right, bar_bottom = 13, 67, size - 13, 75
-    draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), fill=(111, 117, 124, 255))
+    bar_left, bar_top, bar_right, bar_bottom = 9, 74, size - 9, 85
     filled_right = bar_left + round((bar_right - bar_left) * value / 100)
     if value > 0:
         draw.rectangle((bar_left, bar_top, max(bar_left, filled_right), bar_bottom), fill=(*_bar_color(value), 255))
@@ -159,8 +169,7 @@ def render_status_emoji(key: str) -> bytes:
             text,
             font=font,
             fill=color,
-            stroke_width=1,
-            stroke_fill=(0, 0, 0, 255),
+            stroke_width=0,
         )
     elif name == "tracklist":
         # AOTY's icon uses two compact numbered rows, optically centred.
@@ -244,6 +253,42 @@ class ScoreEmojiSynchronizer:
     def _image_data_uri(image: bytes) -> str:
         return "data:image/png;base64," + base64.b64encode(image).decode("ascii")
 
+    async def _create_or_replace_emoji(
+        self,
+        *,
+        existing: dict | None,
+        name: str,
+        image: bytes,
+    ) -> dict:
+        """Upload a new image while preserving the public emoji name."""
+
+        create_route = await self._application_route(
+            "POST", "/applications/{application_id}/emojis"
+        )
+        if existing is None:
+            return await self.client.http.request(
+                create_route,
+                json={"name": name, "image": self._image_data_uri(image)},
+            )
+
+        temporary_name = f"tmp_{name}"[:32]
+        created = await self.client.http.request(
+            create_route,
+            json={"name": temporary_name, "image": self._image_data_uri(image)},
+        )
+        delete_route = await self._application_route(
+            "DELETE",
+            "/applications/{application_id}/emojis/{emoji_id}",
+            emoji_id=existing["id"],
+        )
+        await self.client.http.request(delete_route)
+        rename_route = await self._application_route(
+            "PATCH",
+            "/applications/{application_id}/emojis/{emoji_id}",
+            emoji_id=created["id"],
+        )
+        return await self.client.http.request(rename_route, json={"name": name})
+
     def load_cached(self) -> None:
         """Make already-uploaded emoji available immediately after restart."""
 
@@ -260,6 +305,7 @@ class ScoreEmojiSynchronizer:
                 if emoji.get("name")
             }
             cached = DB.get_score_emoji_map(render_version=SCORE_EMOJI_RENDER_VERSION)
+            states = DB.get_score_emoji_states()
             set_score_emojis(cached)
             created = 0
 
@@ -270,7 +316,13 @@ class ScoreEmojiSynchronizer:
                 name = score_emoji_name(score)
                 stored_score = -1 if score is None else score
                 existing = by_name.get(name)
-                if existing is not None:
+                state = states.get(stored_score) or {}
+                needs_rebuild = (
+                    existing is not None
+                    and str(state.get("emoji_id") or "") == str(existing.get("id") or "")
+                    and state.get("render_version") != SCORE_EMOJI_RENDER_VERSION
+                )
+                if existing is not None and not needs_rebuild:
                     DB.save_score_emoji(
                         stored_score,
                         existing["id"],
@@ -279,17 +331,11 @@ class ScoreEmojiSynchronizer:
                     )
                     continue
 
-                route = await self._application_route(
-                    "POST",
-                    "/applications/{application_id}/emojis",
-                )
                 try:
-                    created_emoji = await self.client.http.request(
-                        route,
-                        json={
-                            "name": name,
-                            "image": self._image_data_uri(render_score_emoji(score)),
-                        },
+                    created_emoji = await self._create_or_replace_emoji(
+                        existing=existing if needs_rebuild else None,
+                        name=name,
+                        image=render_score_emoji(score),
                     )
                 except Exception as exc:
                     # Do not fail the bot if Discord temporarily rate-limits
@@ -342,20 +388,22 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
                 for emoji in application_emojis
                 if emoji.get("name")
             }
+            states = DB.get_status_emoji_states()
             complete = True
             for key, name in STATUS_EMOJI_NAMES.items():
                 existing = by_name.get(name)
-                if existing is None:
-                    route = await self._application_route(
-                        "POST", "/applications/{application_id}/emojis"
-                    )
+                state = states.get(key) or {}
+                needs_rebuild = (
+                    existing is not None
+                    and str(state.get("emoji_id") or "") == str(existing.get("id") or "")
+                    and state.get("render_version") != STATUS_EMOJI_RENDER_VERSION
+                )
+                if existing is None or needs_rebuild:
                     try:
-                        existing = await self.client.http.request(
-                            route,
-                            json={
-                                "name": name,
-                                "image": self._image_data_uri(render_status_emoji(key)),
-                            },
+                        existing = await self._create_or_replace_emoji(
+                            existing=existing if needs_rebuild else None,
+                            name=name,
+                            image=render_status_emoji(key),
                         )
                     except Exception as exc:
                         print(f"[STATUS EMOJI] {key}: {type(exc).__name__}: {exc}")
