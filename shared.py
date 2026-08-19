@@ -478,7 +478,14 @@ def must_hear_title_marker(variables: ReleaseVariables) -> str:
         "both": MUST_HEAR_BOTH_EMOJI,
         "critics": MUST_HEAR_CRITICS_EMOJI,
         "users": MUST_HEAR_USERS_EMOJI,
-    }[must_hear_kind(variables.aoty_user_score, variables.critic_score)]
+    }[
+        must_hear_kind(
+            variables.aoty_user_score,
+            variables.ratings_count,
+            variables.critic_score,
+            variables.critic_reviews_count,
+        )
+    ]
 
 
 async def load_release_variables(

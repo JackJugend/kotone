@@ -52,25 +52,30 @@ def must_hear_album(
         return True
 
     # Compatibility fallback for legacy cache rows that predate the explicit
-    # AOTY marker. It is never used once the release is refreshed from AOTY.
+    # AOTY marker. AOTY has three independent visual states:
+    # orange = community threshold, blue = critics threshold, purple = both.
+    # Neither orange nor blue requires the other side to qualify.
     try:
         user = float(user_score)
+    except (TypeError, ValueError):
+        user = None
+    try:
         critic = float(critic_score)
     except (TypeError, ValueError):
-        return False
+        critic = None
     users = numeric_count(ratings_count)
     critics = numeric_count(critic_reviews_count)
-    return bool(
-        user > 80
-        and critic < 80
-        and users is not None
-        and users >= 500
-        and critics is not None
-        and critics >= 15
-    )
+    community_eligible = bool(user is not None and user > 80 and (users or 0) >= 500)
+    critics_eligible = bool(critic is not None and critic > 80 and (critics or 0) >= 15)
+    return community_eligible or critics_eligible
 
 
-def must_hear_kind(user_score, critic_score) -> str:
+def must_hear_kind(
+    user_score,
+    ratings_count,
+    critic_score,
+    critic_reviews_count,
+) -> str:
     """Classify AOTY's three Must Hear score relationships for presentation."""
 
     try:
@@ -82,9 +87,14 @@ def must_hear_kind(user_score, critic_score) -> str:
     except (TypeError, ValueError):
         critic = None
 
-    if user is not None and user > 80 and critic is not None and critic > 80:
+    users = numeric_count(ratings_count) or 0
+    critics = numeric_count(critic_reviews_count) or 0
+    community_eligible = user is not None and user > 80 and users >= 500
+    critics_eligible = critic is not None and critic > 80 and critics >= 15
+
+    if community_eligible and critics_eligible:
         return "both"
-    if critic is not None and critic > 80 and (user is None or user <= 80):
+    if critics_eligible:
         return "critics"
     # An editorial/legacy Must Hear page without both cached scores defaults
     # to the orange community marker rather than hiding the status entirely.

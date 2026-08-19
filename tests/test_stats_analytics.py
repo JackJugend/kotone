@@ -171,12 +171,14 @@ class StatsEngineTests(unittest.TestCase):
         self.assertEqual(tracks["ratings"], 1)
         self.assertEqual(tracks["average"], 95)
 
-    def test_orange_must_hear_rule_uses_all_four_cached_thresholds(self):
+    def test_must_hear_rules_use_their_independent_aoty_thresholds(self):
         self.assertTrue(must_hear_album("84", "2,204", "74", "18"))
         self.assertFalse(must_hear_album("80", "2,204", "74", "18"))
         self.assertFalse(must_hear_album("84", "499", "74", "18"))
-        self.assertFalse(must_hear_album("84", "2,204", "80", "18"))
-        self.assertFalse(must_hear_album("84", "2,204", "74", "14"))
+        self.assertTrue(must_hear_album("84", "2,204", "80", "18"))
+        self.assertTrue(must_hear_album("84", "2,204", "74", "14"))
+        self.assertTrue(must_hear_album("60", "12", "84", "15"))
+        self.assertFalse(must_hear_album("60", "12", "84", "14"))
 
     def test_official_must_hear_marker_overrides_legacy_score_heuristic(self):
         self.assertTrue(
