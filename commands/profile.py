@@ -18,6 +18,7 @@ from shared import (
     build_profile_variables,
     rating_flags_text,
     score_color,
+    score_or_nr,
     set_aoty_footer,
     user_avatar_emoji,
     username_autocomplete,
@@ -54,7 +55,7 @@ def _recent_line(item: dict) -> str:
     flags = rating_flags_text(item)
     flags_text = f" · {flags}" if flags else ""
 
-    return f"**{score}** · [{artist} — {album}]({url}) · {release_format}{flags_text}"
+    return f"{score_or_nr(score)} · [{artist} — {album}]({url}) · {release_format}{flags_text}"
 
 
 def _lastfm_count(value: object) -> str:
@@ -132,6 +133,59 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
         details.set_thumbnail(url=avatar)
     details.set_footer(text="Last.fm • dane zapisane przez Kotone")
     return [header, details]
+
+
+def _build_lastfm_embed(
+    *,
+    username: str,
+    profile: dict | None,
+    archive: dict | None,
+    latest: dict | None,
+) -> discord.Embed | None:
+    """Return the separate red Last.fm card for an AOTY Kotone profile."""
+
+    if not profile and not (archive and archive.get("scrobbles")):
+        return None
+    lastfm_username = str((profile or {}).get("lastfm_username") or username).strip()
+    embed = discord.Embed(
+        title=f"{SOURCE_EMOJIS['lastfm']} Last.fm — @{lastfm_username}",
+        url=str((profile or {}).get("profile_url") or f"https://www.last.fm/user/{lastfm_username}"),
+        color=discord.Color.from_rgb(206, 69, 69),
+    )
+    if profile:
+        embed.add_field(
+            name="Profil Last.fm",
+            value=(
+                f"**{_lastfm_count(profile.get('total_scrobbles'))}** scrobbli  •  "
+                f"**{_lastfm_count(profile.get('artist_count'))}** wykonawców\n"
+                f"**{_lastfm_count(profile.get('album_count'))}** albumów  •  "
+                f"**{_lastfm_count(profile.get('track_count'))}** utworów"
+            ),
+            inline=False,
+        )
+    if archive:
+        embed.add_field(
+            name="Archiwum Kotone",
+            value=(
+                f"**{_lastfm_count(archive.get('scrobbles'))}** scrobbli  •  "
+                f"**{_lastfm_count(archive.get('artists'))}** wykonawców\n"
+                f"**{_lastfm_count(archive.get('albums'))}** albumów  •  "
+                f"**{_lastfm_count(archive.get('tracks'))}** utworów"
+            ),
+            inline=False,
+        )
+    if latest:
+        album = f" — {latest['album']}" if latest.get("album") else ""
+        embed.add_field(
+            name="Ostatni scrobble",
+            value=f"**{latest.get('artist') or '—'} — {latest.get('track') or '—'}**{album}",
+            inline=False,
+        )
+    avatar = str((profile or {}).get("avatar_url") or "").strip()
+    if avatar:
+        embed.set_thumbnail(url=avatar)
+    embed.set_footer(text="Last.fm • dane zapisane przez Kotone")
+    return embed
 
 
 async def profile_autocomplete(
@@ -273,6 +327,12 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             else None
         )
         avatar_emoji = user_avatar_emoji(username)
+        lastfm_embed = _build_lastfm_embed(
+            username=str((kotone_profile or {}).get("lastfm_username") or ""),
+            profile=lastfm_profile,
+            archive=lastfm_archive_stats,
+            latest=last_scrobble,
+        )
 
         if favorite_kind == "artists":
             favorites_field_name = "Favorite Artists"
@@ -327,40 +387,6 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
                     url=profile_url,
                 )
 
-            if lastfm_profile or (lastfm_archive_stats and lastfm_archive_stats["scrobbles"]):
-                lastfm_username = str(
-                    (lastfm_profile or {}).get("lastfm_username")
-                    or (kotone_profile or {}).get("lastfm_username")
-                    or ""
-                )
-                lines = [
-                    f"{SOURCE_EMOJIS['lastfm']} **Last.fm · @{lastfm_username}**",
-                ]
-                if lastfm_profile:
-                    lines.append(
-                        f"Profil Last.fm: {_lastfm_count(lastfm_profile.get('total_scrobbles'))} scrobbli"
-                        f" • {_lastfm_count(lastfm_profile.get('artist_count'))} wykonawców"
-                        f" • {_lastfm_count(lastfm_profile.get('album_count'))} albumów"
-                    )
-                if lastfm_archive_stats:
-                    lines.append(
-                        f"Archiwum Kotone: {_lastfm_count(lastfm_archive_stats['scrobbles'])} scrobbli"
-                        f" • {_lastfm_count(lastfm_archive_stats['artists'])} wykonawców"
-                        f" • {_lastfm_count(lastfm_archive_stats['albums'])} albumów"
-                        f" • {_lastfm_count(lastfm_archive_stats['tracks'])} utworów"
-                    )
-                if last_scrobble:
-                    album_text = f" — {last_scrobble['album']}" if last_scrobble.get('album') else ""
-                    lines.append(
-                        f"Ostatni scrobble: **{last_scrobble['artist']} — "
-                        f"{last_scrobble['track']}**{album_text}"
-                    )
-                embed.add_field(
-                    name=f"{avatar_emoji} last.fm".strip(),
-                    value="\n".join(lines),
-                    inline=False,
-                )
-
             # Zgodnie z ustawieniem profilu AOTY pokazujemy tylko ten typ
             # Favorites, który user ma wybrany jako domyślny.
             embed.add_field(
@@ -385,17 +411,17 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             )
             return embed
 
-        first_embed = build_page_embed(0)
         view = ProfilePagerView(
             username=username,
             ratings=recent_ratings,
             favorites=variables.favorites,
             build_page_embed=build_page_embed,
+            supplemental_embeds=[lastfm_embed] if lastfm_embed else [],
             owner_id=interaction.user.id,
         )
 
         message = await interaction.followup.send(
-            embed=first_embed,
+            embeds=view.build_message_embeds(0),
             view=view,
             wait=True,
         )

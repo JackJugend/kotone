@@ -21,10 +21,10 @@ from score_emoji_registry import set_score_emojis
 from status_emoji_registry import set_status_emojis
 
 SCORE_EMOJI_PREFIX = "score_"
-SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v7-optical-centering"
-SCORE_EMOJI_SIZE = 96
+SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v8-large-centred"
+SCORE_EMOJI_SIZE = 128
 SCORE_EMOJI_MAX_BYTES = 256 * 1024
-STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v3-transparent"
+STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v4-large-centred"
 STATUS_EMOJI_NAMES = {
     "like": "like",
     "tracklist": "tracklist",
@@ -109,7 +109,7 @@ def render_score_emoji(score: int | None) -> bytes:
 
     # The rating is the primary visual element. Use almost the full width,
     # then centre the real glyph bounds rather than its font baseline.
-    font = _regular_font(67 if value is None or value < 100 else 53)
+    font = _regular_font(90 if value is None or value < 100 else 71)
     text = "NR" if value is None else str(value)
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     width = right - left
@@ -117,9 +117,9 @@ def render_score_emoji(score: int | None) -> bytes:
     # A geometric centre is not enough for narrow glyphs such as ``1``: the
     # visible ink then looks left-heavy next to a centred progress bar.
     # Compensate only that optical imbalance, scaled for the 96 px source.
-    narrow_digit_offset = text.count("1") * 3
+    narrow_digit_offset = text.count("1") * 4
     draw.text(
-        ((size - width) / 2 - left + narrow_digit_offset, 1 + (68 - height) / 2 - top),
+        ((size - width) / 2 - left + narrow_digit_offset, 4 + (91 - height) / 2 - top),
         text,
         font=font,
         fill=(230, 232, 235, 255),
@@ -130,7 +130,7 @@ def render_score_emoji(score: int | None) -> bytes:
         image.save(output, format="PNG", optimize=True)
         return output.getvalue()
 
-    bar_left, bar_top, bar_right, bar_bottom = 9, 74, size - 9, 85
+    bar_left, bar_top, bar_right, bar_bottom = 9, 104, size - 9, 120
     # AOTY keeps the unfilled progress track visible in a light cool grey.
     draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), fill=(119, 124, 132, 255))
     filled_right = bar_left + round((bar_right - bar_left) * value / 100)
@@ -170,11 +170,11 @@ def render_status_emoji(key: str) -> bytes:
     color = (150, 154, 160, 255)
 
     if name == "like":
-        font = _font(68)
+        font = _font(96)
         text = "♥"
         left, top, right, bottom = draw.textbbox((0, 0), text, font=font, stroke_width=1)
         draw.text(
-            ((size - (right - left)) / 2 - left, (size - (bottom - top)) / 2 - top - 2),
+            ((size - (right - left)) / 2 - left, (size - (bottom - top)) / 2 - top - 3),
             text,
             font=font,
             fill=color,
@@ -182,25 +182,25 @@ def render_status_emoji(key: str) -> bytes:
         )
     elif name == "tracklist":
         # AOTY's icon uses two compact numbered rows, optically centred.
-        font = _font(29)
-        for index, y in enumerate((35, 61), start=1):
+        font = _font(39)
+        for index, y in enumerate((47, 83), start=1):
             label = str(index)
             left, top, right, bottom = draw.textbbox((0, 0), label, font=font, stroke_width=2)
             draw.text(
-                (22 - (right - left) / 2 - left, y - (bottom - top) / 2 - top),
+                (30 - (right - left) / 2 - left, y - (bottom - top) / 2 - top),
                 label,
                 font=font,
                 fill=color,
                 stroke_width=1,
                 stroke_fill=(0, 0, 0, 255),
             )
-            _outlined_line(draw, [(39, y), (77, y)], width=6)
+            _outlined_line(draw, [(53, y), (104, y)], width=8)
     else:
         # A clean paper outline with a folded top-right corner.
-        _outlined_line(draw, [(27, 16), (62, 16), (72, 26), (72, 80), (27, 80), (27, 16)], width=6)
-        _outlined_line(draw, [(62, 16), (62, 27), (72, 27)], width=6)
-        _outlined_line(draw, [(38, 48), (61, 48)], width=5)
-        _outlined_line(draw, [(38, 62), (61, 62)], width=5)
+        _outlined_line(draw, [(33, 19), (82, 19), (96, 33), (96, 108), (33, 108), (33, 19)], width=8)
+        _outlined_line(draw, [(82, 19), (82, 34), (96, 34)], width=8)
+        _outlined_line(draw, [(49, 65), (80, 65)], width=6)
+        _outlined_line(draw, [(49, 84), (80, 84)], width=6)
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)

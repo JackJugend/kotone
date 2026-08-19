@@ -28,16 +28,33 @@ MAX_EMOJI_BYTES = 256 * 1024
 MAX_SOURCE_AVATAR_BYTES = 4 * 1024 * 1024
 EMOJI_AVATAR_SIZE = 128
 
+# AOTY's CDN sometimes refuses a bare Python request.  These are ordinary
+# browser fetch headers; they do not bypass a challenge or a cooldown.
+AVATAR_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/151.0.0.0 Safari/537.36"
+    ),
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.albumoftheyear.org/",
+}
 
-def _safe_aoty_avatar_bytes(url: str) -> bytes:
-    """Download, crop and encode a round AOTY avatar for Discord."""
+
+def _safe_avatar_bytes(url: str) -> bytes:
+    """Download, crop and encode an approved avatar image for Discord."""
 
     parsed = urlparse(str(url or "").strip())
     host = parsed.hostname or ""
-    if parsed.scheme != "https" or not host.endswith("albumoftheyear.org"):
-        raise ValueError("avatar AOTY ma niedozwolony URL")
+    allowed_hosts = (
+        host.endswith("albumoftheyear.org")
+        or host in {"cdn.discordapp.com", "media.discordapp.net"}
+    )
+    if parsed.scheme != "https" or not allowed_hosts:
+        raise ValueError("avatar ma niedozwolony URL")
 
-    response = requests.get(url, timeout=(5, 20))
+    response = requests.get(url, headers=AVATAR_REQUEST_HEADERS, timeout=(5, 20))
     response.raise_for_status()
     data = response.content
     if not data or len(data) > MAX_SOURCE_AVATAR_BYTES:
@@ -112,7 +129,7 @@ class AvatarEmojiSynchronizer:
             await self.sync_user(username)
 
     async def sync_user(self, username: str) -> bool:
-        """Synchronize one configured AOTY user's emoji from SQLite only."""
+        """Synchronize one configured user's avatar using its SQLite cache."""
 
         canonical = DB.canonical_username(username)
         if canonical is None:
@@ -124,7 +141,31 @@ class AvatarEmojiSynchronizer:
 
         async with self._lock:
             try:
-                return await self._sync_user_locked(canonical, emoji_name, avatar_url)
+                state = DB.get_avatar_emoji_state(canonical) or {}
+                image = DB.get_avatar_image(canonical, avatar_url)
+                if image is None:
+                    # If an older application emoji exists, cache its pixels
+                    # from Discord first.  That repairs the local cache even
+                    # while AOTY is challenging our IP.
+                    old_emoji_id = str(state.get("emoji_id") or "").strip()
+                    if old_emoji_id and state.get("avatar_url") == avatar_url:
+                        discord_url = (
+                            f"https://cdn.discordapp.com/emojis/{old_emoji_id}.png"
+                            "?size=128&quality=lossless"
+                        )
+                        try:
+                            image = await asyncio.to_thread(_safe_avatar_bytes, discord_url)
+                        except Exception:
+                            image = None
+                    if image is None:
+                        image = await asyncio.to_thread(_safe_avatar_bytes, avatar_url)
+                    DB.save_avatar_image(canonical, avatar_url, image)
+                return await self._sync_user_locked(
+                    canonical,
+                    emoji_name,
+                    avatar_url,
+                    image,
+                )
             except Exception as exc:
                 DB.mark_avatar_emoji_error(canonical, f"{type(exc).__name__}: {exc}")
                 print(f"[AVATAR EMOJI] {canonical}: {type(exc).__name__}: {exc}")
@@ -135,6 +176,7 @@ class AvatarEmojiSynchronizer:
         username: str,
         emoji_name: str,
         avatar_url: str,
+        image: bytes,
     ) -> bool:
         state = DB.get_avatar_emoji_state(username) or {}
         emoji_id = str(state.get("emoji_id") or "")
@@ -157,7 +199,6 @@ class AvatarEmojiSynchronizer:
                 f"emoji :{emoji_name}: już istnieje; Kotone nie nadpisze ręcznego emoji"
             )
 
-        image = await asyncio.to_thread(_safe_aoty_avatar_bytes, avatar_url)
         create_route = await self._application_route(
             "POST",
             "/applications/{application_id}/emojis",

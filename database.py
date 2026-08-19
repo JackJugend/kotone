@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # One-time migration data for pages verified before the scraper stored AOTY's
 # explicit Must Hear marker.  Values are written into ``releases.must_hear``;
@@ -954,6 +954,26 @@ class Database:
                 """
             )
 
+            # The generated Discord avatar is also a durable local cache of
+            # the AOTY image pixels.  This lets a restart (or an AOTY CDN 403)
+            # recreate ``:enso:`` / ``:kulkien:`` without asking AOTY again.
+            # It remains limited to configured users through the public
+            # methods below.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_avatar_images (
+                    username TEXT PRIMARY KEY COLLATE NOCASE,
+                    avatar_url TEXT NOT NULL,
+                    image_png BLOB NOT NULL,
+                    cached_at REAL NOT NULL,
+                    FOREIGN KEY (username)
+                        REFERENCES users(username)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE
+                )
+                """
+            )
+
             # Score emoji are application-owned presentation assets, not user
             # data.  Keeping their mutable Discord IDs in SQLite lets every
             # command render the same rating tile without hard-coding IDs.
@@ -1722,6 +1742,55 @@ class Database:
                 (canonical,),
             ).fetchone()
         return row["avatar_url"] if row else None
+
+    def get_avatar_image(
+        self,
+        username: str,
+        avatar_url: str | None = None,
+    ) -> bytes | None:
+        """Return the locally cached circular avatar for one Kotone user.
+
+        A cached image is accepted only when it belongs to the current stored
+        avatar URL.  Old pixels therefore cannot silently be reused after a
+        profile picture change, while ordinary restarts require no AOTY IO.
+        """
+
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return None
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT avatar_url, image_png
+                FROM user_avatar_images
+                WHERE username = ?
+                """,
+                (canonical,),
+            ).fetchone()
+        if row is None or (avatar_url and row["avatar_url"] != str(avatar_url)):
+            return None
+        image = row["image_png"]
+        return bytes(image) if image else None
+
+    def save_avatar_image(self, username: str, avatar_url: str, image_png: bytes) -> None:
+        """Persist a small rendered avatar cache for a configured user only."""
+
+        canonical = self._require_monitored(username)
+        image = bytes(image_png or b"")
+        if not image or len(image) > 256 * 1024:
+            raise ValueError("avatar PNG jest pusty albo przekracza 256 KiB")
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO user_avatar_images(username, avatar_url, image_png, cached_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    avatar_url = excluded.avatar_url,
+                    image_png = excluded.image_png,
+                    cached_at = excluded.cached_at
+                """,
+                (canonical, str(avatar_url), sqlite3.Binary(image), _now()),
+            )
 
     def avatar_check_due(self, username: str, interval_seconds: float) -> bool:
         """Whether an AOTY avatar comparison may run for this profile."""

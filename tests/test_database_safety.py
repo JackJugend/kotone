@@ -128,6 +128,31 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         self.assert_backup_was_restored()
         self.assertTrue(list(self.tmp.glob("kotone.sqlite3.empty-*")))
 
+    def test_avatar_image_cache_is_limited_to_current_avatar_url(self):
+        db = self.make_db()
+        try:
+            image = b"small-transparent-png-placeholder"
+            db.save_avatar_image(
+                "enso",
+                "https://cdn.albumoftheyear.org/user/thumbs/enso.jpg",
+                image,
+            )
+            self.assertEqual(
+                db.get_avatar_image(
+                    "enso",
+                    "https://cdn.albumoftheyear.org/user/thumbs/enso.jpg",
+                ),
+                image,
+            )
+            self.assertIsNone(
+                db.get_avatar_image(
+                    "enso",
+                    "https://cdn.albumoftheyear.org/user/thumbs/new-enso.jpg",
+                )
+            )
+        finally:
+            db.close()
+
     def test_corrupt_database_probe_is_closed_before_windows_quarantine(self):
         self.seed_backup()
         self.path.write_bytes(b"not a sqlite database")

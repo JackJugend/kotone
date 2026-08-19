@@ -1277,6 +1277,7 @@ class ProfilePagerView(TimedDisableView):
         ratings: list[dict],
         build_page_embed: Callable[[int], discord.Embed],
         favorites: list[dict] | None = None,
+        supplemental_embeds: list[discord.Embed] | None = None,
         timeout: float = VIEW_TIMEOUT_SECONDS,
         owner_id: int | None = None,
     ):
@@ -1288,12 +1289,19 @@ class ProfilePagerView(TimedDisableView):
             for item in (favorites or [])
         ]
         self.build_page_embed = build_page_embed
+        self.supplemental_embeds = list(supplemental_embeds or [])[:9]
         self.page_index = 0
         self.current_tab = HOME_BUTTON
         self.selected_source = "rating" if self.ratings else "favorite"
         self.selected_index = 0
         self._selected_extra = None
         self._rebuild_components()
+
+    def build_message_embeds(self, page_index: int | None = None) -> list[discord.Embed]:
+        """Keep the optional source card below every page of the profile."""
+
+        index = self.page_index if page_index is None else page_index
+        return [self.build_page_embed(index), *self.supplemental_embeds]
 
     @property
     def total_pages(self) -> int:
@@ -1378,7 +1386,7 @@ class ProfilePagerView(TimedDisableView):
         self._selected_extra = None
         self._rebuild_components()
         await interaction.response.edit_message(
-            embeds=[self.build_page_embed(self.page_index)],
+            embeds=self.build_message_embeds(),
             view=self,
         )
         await _clear_artist_result(self)
@@ -1393,7 +1401,7 @@ class ProfilePagerView(TimedDisableView):
         self._selected_extra = None
         self._rebuild_components()
         await interaction.response.edit_message(
-            embeds=[self.build_page_embed(self.page_index)],
+            embeds=self.build_message_embeds(),
             view=self,
         )
         await _clear_artist_result(self)
@@ -1402,7 +1410,7 @@ class ProfilePagerView(TimedDisableView):
         self.current_tab = HOME_BUTTON
         self._rebuild_components()
         await interaction.response.edit_message(
-            embeds=[self.build_page_embed(self.page_index)],
+            embeds=self.build_message_embeds(),
             view=self,
         )
         await _clear_artist_result(self)
