@@ -18,7 +18,6 @@ from shared import (
     build_profile_variables,
     rating_flags_text,
     score_color,
-    score_icon,
     set_aoty_footer,
     user_avatar_emoji,
     username_autocomplete,
@@ -55,10 +54,7 @@ def _recent_line(item: dict) -> str:
     flags = rating_flags_text(item)
     flags_text = f" · {flags}" if flags else ""
 
-    return (
-        f"{score_icon(score)} · "
-        f"[{artist} — {album}]({url}) · {release_format}{flags_text}"
-    )
+    return f"**{score}** · [{artist} — {album}]({url}) · {release_format}{flags_text}"
 
 
 def _lastfm_count(value: object) -> str:

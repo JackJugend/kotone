@@ -1805,6 +1805,23 @@ class Database:
             for row in rows
         }
 
+    def used_rating_scores(self) -> list[int]:
+        """Return real cached rating values first for fast emoji bootstrap."""
+
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT DISTINCT score FROM ratings WHERE active = 1"
+            ).fetchall()
+        result: set[int] = set()
+        for row in rows:
+            try:
+                value = int(float(str(row["score"] or "").replace(",", ".")))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= value <= 100:
+                result.add(value)
+        return sorted(result, reverse=True)
+
     def save_score_emoji(
         self,
         score: int,

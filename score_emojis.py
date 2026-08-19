@@ -218,6 +218,28 @@ class ScoreEmojiSynchronizer:
         payload = await self.client.http.request(route)
         return list((payload or {}).get("items") or [])
 
+    async def _delete_legacy_emojis(
+        self,
+        emojis: list[dict],
+        *,
+        names_or_prefixes: tuple[str, ...],
+    ) -> None:
+        """Remove only the old Kotone application assets after replacement."""
+
+        for emoji in emojis:
+            name = str(emoji.get("name") or "")
+            if not any(name.startswith(prefix) for prefix in names_or_prefixes):
+                continue
+            try:
+                route = await self._application_route(
+                    "DELETE",
+                    "/applications/{application_id}/emojis/{emoji_id}",
+                    emoji_id=emoji["id"],
+                )
+                await self.client.http.request(route)
+            except Exception as exc:
+                print(f"[EMOJI] Nie usunięto starego :{name}: {type(exc).__name__}: {exc}")
+
     @staticmethod
     def _image_data_uri(image: bytes) -> str:
         return "data:image/png;base64," + base64.b64encode(image).decode("ascii")
@@ -241,7 +263,10 @@ class ScoreEmojiSynchronizer:
             set_score_emojis(cached)
             created = 0
 
-            for score in [None, *range(101)]:
+            used_scores = DB.used_rating_scores()
+            ordered_scores = [None, *used_scores]
+            ordered_scores.extend(score for score in range(101) if score not in used_scores)
+            for score in ordered_scores:
                 name = score_emoji_name(score)
                 stored_score = -1 if score is None else score
                 existing = by_name.get(name)
@@ -286,9 +311,16 @@ class ScoreEmojiSynchronizer:
                 )
                 # Prevent an initial 101-emoji bootstrap from competing with
                 # command responses or Discord's application-emoji limits.
-                await asyncio.sleep(1.2)
+                await asyncio.sleep(0.35)
 
             self.load_cached()
+            if len(DB.get_score_emoji_map(render_version=SCORE_EMOJI_RENDER_VERSION)) == 102:
+                # v1/v2 assets have a different visual and are no longer
+                # referenced by SQLite after the new set is complete.
+                await self._delete_legacy_emojis(
+                    await self._list_application_emojis(),
+                    names_or_prefixes=("kotone_score_",),
+                )
             print(
                 "[SCORE EMOJI] Dostępne "
                 f"{len(DB.get_score_emoji_map(render_version=SCORE_EMOJI_RENDER_VERSION))}/102; "
@@ -310,6 +342,7 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
                 for emoji in application_emojis
                 if emoji.get("name")
             }
+            complete = True
             for key, name in STATUS_EMOJI_NAMES.items():
                 existing = by_name.get(name)
                 if existing is None:
@@ -326,8 +359,9 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
                         )
                     except Exception as exc:
                         print(f"[STATUS EMOJI] {key}: {type(exc).__name__}: {exc}")
+                        complete = False
                         continue
-                    await asyncio.sleep(1.2)
+                    await asyncio.sleep(0.35)
                 DB.save_status_emoji(
                     key,
                     existing["id"],
@@ -335,4 +369,13 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
                     STATUS_EMOJI_RENDER_VERSION,
                 )
             self.load_cached()
+            if complete and len(DB.get_status_emoji_map(render_version=STATUS_EMOJI_RENDER_VERSION)) == 3:
+                await self._delete_legacy_emojis(
+                    await self._list_application_emojis(),
+                    names_or_prefixes=(
+                        "kotone_like",
+                        "kotone_tracklist",
+                        "kotone_review",
+                    ),
+                )
             print("[STATUS EMOJI] Zsynchronizowano transparentne flagi wydania.")
