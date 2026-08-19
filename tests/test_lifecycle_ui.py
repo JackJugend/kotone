@@ -296,6 +296,16 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await view.interaction_check(owner))
         owner.response.send_message.assert_not_awaited()
 
+    def test_single_recent_result_has_no_redundant_position_select(self):
+        view = views_module.MultiRatingView(
+            username="enso",
+            items=[{"artist": "Artist", "album": "Album", "album_id": "1"}],
+            main_embeds=[discord.Embed()],
+        )
+        self.assertFalse(
+            any(isinstance(child, views_module.RatingSelect) for child in view.children)
+        )
+
     async def test_timeout_edits_public_message_with_channel_token(self):
         """Twenty minutes outlives an interaction webhook's edit token."""
 

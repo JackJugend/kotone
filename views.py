@@ -735,12 +735,15 @@ class MultiRatingView(TimedDisableView):
         self.selected_index = 0
         self._selected_extra = None
         self.author_icon_url = author_icon_url
-        self.add_item(
-            RatingSelect(
-                self,
-                self.items,
+        # With a single /recent result there is nothing to choose.  Keeping
+        # the selector in that case only wastes vertical space under the card.
+        if len(self.items) > 1:
+            self.add_item(
+                RatingSelect(
+                    self,
+                    self.items,
+                )
             )
-        )
         self._refresh_detail_buttons()
         _order_action_buttons(
             self,
