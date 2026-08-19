@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from database import DB
 from score_emoji_registry import set_score_emojis
+from settings import MANUAL_STATUS_EMOJI_IDS
 from status_emoji_registry import set_status_emojis
 
 SCORE_EMOJI_PREFIX = "score_"
@@ -429,7 +430,7 @@ class ScoreEmojiSynchronizer:
 
 
 class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
-    """Create the three shared transparent release-flag emoji after startup."""
+    """Expose the owner-provided application icons after startup."""
 
     def load_cached(self) -> None:
         # Preserve the previous transparent icon during the short replacement
@@ -437,6 +438,13 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
         cached = DB.get_status_emoji_map()
         cached.update(
             DB.get_status_emoji_map(render_version=STATUS_EMOJI_RENDER_VERSION)
+        )
+        cached.update(
+            {
+                key: f"<:{STATUS_EMOJI_NAMES[key]}:{emoji_id}>"
+                for key, emoji_id in MANUAL_STATUS_EMOJI_IDS.items()
+                if key in STATUS_EMOJI_NAMES and str(emoji_id).isdigit()
+            }
         )
         set_status_emojis(cached)
 
@@ -456,6 +464,26 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
             states = DB.get_status_emoji_states()
             complete = True
             for key, name in STATUS_EMOJI_NAMES.items():
+                # These three assets were deliberately uploaded manually to
+                # the application.  Their exact IDs are the source of truth;
+                # never replace them with a generated PNG on deploy.
+                manual_id = str(MANUAL_STATUS_EMOJI_IDS.get(key) or "")
+                manual = next(
+                    (
+                        emoji
+                        for emoji in application_emojis
+                        if str(emoji.get("id") or "") == manual_id
+                    ),
+                    None,
+                )
+                if manual is not None:
+                    DB.save_status_emoji(
+                        key,
+                        manual["id"],
+                        name,
+                        "manual-v1",
+                    )
+                    continue
                 existing = by_name.get(name)
                 state = states.get(key) or {}
                 needs_rebuild = (

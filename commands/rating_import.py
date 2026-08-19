@@ -24,8 +24,10 @@ from settings import (
 )
 
 
-MAX_CSV_BYTES = 2 * 1024 * 1024
-MAX_LASTFM_CSV_BYTES = 20 * 1024 * 1024
+# Discord still applies the guild's upload cap before the command sees a
+# file, but Kotone itself accepts a full 100 MiB export once Discord passes it.
+MAX_CSV_BYTES = 100 * 1024 * 1024
+MAX_LASTFM_CSV_BYTES = MAX_CSV_BYTES
 
 
 async def _kotone_user_autocomplete(
@@ -147,14 +149,14 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                 return
             if int(file.size or 0) > MAX_LASTFM_CSV_BYTES:
                 await interaction.followup.send(
-                    "Plik Last.fm jest za duży. Maksymalny rozmiar to 20 MB.",
+                    "Plik Last.fm jest za duży. Maksymalny rozmiar to 100 MB.",
                     ephemeral=True,
                 )
                 return
             try:
                 payload = await file.read()
                 if len(payload) > MAX_LASTFM_CSV_BYTES:
-                    raise LastFMImportError("plik przekracza limit 20 MB")
+                    raise LastFMImportError("plik przekracza limit 100 MB")
                 parsed = await asyncio.to_thread(parse_lastfm_scrobbles_csv, payload)
                 tracks = await asyncio.to_thread(
                     DB.link_lastfm_tracks_to_releases,
@@ -222,7 +224,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             return
         if int(file.size or 0) > MAX_CSV_BYTES:
             await interaction.response.send_message(
-                "Plik jest za duży. Maksymalny rozmiar to 2 MB.",
+                "Plik jest za duży. Maksymalny rozmiar to 100 MB.",
                 ephemeral=True,
             )
             return
@@ -231,7 +233,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         try:
             payload = await file.read()
             if len(payload) > MAX_CSV_BYTES:
-                raise RatingImportError("plik przekracza limit 2 MB")
+                raise RatingImportError("plik przekracza limit 100 MB")
             parsed = await asyncio.to_thread(parse_aoty_ratings_csv, payload)
             await asyncio.to_thread(DB.backup_if_due, force=True)
             result = await asyncio.to_thread(

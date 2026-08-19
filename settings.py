@@ -38,6 +38,15 @@ MUST_HEAR_USERS_EMOJI = "<:musthear_users:1539713390820458566>"
 MUST_HEAR_CRITICS_EMOJI = "<:musthear_critics:1539713389557841981>"
 MUST_HEAR_BOTH_EMOJI = "<:musthear_both:1539713387150319679>"
 
+# Ręcznie przygotowane przez właściciela aplikacji, transparentne ikony flag.
+# Ich ID są stałe dopóki emoji należą do aplikacji Kotone; synchronizator ich
+# nie renderuje ani nie nadpisuje lokalną wersją.
+MANUAL_STATUS_EMOJI_IDS = {
+    "tracklist": "1539780590751187014",
+    "review": "1539780589240983592",
+    "like": "1539780587936551002",
+}
+
 # Public presentation assets live in one global mapping. Commands and views
 # should import these names rather than duplicating Discord emoji IDs.
 SOURCE_EMOJIS = {

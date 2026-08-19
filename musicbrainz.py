@@ -29,6 +29,40 @@ USER_AGENT = "Kotone/1.0 (https://github.com/JackJugend/kotone)"
 class MusicBrainzUnavailable(RuntimeError):
     """MusicBrainz could not provide a safe fallback result."""
 
+
+# MusicBrainz often returns English/Russian-derived spellings for Belarusian
+# places.  Kotone presents them in Belarusian Łacinka when the artist's
+# country is Belarus, without changing names from other countries.
+_BELARUSIAN_PLACE_NAMES = {
+    "mogilev": "Mahilioŭ",
+    "mogilyov": "Mahilioŭ",
+    "mahilyow": "Mahilioŭ",
+    "gomel": "Homiel",
+    "grodno": "Hrodna",
+    "vitebsk": "Viciebsk",
+    "vitebsk voblast": "Viciebskaja vobłaść",
+    "bobruisk": "Babrujsk",
+    "baranovichi": "Baranavičy",
+    "borisov": "Barysaŭ",
+    "polotsk": "Połack",
+    "orsha": "Orša",
+    "soligorsk": "Salihorsk",
+    "zhlobin": "Žłobin",
+    "svetlogorsk": "Svietłahorsk",
+    "rechitsa": "Rečyca",
+    "slutsk": "Słuck",
+    "molodechno": "Maładziečna",
+}
+
+
+def _belarusian_place_name(value: object, country: object) -> str | None:
+    """Return a Belarusian Latin place spelling for known MB variants."""
+
+    text = str(value or "").strip()
+    if str(country or "").strip().upper() != "BY" or not text:
+        return text or None
+    return _BELARUSIAN_PLACE_NAMES.get(text.casefold(), text)
+
     def __init__(self, message: str, *, retry_after: float = 0.0):
         super().__init__(message)
         self.retry_after = max(0.0, float(retry_after))
@@ -430,7 +464,7 @@ class MusicBrainzClient:
                     [{"name": canonical_name}, *list(data.get("aliases") or [])]
                 ),
                 "country": country,
-                "origin_area": str(area.get("name") or "").strip() or None,
+                "origin_area": _belarusian_place_name(area.get("name"), country),
                 "founded_or_birthdate": str(data.get("life-span", {}).get("begin") or "").strip() or None,
                 "type": str(data.get("type") or "").strip() or None,
                 "genres": _names(data.get("genres")) or _names(data.get("tags")),
