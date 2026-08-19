@@ -399,37 +399,46 @@ class MusicBrainzClient:
             params={"query": f'artist:"{name}"', "fmt": "json", "limit": "5"},
         )
         expected = _normalized(name)
-        candidate = next(
-            (
-                row
-                for row in search.get("artists") or []
-                if isinstance(row, dict) and _normalized(row.get("name")) == expected
-            ),
-            None,
+        candidates = [
+            row
+            for row in search.get("artists") or []
+            if isinstance(row, dict) and row.get("id")
+        ]
+        # Prefer an exact displayed-name hit, but a search can legitimately
+        # return a native-script canonical name for an AOTY romanization.
+        candidates.sort(
+            key=lambda row: _normalized(row.get("name")) != expected
         )
-        if not candidate or not candidate.get("id"):
-            return None
-        data = self._json(
-            f"/artist/{candidate['id']}",
-            params={"fmt": "json", "inc": "aliases+genres+tags+artist-rels"},
-        )
-        if _normalized(data.get("name")) != expected:
-            return None
-        area = data.get("area") if isinstance(data.get("area"), dict) else {}
-        country = str(data.get("country") or area.get("iso-3166-1-code") or "").strip() or None
-        return {
-            "artist": str(data.get("name") or name).strip(),
-            "musicbrainz_artist_id": str(data.get("id") or "").strip() or None,
-            "aliases": _aliases(data.get("aliases")),
-            "country": country,
-            "origin_area": str(area.get("name") or "").strip() or None,
-            "founded_or_birthdate": str(data.get("life-span", {}).get("begin") or "").strip() or None,
-            "type": str(data.get("type") or "").strip() or None,
-            "genres": _names(data.get("genres")) or _names(data.get("tags")),
-            "musicbrainz_url": (
-                f"https://musicbrainz.org/artist/{data['id']}" if data.get("id") else None
-            ),
-        }
+        for candidate in candidates[:3]:
+            data = self._json(
+                f"/artist/{candidate['id']}",
+                params={"fmt": "json", "inc": "aliases+genres+tags+artist-rels"},
+            )
+            aliases = _aliases(data.get("aliases"))
+            canonical_name = str(data.get("name") or "").strip()
+            names = [canonical_name, *aliases]
+            if expected not in {_normalized(value) for value in names}:
+                continue
+            area = data.get("area") if isinstance(data.get("area"), dict) else {}
+            country = str(data.get("country") or area.get("iso-3166-1-code") or "").strip() or None
+            return {
+                "artist": str(data.get("name") or name).strip(),
+                "musicbrainz_artist_id": str(data.get("id") or "").strip() or None,
+                # Include MusicBrainz's primary (possibly native-script)
+                # spelling as a searchable alias of the AOTY display name.
+                "aliases": _aliases(
+                    [{"name": canonical_name}, *list(data.get("aliases") or [])]
+                ),
+                "country": country,
+                "origin_area": str(area.get("name") or "").strip() or None,
+                "founded_or_birthdate": str(data.get("life-span", {}).get("begin") or "").strip() or None,
+                "type": str(data.get("type") or "").strip() or None,
+                "genres": _names(data.get("genres")) or _names(data.get("tags")),
+                "musicbrainz_url": (
+                    f"https://musicbrainz.org/artist/{data['id']}" if data.get("id") else None
+                ),
+            }
+        return None
 
 
 MUSICBRAINZ = MusicBrainzClient()

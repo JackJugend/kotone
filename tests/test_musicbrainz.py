@@ -79,3 +79,27 @@ class MusicBrainzFallbackTests(unittest.TestCase):
         self.assertIn("coverartarchive.org/release-group/group-id", details["cover"])
         self.assertFalse(details["_section_complete"]["score"])
         self.assertFalse(details["_section_complete"]["ranking"])
+
+    def test_artist_lookup_accepts_aoty_romanization_as_musicbrainz_alias(self):
+        client = MusicBrainzClient()
+        client._json = Mock(
+            side_effect=[
+                {"artists": [{"id": "shiina-id", "name": "椎名林檎"}]},
+                {
+                    "id": "shiina-id",
+                    "name": "椎名林檎",
+                    "aliases": [
+                        {"name": "Sheena Ringo"},
+                        {"name": "Yumiko Shiina"},
+                    ],
+                    "area": {"name": "Japan", "iso-3166-1-code": "JP"},
+                    "life-span": {"begin": "1978-11-25"},
+                },
+            ]
+        )
+
+        result = client.lookup_artist("Sheena Ringo")
+
+        self.assertEqual(result["musicbrainz_artist_id"], "shiina-id")
+        self.assertIn("椎名林檎", result["aliases"])
+        self.assertIn("Yumiko Shiina", result["aliases"])

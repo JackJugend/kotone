@@ -190,7 +190,11 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                 )
                 return
             result = await LASTFM_ARCHIVE.import_newest_now(
-                str(kotone_profile.get("name") or "")
+                str(kotone_profile.get("name") or ""),
+                # /dbonly controls automatic background refreshes. A manual
+                # /import is an explicit operator/user request and should
+                # still be allowed when a valid API key is configured.
+                manual_override=True,
             )
             if result.get("error"):
                 await interaction.followup.send(

@@ -78,6 +78,7 @@ class DataService:
         self._musicbrainz_blocked_until = 0.0
         self._musicbrainz_last_error: str | None = None
         self._lastfm_release_retry_after: dict[str, float] = {}
+        self._artist_metadata_cursor: dict[str, int] = {}
 
     @staticmethod
     def _value_present(value) -> bool:
@@ -331,15 +332,29 @@ class DataService:
 
         canonical = {str(item.get("name") or "").casefold(): item for item in DB.cached_artists()}
         query_key = " ".join(query.split()).casefold()
+        query_variants = [query]
+        parts = query.split()
+        if len(parts) == 2:
+            reversed_query = f"{parts[1]} {parts[0]}"
+            if reversed_query.casefold() != query_key:
+                query_variants.append(reversed_query)
         for alias in DB.cached_artist_aliases():
             artist = canonical.get(str(alias.get("artist") or "").casefold())
             if not artist:
                 continue
             alias_name = str(alias.get("alias") or "")
-            score = aoty.fuzzy_match_score(query, alias_name)
+            score = max(
+                aoty.fuzzy_match_score(variant, alias_name)
+                for variant in query_variants
+            )
             alias_key = " ".join(alias_name.split()).casefold()
             if query_key and query_key == alias_key:
                 score = max(score, 1.25)
+            elif any(
+                " ".join(variant.split()).casefold() == alias_key
+                for variant in query_variants
+            ):
+                score = max(score, 1.20)
             elif query_key and query_key in alias_key:
                 score = max(score, 1.05)
             if score < 0.28:
@@ -515,10 +530,16 @@ class DataService:
         MusicBrainz request and one Last.fm API request in a pass.
         """
 
-        candidates = DB.artist_metadata_candidates(username, limit=1)
+        # Rotate through every configured user's cached artists.  A fixed
+        # ``LIMIT 1`` would keep choosing the newest artist forever, leaving
+        # older entries without their newly introduced alias index.
+        candidates = DB.artist_metadata_candidates(username, limit=5000)
         if not candidates:
             return 0
-        artist = candidates[0]
+        cursor_key = str(username).casefold()
+        index = self._artist_metadata_cursor.get(cursor_key, 0) % len(candidates)
+        artist = candidates[index]
+        self._artist_metadata_cursor[cursor_key] = (index + 1) % len(candidates)
         now = time.time()
         cached = DB.get_artist_source_data(artist)
         saved = 0
@@ -526,7 +547,13 @@ class DataService:
         mb_cached = cached.get("musicbrainz") or {}
         if (
             SOURCES.enabled("musicbrainz")
-            and now - float(mb_cached.get("fetched_at") or 0) >= ARTIST_SOURCE_TTL
+            and (
+                # Old cache rows predate the alias index. Refresh each such
+                # artist once in the low-priority worker so autocomplete can
+                # start using aliases without waiting a whole normal TTL.
+                not mb_cached.get("aliases")
+                or now - float(mb_cached.get("fetched_at") or 0) >= ARTIST_SOURCE_TTL
+            )
             and self._musicbrainz_blocked_until <= now
         ):
             try:

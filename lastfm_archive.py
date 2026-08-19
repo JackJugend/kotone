@@ -136,7 +136,12 @@ class LastFMArchive:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return {"attempted": True, "error": self.last_error}
 
-    async def import_newest_now(self, profile_key: object) -> dict:
+    async def import_newest_now(
+        self,
+        profile_key: object,
+        *,
+        manual_override: bool = False,
+    ) -> dict:
         """Manually seed one configured profile from its newest Last.fm page.
 
         The regular worker continues at page two later.  This is deliberately
@@ -151,7 +156,7 @@ class LastFMArchive:
             return {"error": "Ten profil Kotone nie ma ustawionego konta Last.fm."}
         if not LASTFM_API_ENABLED:
             return {"error": "Brak LASTFM_API_KEY; Last.fm API jest wyłączone."}
-        if not SOURCES.enabled("lastfm"):
+        if not manual_override and not SOURCES.enabled("lastfm"):
             return {"error": "Last.fm API jest zablokowane w `/dbonly`."}
         if self._in_progress:
             return {"error": "Importer Last.fm pracuje już w tle; spróbuj za chwilę."}
