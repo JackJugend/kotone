@@ -10,6 +10,7 @@ from presence_cache import PRESENCE_CACHE
 from shared import (
     aoty_score_or_missing,
     build_release_variables,
+    must_hear_title_marker,
     score_or_missing,
     set_aoty_footer,
 )
@@ -770,7 +771,7 @@ class ArtistSortView(TimedDisableView):
 
             lines.append(
                 f"{aoty_score_or_missing(variables.aoty_user_score, variables.ratings_count)} • "
-                f"**[{variables.display_album}]({release['url']})** • "
+                f"**{must_hear_title_marker(variables)} [{variables.display_album}]({release['url']})** • "
                 f"{variables.album_format} • {variables.release_date}"
             )
 

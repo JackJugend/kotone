@@ -9,6 +9,7 @@ from services import DATA
 from shared import (
     aoty_score_or_missing,
     load_release_variables,
+    must_hear_title_marker,
     rating_flags_text,
     release_year_suffix,
     score_color,
@@ -33,7 +34,7 @@ def _rating_embed(username, item, avatar, variables):
     embed = discord.Embed(
         title=(
             f"{score_icon(variables.score)} "
-            f"{variables.display_artist} — "
+            f"{variables.display_artist} — {must_hear_title_marker(variables)} "
             f"**{variables.display_album}**{release_year_suffix(variables.year)}"
         ),
         url=variables.url,

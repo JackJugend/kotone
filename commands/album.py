@@ -15,6 +15,7 @@ from presence_cache import PRESENCE_CACHE
 from shared import (
     aoty_score_or_missing,
     load_release_variables,
+    must_hear_title_marker,
     rating_flags_text,
     release_year_suffix,
     score_color,
@@ -351,7 +352,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
         embed = discord.Embed(
             title=(
-                f"**{variables.display_album}**"
+                f"{must_hear_title_marker(variables)} **{variables.display_album}**"
                 f"{release_year_suffix(variables.year)}"
             ),
             url=variables.url,

@@ -15,8 +15,14 @@ from typing import Any
 import discord
 
 from display_utils import display_genres, display_release_date, display_romanized_name
-from must_hear import marked_cover_url, must_hear_album, numeric_count
-from settings import AOTY_ICON_ATTACHMENT, USERS
+from must_hear import marked_cover_url, must_hear_album, must_hear_kind, numeric_count
+from settings import (
+    AOTY_ICON_ATTACHMENT,
+    MUST_HEAR_BOTH_EMOJI,
+    MUST_HEAR_CRITICS_EMOJI,
+    MUST_HEAR_USERS_EMOJI,
+    USERS,
+)
 
 
 def set_aoty_footer(embed: discord.Embed, text: str) -> None:
@@ -349,11 +355,10 @@ def build_release_variables(
     critic_score = value("critic_score", missing)
     critic_reviews_count = value("critic_reviews_count", missing)
     album_id = str(item.get("album_id") or details.get("album_id") or "")
-    # The orange tag endpoint validates its URL token against the durable
-    # ``releases`` record.  Prefer that exact cover URL whenever it exists;
-    # a compact rating card can contain an older CDN URL for the same cover.
-    # Using the card URL here made the endpoint correctly reject its token
-    # and Discord silently displayed no Must Hear tag.
+    # Prefer the durable release cover, but preserve a compact rating-card URL
+    # when it is the only known artwork. The badge endpoint receives that URL
+    # explicitly, so every tab can use the same Must Hear cover even before a
+    # separate ``releases`` cache row exists.
     raw_cover = details.get("cover") or item.get("cover")
     must_hear = must_hear_album(
         user_score,
@@ -365,7 +370,7 @@ def build_release_variables(
     )
     display_cover = (
         marked_cover_url(album_id, raw_cover)
-        if must_hear and details.get("fetched_at") is not None
+        if must_hear
         else None
     ) or raw_cover
 
@@ -463,6 +468,17 @@ def build_release_variables(
         track_ratings=list(item.get("track_ratings") or []),
     )
 
+
+def must_hear_title_marker(variables: ReleaseVariables) -> str:
+    """Return the configured Must Hear emoji for a known release, or empty."""
+
+    if not variables.must_hear:
+        return ""
+    return {
+        "both": MUST_HEAR_BOTH_EMOJI,
+        "critics": MUST_HEAR_CRITICS_EMOJI,
+        "users": MUST_HEAR_USERS_EMOJI,
+    }[must_hear_kind(variables.aoty_user_score, variables.critic_score)]
 
 
 async def load_release_variables(

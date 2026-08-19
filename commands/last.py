@@ -9,6 +9,7 @@ from services import DATA
 from shared import (
     aoty_score_or_missing,
     load_release_variables,
+    must_hear_title_marker,
     rating_flags_text,
     release_year_suffix,
     score_color,
@@ -204,7 +205,8 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         embed = discord.Embed(
             title=(
                 f"{score_icon(variables.score)} "
-                f"{variables.display_artist} — **{variables.display_album}**"
+                f"{variables.display_artist} — {must_hear_title_marker(variables)} "
+                f"**{variables.display_album}**"
                 f"{release_year_suffix(variables.year)}"
             ),
             url=variables.url,

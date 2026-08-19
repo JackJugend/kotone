@@ -19,6 +19,7 @@ from shared import (
     aoty_score_value,
     build_release_variables,
     load_release_variables,
+    must_hear_title_marker,
     rating_flags_text,
     score_or_nr,
     score_value_or_nr,
@@ -54,13 +55,22 @@ def _trim_description(text: str, limit: int = 4000) -> str:
 
 
 def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
-    artist = display_romanized_name(item.get("artist") or "Nieznany artysta")
-    album = display_romanized_name(item.get("album") or item.get("title") or "Nieznane wydanie")
     score = extra.get("score") or item.get("score")
     review_text = extra.get("review_text") or "Brak recenzji."
 
+    # Review is a separate tab, but its cover/title must follow the same
+    # durable Must Hear state as Home, Details and Tracklist.
+    hydrated = DATA.release_with_cached_details(item)
+    album_id = str(hydrated.get("album_id") or "").strip()
+    cached = DATA.cached_release_details(album_id) if album_id else {}
+    variables = build_release_variables(hydrated, cached or {})
+    marker = must_hear_title_marker(variables)
+
     embed = discord.Embed(
-        title=f"✎ {artist} — {album}",
+        title=(
+            f"✎ {variables.display_artist} — {variables.display_album}"
+            f" {marker}".rstrip()
+        ),
         url=extra.get("review_url") or item.get("url"),
         description=_trim_description(review_text),
         color=score_color(score),
@@ -71,15 +81,8 @@ def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
         url=f"https://www.albumoftheyear.org/user/{username}/",
     )
 
-    # Review is a separate tab, but its cover must follow the same cached
-    # Must Hear state as the home/details/tracklist tabs.  Keep this path
-    # SQLite-only: switching tabs must never request AOTY.
-    hydrated = DATA.release_with_cached_details(item)
-    album_id = str(hydrated.get("album_id") or "").strip()
-    cached = DATA.cached_release_details(album_id) if album_id else {}
-    cover = build_release_variables(hydrated, cached or {}).cover
-    if cover:
-        embed.set_thumbnail(url=cover)
+    if variables.cover:
+        embed.set_thumbnail(url=variables.cover)
 
     embed.set_footer(text=f"AOTY • {score_icon(score)[1:]} {score or 'NR'}")
     return embed
@@ -237,7 +240,10 @@ async def build_release_details_embed(
             lines.append(f"{LASTFM_SOURCE_EMOJI} **Last.fm scrobbles:** {scrobbles}")
 
     embed = discord.Embed(
-        title=f"{DETAILS_BUTTON} {variables.display_artist} — {variables.display_album}",
+        title=(
+            f"{DETAILS_BUTTON} {variables.display_artist} — {variables.display_album}"
+            f" {must_hear_title_marker(variables)}".rstrip()
+        ),
         url=variables.url or None,
         description="\n".join(lines),
         color=score_color(variables.score or variables.aoty_user_score),
@@ -409,7 +415,10 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
 
     description = "\n".join(lines) if lines else "Brak tracklisty w kotone."
     embed = discord.Embed(
-        title=f"{TRACKLIST_BUTTON} {variables.display_artist} — {variables.display_album}",
+        title=(
+            f"{TRACKLIST_BUTTON} {variables.display_artist} — {variables.display_album}"
+            f" {must_hear_title_marker(variables)}".rstrip()
+        ),
         url=variables.url or None,
         description=_trim_description(description),
         color=score_color(variables.score or variables.aoty_user_score),

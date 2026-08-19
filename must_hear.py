@@ -70,6 +70,27 @@ def must_hear_album(
     )
 
 
+def must_hear_kind(user_score, critic_score) -> str:
+    """Classify AOTY's three Must Hear score relationships for presentation."""
+
+    try:
+        user = float(user_score)
+    except (TypeError, ValueError):
+        user = None
+    try:
+        critic = float(critic_score)
+    except (TypeError, ValueError):
+        critic = None
+
+    if user is not None and user > 80 and critic is not None and critic > 80:
+        return "both"
+    if critic is not None and critic > 80 and (user is None or user <= 80):
+        return "critics"
+    # An editorial/legacy Must Hear page without both cached scores defaults
+    # to the orange community marker rather than hiding the status entirely.
+    return "users"
+
+
 def cover_token(album_id: str, cover_url: str) -> str:
     """Return an endpoint token which stays valid when a provider changes art.
 
