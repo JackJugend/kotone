@@ -29,6 +29,10 @@ USER_AGENT = "Kotone/1.0 (https://github.com/JackJugend/kotone)"
 class MusicBrainzUnavailable(RuntimeError):
     """MusicBrainz could not provide a safe fallback result."""
 
+    def __init__(self, message: str, *, retry_after: float = 0.0):
+        super().__init__(message)
+        self.retry_after = max(0.0, float(retry_after))
+
 
 # MusicBrainz often returns English/Russian-derived spellings for Belarusian
 # places.  Kotone presents them in Belarusian Łacinka when the artist's
@@ -63,9 +67,11 @@ def _belarusian_place_name(value: object, country: object) -> str | None:
         return text or None
     return _BELARUSIAN_PLACE_NAMES.get(text.casefold(), text)
 
-    def __init__(self, message: str, *, retry_after: float = 0.0):
-        super().__init__(message)
-        self.retry_after = max(0.0, float(retry_after))
+
+def display_origin_area(value: object, country: object) -> str | None:
+    """Normalize a cached MusicBrainz origin area for presentation too."""
+
+    return _belarusian_place_name(value, country)
 
 
 def _normalized(value: object) -> str:

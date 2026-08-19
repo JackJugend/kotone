@@ -60,6 +60,25 @@ MUST_HEAR_EMOJIS = {
     "both": MUST_HEAR_BOTH_EMOJI,
 }
 
+# Small, verified artist AKA groups supplement the aliases cached from AOTY
+# and MusicBrainz.  They are used only to resolve a query to an artist already
+# present in Kotone's SQLite cache; they never create an outside artist row.
+ARTIST_ALIAS_GROUPS = (
+    ("Глюкі", "Hluki", "Hliuki", "Gluki"),
+    ("LOONA", "이달의 소녀", "이달의 소녀 [LOONA]"),
+)
+
+
+def artist_alias_variants(value: object) -> tuple[str, ...]:
+    """Return known spellings of an artist query, including the original."""
+
+    text = " ".join(str(value or "").split())
+    key = text.casefold()
+    for group in ARTIST_ALIAS_GROUPS:
+        if key in {" ".join(name.split()).casefold() for name in group}:
+            return tuple(dict.fromkeys((text, *group)))
+    return (text,) if text else ()
+
 # Runtime state.
 #
 # SQLite jest teraz głównym magazynem stanu. data.json służy wyłącznie jako

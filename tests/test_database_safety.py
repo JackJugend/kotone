@@ -24,7 +24,7 @@ os.environ["DATA_DIR"] = TEST_RUNTIME
 sys.path.insert(0, str(ROOT))
 
 from database import Database, SCHEMA_VERSION  # noqa: E402
-from settings import _validate_users  # noqa: E402
+from settings import _validate_users, artist_alias_variants  # noqa: E402
 
 
 class SettingsSafetyTests(unittest.TestCase):
@@ -47,6 +47,12 @@ class SettingsSafetyTests(unittest.TestCase):
             _validate_users([" enso ", "second-user"]),
             ["enso", "second-user"],
         )
+
+    def test_known_artist_aka_groups_cover_native_and_romanized_queries(self):
+        self.assertIn("Глюкі", artist_alias_variants("Gluki"))
+        self.assertIn("Hliuki", artist_alias_variants("Глюкі"))
+        self.assertIn("LOONA", artist_alias_variants("이달의 소녀"))
+        self.assertIn("이달의 소녀 [LOONA]", artist_alias_variants("LOONA"))
 
 
 class ArtifactHygieneTests(unittest.TestCase):

@@ -39,6 +39,7 @@ from settings import (
     LASTFM_API_ENABLED,
     LASTFM_RELEASE_SOURCE_TTL,
     ARTIST_SOURCE_TTL,
+    artist_alias_variants,
     KOTONE_USERS_BY_AOTY,
     AVATAR_AOTY_SYNC_INTERVAL,
     PROFILE_SYNC_INTERVAL,
@@ -317,9 +318,17 @@ class DataService:
         # Keep one best result per canonical cache artist.  The alias index is
         # populated only by background AOTY/MusicBrainz enrichment, therefore
         # this whole lookup remains SQLite-only for Discord commands.
+        query_variants = list(artist_alias_variants(query)) or [query]
+        query_keys = {" ".join(value.split()).casefold() for value in query_variants}
         ranked_by_artist: dict[str, dict] = {}
         for item in DB.cached_artists():
-            score = aoty.fuzzy_match_score(query, item.get("name") or "")
+            artist_name = str(item.get("name") or "")
+            score = max(
+                aoty.fuzzy_match_score(variant, artist_name)
+                for variant in query_variants
+            )
+            if " ".join(artist_name.split()).casefold() in query_keys:
+                score = max(score, 1.25)
             if score < 0.28:
                 continue
             key = str(item.get("name") or "").casefold()
@@ -332,12 +341,12 @@ class DataService:
 
         canonical = {str(item.get("name") or "").casefold(): item for item in DB.cached_artists()}
         query_key = " ".join(query.split()).casefold()
-        query_variants = [query]
         parts = query.split()
         if len(parts) == 2:
             reversed_query = f"{parts[1]} {parts[0]}"
             if reversed_query.casefold() != query_key:
                 query_variants.append(reversed_query)
+                query_keys.add(" ".join(reversed_query.split()).casefold())
         for alias in DB.cached_artist_aliases():
             artist = canonical.get(str(alias.get("artist") or "").casefold())
             if not artist:
@@ -348,7 +357,7 @@ class DataService:
                 for variant in query_variants
             )
             alias_key = " ".join(alias_name.split()).casefold()
-            if query_key and query_key == alias_key:
+            if alias_key in query_keys:
                 score = max(score, 1.25)
             elif any(
                 " ".join(variant.split()).casefold() == alias_key
@@ -421,6 +430,12 @@ class DataService:
         canonical_key = str(artist_info["name"] or "").casefold()
         aliases: list[str] = []
         seen_aliases: set[str] = {canonical_key}
+        for alias in artist_alias_variants(artist_info["name"]):
+            alias = " ".join(alias.split())
+            alias_key = alias.casefold()
+            if alias and alias_key not in seen_aliases:
+                aliases.append(alias)
+                seen_aliases.add(alias_key)
         for item in DB.cached_artist_aliases():
             if str(item.get("artist") or "").casefold() != canonical_key:
                 continue

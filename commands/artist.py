@@ -2,6 +2,7 @@ import discord
 import requests
 
 import aoty
+import musicbrainz
 from commands.album import _music_from_presence
 from services import DATA
 from lastfm_database import LASTFM_DB
@@ -231,7 +232,13 @@ def _artist_header_text(discography):
 
     musicbrainz_data = (discography.get("source_data") or {}).get("musicbrainz") or {}
     country_code = musicbrainz_data.get("country")
-    country_name = musicbrainz_data.get("origin_area") or country_code
+    country_name = (
+        musicbrainz.display_origin_area(
+            musicbrainz_data.get("origin_area"),
+            country_code,
+        )
+        or country_code
+    )
     flag = _country_flag(country_code)
     if country_name:
         lines.append(
