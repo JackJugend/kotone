@@ -20,7 +20,7 @@ from score_emoji_registry import set_score_emojis
 from status_emoji_registry import set_status_emojis
 
 SCORE_EMOJI_PREFIX = "score_"
-SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v4-transparent"
+SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v5-large-centered"
 SCORE_EMOJI_SIZE = 96
 SCORE_EMOJI_MAX_BYTES = 256 * 1024
 STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v3-transparent"
@@ -106,13 +106,15 @@ def render_score_emoji(score: int | None) -> bytes:
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
 
-    font = _regular_font(59 if value is None or value < 100 else 47)
+    # The rating is the primary visual element. Use almost the full width,
+    # then centre the real glyph bounds rather than its font baseline.
+    font = _regular_font(67 if value is None or value < 100 else 53)
     text = "NR" if value is None else str(value)
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     width = right - left
     height = bottom - top
     draw.text(
-        ((size - width) / 2 - left, 4 + (61 - height) / 2 - top),
+        ((size - width) / 2 - left, 1 + (68 - height) / 2 - top),
         text,
         font=font,
         fill=(230, 232, 235, 255),
