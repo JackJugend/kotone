@@ -11,6 +11,7 @@ import asyncio
 import base64
 from io import BytesIO
 from pathlib import Path
+import time
 
 import discord
 from PIL import Image, ImageDraw, ImageFont
@@ -279,7 +280,10 @@ class ScoreEmojiSynchronizer:
                 json={"name": name, "image": self._image_data_uri(image)},
             )
 
-        temporary_name = f"tmp_{name}"[:32]
+        # A previous deploy can have been interrupted after creating a
+        # temporary emoji. A timestamp prevents that stale object from ever
+        # blocking the replacement currently in progress.
+        temporary_name = f"tmp_{name}_{time.time_ns() % 1_000_000_000}"[:32]
         created = await self.client.http.request(
             create_route,
             json={"name": temporary_name, "image": self._image_data_uri(image)},
@@ -335,6 +339,14 @@ class ScoreEmojiSynchronizer:
         """Upload only missing score tiles, one at a time with gentle pacing."""
 
         async with self._lock:
+            application_emojis = await self._list_application_emojis()
+            # Clean interrupted replacements *before* allocating a new
+            # temporary name. Waiting for a full 102-score sync caused a
+            # stale ``tmp_score_077`` to block every later score.
+            await self._delete_legacy_emojis(
+                application_emojis,
+                names_or_prefixes=("tmp_score_",),
+            )
             application_emojis = await self._list_application_emojis()
             by_name = {
                 str(emoji.get("name")): emoji
@@ -419,6 +431,11 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
 
     async def sync_all(self) -> None:
         async with self._lock:
+            application_emojis = await self._list_application_emojis()
+            await self._delete_legacy_emojis(
+                application_emojis,
+                names_or_prefixes=("tmp_like", "tmp_tracklist", "tmp_review"),
+            )
             application_emojis = await self._list_application_emojis()
             by_name = {
                 str(emoji.get("name")): emoji
