@@ -3,14 +3,27 @@
     "application_id": 1538253217534713928,
     "guild_id": 1021030273082732564,
     "channel_id": 1260965917773271115,
-    "user_channels": {
-        "enso": 1260965917773271115,
-        "kulkien": 1148055389980590203
-    },
-    "users": [
-        "enso",
-        "kulkien"
+    "operators": [
+      "enso"
     ],
+  "kotone_users": {
+    "enso": {
+      "discord_id": 805601151366070292,
+      "aoty_username": "enso",
+      "lastfm_username": "desinitesse",
+      "channel_id": 1260965917773271115
+    },
+    "kulkien": {
+      "discord_id": 463642066401099786,
+      "aoty_username": "kulkien",
+      "lastfm_username": "Podlachian",
+      "channel_id": 1148055389980590203
+    },
+    "gan": {
+      "discord_id": 1232811503711944754,
+      "lastfm_username": "Gan5672"
+    }
+  },
     "check_interval": 1800,
     "rating_fetch_limits": {
         "lp": 500,

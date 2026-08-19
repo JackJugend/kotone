@@ -20,6 +20,7 @@ from display_utils import (  # noqa: E402
     display_release_date,
     display_romanized_name,
 )
+import lastfm  # noqa: E402
 from lastfm import fetch_artist_image  # noqa: E402
 from shared import aoty_score_value, build_release_variables, score_value_or_nr  # noqa: E402
 
@@ -116,22 +117,19 @@ class DisplayNormalizationTests(unittest.TestCase):
 
 
 class LastFMParserTests(unittest.TestCase):
-    def test_open_graph_artist_image_is_extracted(self):
-        class Response:
-            status_code = 200
-            text = '<meta content="https://lastfm.example/image.jpg" property="og:image">'
+    def test_artist_image_comes_from_documented_api_client(self):
+        """No command path may silently fall back to scraping Last.fm HTML."""
 
-            def raise_for_status(self):
-                return None
-
-        class Session:
-            def get(self, *_args, **_kwargs):
-                return Response()
-
-        self.assertEqual(
-            fetch_artist_image("Fievel Is Glauque", session=Session()),
-            "https://lastfm.example/image.jpg",
-        )
+        with patch.object(
+            lastfm.LASTFM,
+            "artist_info",
+            return_value={"image_url": "https://lastfm.example/image.jpg"},
+        ) as artist_info:
+            self.assertEqual(
+                fetch_artist_image("Fievel Is Glauque"),
+                "https://lastfm.example/image.jpg",
+            )
+        artist_info.assert_called_once_with("Fievel Is Glauque")
 
 
 class ArtistImageDatabaseTests(unittest.TestCase):

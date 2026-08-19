@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 def _json_dump(value) -> str:
@@ -919,6 +919,40 @@ class Database:
                     source TEXT NOT NULL,
                     fetched_at REAL NOT NULL,
                     retry_after REAL NOT NULL DEFAULT 0
+                )
+                """
+            )
+
+            # Source-specific payloads are deliberately separate from the
+            # AOTY-shaped release cache. This preserves every provider's IDs,
+            # timestamps and match quality without allowing a fallback to
+            # overwrite an AOTY field accidentally.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS release_source_cache (
+                    album_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    quality TEXT NOT NULL,
+                    fetched_at REAL NOT NULL,
+                    PRIMARY KEY (album_id, source),
+                    FOREIGN KEY (album_id)
+                        REFERENCES releases(album_id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS artist_source_cache (
+                    artist_key TEXT NOT NULL,
+                    artist TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    quality TEXT NOT NULL,
+                    fetched_at REAL NOT NULL,
+                    retry_after REAL NOT NULL DEFAULT 0,
+                    PRIMARY KEY (artist_key, source)
                 )
                 """
             )
@@ -1898,6 +1932,33 @@ class Database:
             for row in rows
         ]
 
+    def artist_metadata_candidates(self, username: str, limit: int = 1) -> list[str]:
+        """Return a tiny, durable queue of configured-user artists.
+
+        The worker consumes at most one artist in an otherwise idle pass.  We
+        intentionally do not poll whole discographies: MusicBrainz asks
+        clients not to poll metadata, and profile commands must stay SQLite
+        only.
+        """
+
+        canonical = self.canonical_username(username)
+        if canonical is None or limit <= 0:
+            return []
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT artist, MAX(COALESCE(sort_timestamp, last_seen_at, first_seen_at, 0)) AS seen
+                FROM ratings
+                WHERE username = ? AND active = 1
+                  AND NULLIF(TRIM(COALESCE(artist, '')), '') IS NOT NULL
+                GROUP BY artist COLLATE NOCASE
+                ORDER BY seen DESC, artist COLLATE NOCASE
+                LIMIT ?
+                """,
+                (canonical, int(limit)),
+            ).fetchall()
+        return [str(row["artist"]) for row in rows if str(row["artist"] or "").strip()]
+
     @staticmethod
     def _artist_image_key(artist: object) -> str:
         return " ".join(str(artist or "").split()).casefold()
@@ -1961,6 +2022,77 @@ class Database:
                 (key, name, image, str(source or "lastfm"), _now(), float(retry_after)),
             )
         return True
+
+    def save_artist_source_data(
+        self,
+        artist: str,
+        source: str,
+        data: dict,
+        *,
+        quality: str,
+        retry_after: float = 0.0,
+    ) -> bool:
+        """Store non-AOTY artist metadata only for configured-user artists."""
+
+        name = " ".join(str(artist or "").split())
+        key = self._artist_image_key(name)
+        source = str(source or "").strip().casefold()
+        if not key or source not in {"musicbrainz", "lastfm"} or not isinstance(data, dict):
+            return False
+        with self._lock, self.connection:
+            in_scope = self.connection.execute(
+                """
+                SELECT 1 FROM ratings
+                WHERE active = 1 AND artist = ? COLLATE NOCASE LIMIT 1
+                """,
+                (name,),
+            ).fetchone()
+            if in_scope is None:
+                return False
+            self.connection.execute(
+                """
+                INSERT INTO artist_source_cache(
+                    artist_key, artist, source, data_json, quality, fetched_at, retry_after
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artist_key, source) DO UPDATE SET
+                    artist = excluded.artist,
+                    data_json = excluded.data_json,
+                    quality = excluded.quality,
+                    fetched_at = excluded.fetched_at,
+                    retry_after = excluded.retry_after
+                """,
+                (
+                    key, name, source, _json_dump(data), str(quality or "unknown"),
+                    _now(), float(retry_after),
+                ),
+            )
+        return True
+
+    def get_artist_source_data(self, artist: str) -> dict[str, dict]:
+        """Read per-source artist cache without contacting any provider."""
+
+        key = self._artist_image_key(artist)
+        if not key:
+            return {}
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT source, data_json, quality, fetched_at, retry_after
+                FROM artist_source_cache WHERE artist_key = ?
+                """,
+                (key,),
+            ).fetchall()
+        result: dict[str, dict] = {}
+        for row in rows:
+            data = _json_load(row["data_json"], {})
+            if isinstance(data, dict):
+                result[str(row["source"])] = {
+                    **data,
+                    "quality": row["quality"],
+                    "fetched_at": row["fetched_at"],
+                    "retry_after": row["retry_after"],
+                }
+        return result
 
     def get_rating(self, username: str, album_id: str) -> dict | None:
         canonical = self.canonical_username(username)
@@ -3260,7 +3392,7 @@ class Database:
         raw_section_complete = details.get("_section_complete")
         legacy_authoritative = not isinstance(raw_section_complete, dict)
         source = str(details.get("source") or "").strip().casefold()
-        source = source if source in {"aoty", "musicbrainz"} else ""
+        source = source if source in {"aoty", "musicbrainz", "lastfm"} else ""
         official_must_hear = details.get("must_hear")
         must_hear_complete = source == "aoty" and isinstance(
             official_must_hear,
@@ -3292,7 +3424,7 @@ class Database:
                 inferred_source = str(
                     existing["metadata_source"] or "aoty"
                 ).casefold()
-                if inferred_source not in {"aoty", "musicbrainz"}:
+                if inferred_source not in {"aoty", "musicbrainz", "lastfm"}:
                     inferred_source = "aoty"
 
                 def raw_present(*columns: str) -> bool:
@@ -3542,9 +3674,121 @@ class Database:
                 if existing.get(detail_key) not in (None, "", [], {}):
                     incoming[detail_key] = None
 
+        external_metadata = dict(incoming.pop("external_metadata", {}) or {})
         incoming["source"] = "musicbrainz"
         incoming["_section_complete"] = complete
-        return self.save_release_details(album_id, incoming)
+        saved = self.save_release_details(album_id, incoming)
+        if saved and external_metadata:
+            self.save_release_source_data(
+                album_id,
+                "musicbrainz",
+                external_metadata,
+                quality="matched-earliest-compatible-release",
+            )
+        return saved
+
+    def save_lastfm_fallback(self, album_id: str, details: dict) -> bool:
+        """Persist Last.fm only as a lower-priority public metadata fallback.
+
+        AOTY and MusicBrainz remain authoritative for their respective
+        sections.  Last.fm may replace the cover (the configured precedence)
+        but may fill a text/track section only when SQLite has no value yet.
+        Provider-specific counts and URLs are retained separately.
+        """
+
+        album_id = str(album_id or "").strip()
+        if not album_id:
+            return False
+        incoming = dict(details or {})
+        existing = self.get_release_details(album_id)
+        complete = dict(incoming.get("_section_complete") or {})
+
+        if existing is not None:
+            section_keys = {
+                "release_date": ("release_date", "year"),
+                "labels": ("label", "labels"),
+                "tracklist": ("tracklist",),
+            }
+            for section, keys in section_keys.items():
+                if any(existing.get(key) not in (None, "", [], {}) for key in keys):
+                    complete[section] = False
+            # AOTY/MB names and links describe the canonical release. Last.fm
+            # only fills absent values; cover art is intentionally excluded.
+            for detail_key in ("artist", "artist_url", "album", "url"):
+                if existing.get(detail_key) not in (None, "", [], {}):
+                    incoming[detail_key] = None
+
+        external_metadata = dict(incoming.pop("external_metadata", {}) or {})
+        incoming["source"] = "lastfm"
+        incoming["_section_complete"] = complete
+        saved = self.save_release_details(album_id, incoming)
+        if saved and external_metadata:
+            self.save_release_source_data(
+                album_id,
+                "lastfm",
+                external_metadata,
+                quality="api-album-match",
+            )
+        return saved
+
+    def save_release_source_data(
+        self,
+        album_id: str,
+        source: str,
+        data: dict,
+        *,
+        quality: str,
+    ) -> bool:
+        """Persist provider-specific identifiers/metadata for an in-scope release."""
+
+        album_id = str(album_id or "").strip()
+        source = str(source or "").strip().casefold()
+        if not album_id or source not in {"musicbrainz", "lastfm"} or not isinstance(data, dict):
+            return False
+        with self._lock, self.connection:
+            if not self._release_is_in_scope_locked(album_id):
+                return False
+            if self.connection.execute(
+                "SELECT 1 FROM releases WHERE album_id = ?", (album_id,)
+            ).fetchone() is None:
+                return False
+            self.connection.execute(
+                """
+                INSERT INTO release_source_cache(album_id, source, data_json, quality, fetched_at)
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(album_id, source) DO UPDATE SET
+                    data_json = excluded.data_json,
+                    quality = excluded.quality,
+                    fetched_at = excluded.fetched_at
+                """,
+                (album_id, source, _json_dump(data), str(quality or "unknown"), _now()),
+            )
+        return True
+
+    def get_release_source_data(self, album_id: str) -> dict[str, dict]:
+        """Return cached source payloads without performing network I/O."""
+
+        album_id = str(album_id or "").strip()
+        if not album_id:
+            return {}
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT source, data_json, quality, fetched_at
+                FROM release_source_cache WHERE album_id = ?
+                """,
+                (album_id,),
+            ).fetchall()
+        result: dict[str, dict] = {}
+        for row in rows:
+            data = _json_load(row["data_json"], {})
+            if isinstance(data, dict):
+                result[str(row["source"])] = {
+                    **data,
+                    "quality": row["quality"],
+                    "fetched_at": row["fetched_at"],
+                }
+        return result
 
     def get_release_details(self, album_id: str) -> dict | None:
         album_id = str(album_id or "").strip()
@@ -3577,7 +3821,7 @@ class Database:
         if not isinstance(metadata_sources, dict):
             metadata_sources = {}
         inferred_source = str(row["metadata_source"] or "aoty").casefold()
-        if inferred_source not in {"aoty", "musicbrainz"}:
+        if inferred_source not in {"aoty", "musicbrainz", "lastfm"}:
             inferred_source = "aoty"
         if (
             row["user_score"]
@@ -3600,6 +3844,7 @@ class Database:
             metadata_sources.setdefault("ranking", "aoty")
         if tracks:
             metadata_sources.setdefault("tracklist", inferred_source)
+        source_data = self.get_release_source_data(album_id)
 
         return {
             "album_id": album_id,
@@ -3632,6 +3877,7 @@ class Database:
             ),
             "metadata_source": row["metadata_source"],
             "metadata_sources": metadata_sources,
+            "source_data": source_data,
             "tracklist": [
                 {
                     "number": track["track_number"],
@@ -3662,6 +3908,16 @@ class Database:
                 SELECT 1 FROM ratings r
                 WHERE r.active = 1
                   AND r.artist = artist_images.artist COLLATE NOCASE
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            DELETE FROM artist_source_cache
+            WHERE NOT EXISTS(
+                SELECT 1 FROM ratings r
+                WHERE r.active = 1
+                  AND r.artist = artist_source_cache.artist COLLATE NOCASE
             )
             """
         )

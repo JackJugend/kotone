@@ -8,7 +8,7 @@ import discord
 
 from database import DB
 from formats import RATING_FORMATS
-from settings import GUILD_ID
+from settings import GUILD_ID, is_operator_discord_id
 
 
 def _format_bytes(value: int | float | None) -> str:
@@ -83,6 +83,13 @@ def setup_dbstats_command(
         if interaction.guild_id != GUILD_ID:
             await interaction.response.send_message(
                 "Ta komenda działa tylko na skonfigurowanym serwerze.",
+                ephemeral=True,
+            )
+            return
+
+        if not is_operator_discord_id(getattr(interaction.user, "id", None)):
+            await interaction.response.send_message(
+                "Nie masz uprawnień do `/dbstats`.",
                 ephemeral=True,
             )
             return

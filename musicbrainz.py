@@ -72,6 +72,23 @@ def _release_format(release: dict, requested_format: object) -> str | None:
     }.get(primary.casefold())
 
 
+def _format_key(value: object) -> str:
+    """Normalize AOTY and MusicBrainz release types for a safe comparison."""
+
+    text = str(value or "").strip().casefold().replace("-", " ")
+    aliases = {
+        "album": "lp",
+        "lp": "lp",
+        "ep": "ep",
+        "single": "single",
+        "music video": "music_video",
+        "video": "music_video",
+        "live": "live",
+        "compilation": "compilation",
+    }
+    return aliases.get(text, text)
+
+
 def _names(items: object) -> list[str]:
     names: list[tuple[int, str]] = []
     for item in items or []:
@@ -128,6 +145,14 @@ def release_to_details(release: dict, *, requested_format: object = None) -> dic
                     "title": title,
                     "duration": _duration(track.get("length")),
                     "disc": disc,
+                    "musicbrainz_recording_id": str(
+                        (track.get("recording") or {}).get("id") or ""
+                    ).strip() or None,
+                    "isrcs": [
+                        str(value).strip()
+                        for value in ((track.get("recording") or {}).get("isrcs") or [])
+                        if str(value).strip()
+                    ],
                 }
             )
 
@@ -145,6 +170,7 @@ def release_to_details(release: dict, *, requested_format: object = None) -> dic
     release_id = str(release.get("id") or "").strip()
     group_id = str(group.get("id") or "").strip()
     cover_id = group_id or release_id
+    release_country = str(release.get("country") or "").strip() or None
     return {
         "artist": _artist_name(release.get("artist-credit")) or None,
         "album": str(release.get("title") or "").strip() or None,
@@ -166,6 +192,21 @@ def release_to_details(release: dict, *, requested_format: object = None) -> dic
         "labels": labels,
         "genres": genres,
         "tracklist": tracks,
+        "external_metadata": {
+            "musicbrainz_release_id": release_id or None,
+            "musicbrainz_release_group_id": group_id or None,
+            "release_country": release_country,
+            "tracks": [
+                {
+                    "number": track["number"],
+                    "disc": track["disc"],
+                    "title": track["title"],
+                    "musicbrainz_recording_id": track["musicbrainz_recording_id"],
+                    "isrcs": track["isrcs"],
+                }
+                for track in tracks
+            ],
+        },
         "_section_complete": {
             "score": False,
             "release_date": bool(release_date),
@@ -243,11 +284,25 @@ class MusicBrainzClient:
         candidate = _pick_exact_release(search.get("releases"), artist_text, album_text)
         if candidate is None or not candidate.get("id"):
             return None
-        release = self._json(
+        initial = self._json(
             f"/release/{candidate['id']}",
             params={
                 "fmt": "json",
-                "inc": "artists+recordings+release-groups+labels+genres+tags",
+                "inc": "artists+release-groups",
+            },
+        )
+        group_id = str((initial.get("release-group") or {}).get("id") or "").strip()
+        release_id = self._earliest_compatible_release_id(
+            group_id,
+            artist_text,
+            album_text,
+            requested_format=requested_format,
+        ) or str(initial.get("id") or candidate["id"])
+        release = self._json(
+            f"/release/{release_id}",
+            params={
+                "fmt": "json",
+                "inc": "artists+recordings+release-groups+labels+genres+tags+isrcs",
             },
         )
         if (
@@ -256,6 +311,87 @@ class MusicBrainzClient:
         ):
             return None
         return release_to_details(release, requested_format=requested_format)
+
+    def _earliest_compatible_release_id(
+        self,
+        group_id: str,
+        artist: str,
+        album: str,
+        *,
+        requested_format: object,
+    ) -> str | None:
+        """Choose the earliest matching release in the same release group.
+
+        MusicBrainz search can return a later reissue, remaster or regional
+        edition first.  We keep AOTY's format as an optional guard and choose
+        the earliest date only among title/artist-compatible releases.
+        """
+
+        if not group_id:
+            return None
+        payload = self._json(
+            "/release/",
+            params={"query": f"rgid:{group_id}", "fmt": "json", "limit": "100"},
+        )
+        requested_key = _format_key(requested_format)
+        compatible: list[tuple[str, str]] = []
+        for candidate in payload.get("releases") or []:
+            if not isinstance(candidate, dict) or not candidate.get("id"):
+                continue
+            if _normalized(candidate.get("title")) != _normalized(album):
+                continue
+            if _normalized(_artist_name(candidate.get("artist-credit"))) != _normalized(artist):
+                continue
+            candidate_key = _format_key(
+                _release_format(candidate, requested_format=None)
+            )
+            if requested_key and candidate_key and candidate_key != requested_key:
+                continue
+            date = str(candidate.get("date") or "9999-99-99")
+            compatible.append((date, str(candidate["id"])))
+        return min(compatible)[1] if compatible else None
+
+    def lookup_artist(self, artist: object) -> dict | None:
+        """Fetch durable public artist metadata for the low-priority cache."""
+
+        name = str(artist or "").strip()
+        if not name:
+            return None
+        search = self._json(
+            "/artist/",
+            params={"query": f'artist:"{name}"', "fmt": "json", "limit": "5"},
+        )
+        expected = _normalized(name)
+        candidate = next(
+            (
+                row
+                for row in search.get("artists") or []
+                if isinstance(row, dict) and _normalized(row.get("name")) == expected
+            ),
+            None,
+        )
+        if not candidate or not candidate.get("id"):
+            return None
+        data = self._json(
+            f"/artist/{candidate['id']}",
+            params={"fmt": "json", "inc": "aliases+genres+tags+artist-rels"},
+        )
+        if _normalized(data.get("name")) != expected:
+            return None
+        area = data.get("area") if isinstance(data.get("area"), dict) else {}
+        country = str(data.get("country") or area.get("iso-3166-1-code") or "").strip() or None
+        return {
+            "artist": str(data.get("name") or name).strip(),
+            "musicbrainz_artist_id": str(data.get("id") or "").strip() or None,
+            "country": country,
+            "origin_area": str(area.get("name") or "").strip() or None,
+            "founded_or_birthdate": str(data.get("life-span", {}).get("begin") or "").strip() or None,
+            "type": str(data.get("type") or "").strip() or None,
+            "genres": _names(data.get("genres")) or _names(data.get("tags")),
+            "musicbrainz_url": (
+                f"https://musicbrainz.org/artist/{data['id']}" if data.get("id") else None
+            ),
+        }
 
 
 MUSICBRAINZ = MusicBrainzClient()

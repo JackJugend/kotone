@@ -36,6 +36,9 @@ from settings import (
     FULL_SYNC_INTERVAL,
     LASTFM_ARTIST_IMAGE_RETRY_INTERVAL,
     LASTFM_ARTIST_IMAGE_TTL,
+    LASTFM_API_ENABLED,
+    ARTIST_SOURCE_TTL,
+    KOTONE_USERS_BY_AOTY,
     PROFILE_SYNC_INTERVAL,
     PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
     PROFILE_RATING_ARCHIVE_INTERVAL,
@@ -47,6 +50,7 @@ from settings import (
     RATING_FETCH_LIMITS,
     RELEASE_DETAIL_TTL,
 )
+from source_switches import SOURCES
 
 
 async def _thread_call(priority: int, func, /, *args, **kwargs):
@@ -100,7 +104,7 @@ class DataService:
         omits AOTY-only values (ratings, rankings, reviews and personal data)
         and is persisted only as a lower-priority fallback for missing fields.
         """
-        if not MUSICBRAINZ_FALLBACK_ENABLED:
+        if not MUSICBRAINZ_FALLBACK_ENABLED or not SOURCES.enabled("musicbrainz"):
             return None
         if self._musicbrainz_blocked_until > time.time():
             return None
@@ -128,6 +132,55 @@ class DataService:
                 )
             print(f"[MUSICBRAINZ] fallback: {self._musicbrainz_last_error}")
             return None
+
+    async def _lastfm_release_fallback(
+        self,
+        username: str,
+        item: dict,
+        *,
+        priority: int,
+    ) -> dict | None:
+        """Fetch Last.fm album facts in the worker, never in a command.
+
+        Last.fm is optional because it needs the user's own API key.  A
+        configured Kotone profile may contribute its own scrobble count; an
+        arbitrary Discord/AOTY user can never cause stored Last.fm data.
+        """
+
+        if not LASTFM_API_ENABLED or not SOURCES.enabled("lastfm"):
+            return None
+        profile = KOTONE_USERS_BY_AOTY.get(str(username or "").casefold()) or {}
+        try:
+            return await _thread_call(
+                priority,
+                lastfm.LASTFM.album_info,
+                item.get("artist"),
+                item.get("album") or item.get("title"),
+                username=profile.get("lastfm_username"),
+            )
+        except lastfm.LastFMUnavailable as exc:
+            print(f"[LASTFM] fallback: {type(exc).__name__}: {exc}")
+            return None
+
+    async def _persist_lastfm_release_fallback(
+        self,
+        username: str,
+        item: dict,
+        *,
+        priority: int,
+    ) -> None:
+        """Best-effort Last.fm enrichment after the primary fallback pass."""
+
+        album_id = str(item.get("album_id") or "").strip()
+        if not album_id:
+            return
+        details = await self._lastfm_release_fallback(
+            username,
+            item,
+            priority=priority,
+        )
+        if details:
+            DB.save_lastfm_fallback(album_id, details)
 
     def _rating_with_cached_detail(
         self,
@@ -293,6 +346,7 @@ class DataService:
 
         artist_url = artist_info.get("url") or releases[0].get("artist_url")
         artist_info["url"] = artist_url
+        artist_info["source_data"] = DB.get_artist_source_data(artist_info["name"])
         cached_genres = sorted(
             {
                 genre
@@ -307,6 +361,7 @@ class DataService:
             "image": None,
             "releases": releases,
             "genres_text": ", ".join(cached_genres[:10]) or None,
+            "source_data": dict(artist_info["source_data"]),
             "source": "SQLite cache",
         }
 
@@ -324,25 +379,11 @@ class DataService:
             if not image and now < retry_after:
                 return None
 
-        try:
-            image = await asyncio.to_thread(lastfm.fetch_artist_image, artist)
-        except lastfm.LastFMUnavailable as exc:
-            DB.save_artist_image(
-                artist,
-                None,
-                retry_after=now + LASTFM_ARTIST_IMAGE_RETRY_INTERVAL,
-            )
-            print(f"[LASTFM] artist image unavailable for {artist}: {exc}")
-            return None
-
-        DB.save_artist_image(
-            artist,
-            image,
-            retry_after=(
-                0.0 if image else now + LASTFM_ARTIST_IMAGE_RETRY_INTERVAL
-            ),
-        )
-        return image
+        # Commands do not make Last.fm requests. Existing cached artwork stays
+        # visible; the background worker refreshes new images and public data.
+        if not LASTFM_API_ENABLED or not SOURCES.enabled("lastfm"):
+            return str((cached or {}).get("image_url") or "").strip() or None
+        return str((cached or {}).get("image_url") or "").strip() or None
 
     async def get_artist_discography(
         self,
@@ -359,14 +400,87 @@ class DataService:
         cached_info, cached_discography = self.cached_artist_discography(
             artist_query
         )
-        # Interactive commands are SQLite-only for AOTY. A missing artist
-        # thumbnail is the one bounded exception: Last.fm is checked once and
-        # then cached locally for a long period.
-        if cached_info and cached_discography and not cached_discography.get("image"):
-            cached_discography["image"] = await self._cached_lastfm_artist_image(
-                cached_info["name"]
-            )
+        # Every command is SQLite-only.  Artist images and origin data are
+        # filled by ``enrich_artist_sources`` in the low-priority worker.
+        if cached_info and cached_discography:
+            image = DB.get_artist_image(cached_info["name"])
+            cached_discography["image"] = str((image or {}).get("image_url") or "") or None
         return cached_info, cached_discography
+
+    async def enrich_artist_sources(
+        self,
+        username: str,
+        *,
+        priority: int = PRIORITY_MAINTENANCE,
+    ) -> int:
+        """Cache one configured-user artist only when metadata is stale.
+
+        This is intentionally an idle-worker job, never a command action and
+        never a discography crawl. One artist can produce at most one
+        MusicBrainz request and one Last.fm API request in a pass.
+        """
+
+        candidates = DB.artist_metadata_candidates(username, limit=1)
+        if not candidates:
+            return 0
+        artist = candidates[0]
+        now = time.time()
+        cached = DB.get_artist_source_data(artist)
+        saved = 0
+
+        mb_cached = cached.get("musicbrainz") or {}
+        if (
+            SOURCES.enabled("musicbrainz")
+            and now - float(mb_cached.get("fetched_at") or 0) >= ARTIST_SOURCE_TTL
+            and self._musicbrainz_blocked_until <= now
+        ):
+            try:
+                data = await _thread_call(
+                    priority,
+                    musicbrainz.MUSICBRAINZ.lookup_artist,
+                    artist,
+                )
+                if data and DB.save_artist_source_data(
+                    artist,
+                    "musicbrainz",
+                    data,
+                    quality="exact-artist-match",
+                ):
+                    saved += 1
+            except musicbrainz.MusicBrainzUnavailable as exc:
+                self._musicbrainz_last_error = f"{type(exc).__name__}: {exc}"
+                self._musicbrainz_blocked_until = max(
+                    self._musicbrainz_blocked_until,
+                    time.time() + max(exc.retry_after, 60.0),
+                )
+                return saved
+
+        lastfm_cached = cached.get("lastfm") or {}
+        if (
+            LASTFM_API_ENABLED
+            and SOURCES.enabled("lastfm")
+            and now - float(lastfm_cached.get("fetched_at") or 0) >= ARTIST_SOURCE_TTL
+        ):
+            profile = KOTONE_USERS_BY_AOTY.get(str(username).casefold()) or {}
+            try:
+                data = await _thread_call(
+                    priority,
+                    lastfm.LASTFM.artist_info,
+                    artist,
+                    username=profile.get("lastfm_username"),
+                )
+                if data and DB.save_artist_source_data(
+                    artist,
+                    "lastfm",
+                    data,
+                    quality="api-artist-match",
+                ):
+                    image = str(data.get("image_url") or "").strip() or None
+                    DB.save_artist_image(artist, image, source="lastfm")
+                    saved += 1
+            except lastfm.LastFMUnavailable as exc:
+                print(f"[LASTFM] artist fallback: {type(exc).__name__}: {exc}")
+        return saved
 
     @staticmethod
     def _age(timestamp: float | None) -> float:
@@ -1294,6 +1408,9 @@ class DataService:
                     priority=priority,
                 )
                 if details and DB.save_musicbrainz_fallback(album_id, details):
+                    await self._persist_lastfm_release_fallback(
+                        username, item, priority=priority
+                    )
                     self._release_priority_queue.pop(album_id, None)
                     self._release_retry_after[album_id] = (
                         time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
@@ -1339,6 +1456,9 @@ class DataService:
                     priority=priority,
                 )
                 if details and DB.save_musicbrainz_fallback(album_id, details):
+                    await self._persist_lastfm_release_fallback(
+                        username, item, priority=priority
+                    )
                     self._release_priority_queue.pop(album_id, None)
                     self._release_retry_after[album_id] = (
                         time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL

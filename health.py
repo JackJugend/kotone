@@ -22,6 +22,8 @@ from must_hear import (
 )
 from services import DATA
 from settings import PORT
+from source_switches import SOURCES
+import lastfm
 from stats_cover_cache import load_cover_bytes
 
 
@@ -90,6 +92,8 @@ class HealthServer:
                 ),
                 "aoty_transport": HTTP.status(),
                 "musicbrainz": DATA.musicbrainz_status(),
+                "lastfm": lastfm.LASTFM.status(),
+                "source_switches": SOURCES.status(),
                 "must_hear_badges": {
                     "endpoint_enabled": marked_cover_endpoint_enabled(),
                     "requests": self.must_hear_cover_requests,

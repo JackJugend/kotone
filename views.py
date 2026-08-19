@@ -9,7 +9,12 @@ import discord
 import aoty
 from services import DATA
 from display_utils import display_romanized_name
-from settings import AOTY_SOURCE_EMOJI, MUSICBRAINZ_SOURCE_EMOJI, USERS
+from settings import (
+    AOTY_SOURCE_EMOJI,
+    LASTFM_SOURCE_EMOJI,
+    MUSICBRAINZ_SOURCE_EMOJI,
+    USERS,
+)
 from shared import (
     aoty_score_value,
     build_release_variables,
@@ -155,6 +160,8 @@ def _details_source_prefix(variables, section: str, value: object) -> str:
     source = str(variables.metadata_sources.get(section) or "").casefold()
     if source == "musicbrainz":
         return f"{MUSICBRAINZ_SOURCE_EMOJI} "
+    if source == "lastfm":
+        return f"{LASTFM_SOURCE_EMOJI} "
     if source in {"", "aoty"}:
         return f"{AOTY_SOURCE_EMOJI} "
     return ""
@@ -205,6 +212,29 @@ async def build_release_details_embed(
         f"**{ranking_year if ranking_year != '—' else 'Year'} Ratings:** "
         f"{_details_value(variables.year_ranking_text)}"
     )
+
+    # IDs and provider counters do not belong to the normal card: they are
+    # diagnostic/provenance data, so surface them only in the details tab.
+    musicbrainz_data = variables.source_data.get("musicbrainz") or {}
+    if musicbrainz_data:
+        mb_release = _details_value(musicbrainz_data.get("musicbrainz_release_id"))
+        mb_group = _details_value(musicbrainz_data.get("musicbrainz_release_group_id"))
+        mb_country = _details_value(musicbrainz_data.get("release_country"))
+        if mb_release != "—":
+            lines.append(f"{MUSICBRAINZ_SOURCE_EMOJI} **MusicBrainz release ID:** `{mb_release}`")
+        if mb_group != "—":
+            lines.append(f"{MUSICBRAINZ_SOURCE_EMOJI} **MusicBrainz release-group ID:** `{mb_group}`")
+        if mb_country != "—":
+            lines.append(f"{MUSICBRAINZ_SOURCE_EMOJI} **Release country:** {mb_country}")
+
+    lastfm_data = variables.source_data.get("lastfm") or {}
+    if lastfm_data:
+        listeners = _details_value(lastfm_data.get("listeners_count"))
+        scrobbles = _details_value(lastfm_data.get("playcount"))
+        if listeners != "—":
+            lines.append(f"{LASTFM_SOURCE_EMOJI} **Last.fm listeners:** {listeners}")
+        if scrobbles != "—":
+            lines.append(f"{LASTFM_SOURCE_EMOJI} **Last.fm scrobbles:** {scrobbles}")
 
     embed = discord.Embed(
         title=f"{DETAILS_BUTTON} {variables.display_artist} — {variables.display_album}",
@@ -481,10 +511,24 @@ class TimedDisableView(discord.ui.View):
         super().__init__(timeout=timeout)
         self.message = None
         self.artist_message = None
+        self._bound_channel = None
+        self._bound_message_id: int | None = None
 
     def bind_message(self, message) -> None:
-        """Remember the sent Discord message so on_timeout can edit it."""
+        """Remember a public message in a form that survives webhook expiry.
+
+        Interaction follow-up tokens expire after roughly fifteen minutes,
+        while Kotone intentionally leaves controls usable for twenty. Editing
+        a ``WebhookMessage`` directly at timeout therefore fails silently.
+        Keeping the channel + message ID lets us edit the normal Discord
+        message with the bot token instead.
+        """
         self.message = message
+        self._bound_channel = getattr(message, "channel", None)
+        try:
+            self._bound_message_id = int(getattr(message, "id", 0) or 0) or None
+        except (TypeError, ValueError):
+            self._bound_message_id = None
 
     async def on_timeout(self) -> None:
         for child in self.children:
@@ -493,13 +537,25 @@ class TimedDisableView(discord.ui.View):
         if self.message is None:
             return
 
+        # Prefer a regular channel message over the original webhook object:
+        # the latter can no longer authenticate after the interaction token
+        # expires. This path works for the public command messages Kotone
+        # creates; the fallback keeps existing test/dummy messages compatible.
+        channel = self._bound_channel
+        message_id = self._bound_message_id
+        get_partial = getattr(channel, "get_partial_message", None)
+        if channel is not None and message_id and callable(get_partial):
+            try:
+                await get_partial(message_id).edit(view=self)
+                return
+            except Exception:
+                pass
+
         try:
-            await self.message.edit(
-                view=self
-            )
+            await self.message.edit(view=self)
         except Exception:
-            # Deleted message / missing permission / expired webhook token:
-            # controls are still dead server-side because the View timed out.
+            # Deleted message / missing permission: controls are still dead
+            # server-side because the View itself has timed out.
             pass
 
 

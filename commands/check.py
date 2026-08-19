@@ -1,6 +1,6 @@
 import discord
 
-from settings import GUILD_ID, USERS
+from settings import GUILD_ID, USERS, is_operator_discord_id
 from shared import configured_username_autocomplete
 
 
@@ -27,6 +27,13 @@ def setup_check_command(tree: discord.app_commands.CommandTree, monitor):
         if interaction.guild_id != GUILD_ID:
             await interaction.response.send_message(
                 "Ta komenda działa tylko na skonfigurowanym serwerze.",
+                ephemeral=True,
+            )
+            return
+
+        if not is_operator_discord_id(getattr(interaction.user, "id", None)):
+            await interaction.response.send_message(
+                "Nie masz uprawnień do `/check`.",
                 ephemeral=True,
             )
             return

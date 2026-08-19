@@ -173,6 +173,15 @@ def _artist_relation_text(items):
     )
 
 
+def _country_flag(country_code) -> str:
+    """Convert a two-letter MusicBrainz country code to a flag emoji."""
+
+    code = str(country_code or "").strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        return ""
+    return "".join(chr(127397 + ord(character)) for character in code)
+
+
 def _artist_header_text(discography):
     """Metadata block displayed above the releases in /artist."""
     if discography.get("source") == "kotone db":
@@ -216,6 +225,15 @@ def _artist_header_text(discography):
         # The line already follows the score summary; a ``Genre:`` label made
         # long cached genre lists wrap unnecessarily.
         lines.append(genres_text)
+
+    musicbrainz_data = (discography.get("source_data") or {}).get("musicbrainz") or {}
+    country_code = musicbrainz_data.get("country")
+    country_name = musicbrainz_data.get("origin_area") or country_code
+    flag = _country_flag(country_code)
+    if country_name:
+        lines.append(
+            f"**Origin:** {flag + ' ' if flag else ''}{country_name}"
+        )
 
     relation_label = discography.get(
         "relation_label"

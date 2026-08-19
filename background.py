@@ -103,7 +103,12 @@ class BackgroundWorker:
                     username,
                     musicbrainz_only=True,
                 )
-                if result.get("releases"):
+                if not result.get("releases"):
+                    result["artists"] = await DATA.enrich_artist_sources(
+                        username,
+                        priority=PRIORITY_MAINTENANCE,
+                    )
+                if result.get("releases") or result.get("artists"):
                     self._enrich_cursor = self._cursor_after(username)
                     self.last_success_at = time.time()
                     self.last_error = None
@@ -121,7 +126,12 @@ class BackgroundWorker:
                     username,
                     musicbrainz_only=True,
                 )
-                if result.get("releases"):
+                if not result.get("releases"):
+                    result["artists"] = await DATA.enrich_artist_sources(
+                        username,
+                        priority=PRIORITY_MAINTENANCE,
+                    )
+                if result.get("releases") or result.get("artists"):
                     self._enrich_cursor = self._cursor_after(username)
                     self.last_success_at = time.time()
                     self.last_error = None
@@ -177,7 +187,13 @@ class BackgroundWorker:
                 self.last_error = "enrichment error"
                 return ARCHIVE_WORKER_ERROR_SLEEP
 
-            if result.get("releases") or result.get("details"):
+            if not result.get("releases") and not result.get("details"):
+                result["artists"] = await DATA.enrich_artist_sources(
+                    username,
+                    priority=PRIORITY_MAINTENANCE,
+                )
+
+            if result.get("releases") or result.get("details") or result.get("artists"):
                 self._enrich_cursor = self._cursor_after(username)
                 self.last_success_at = time.time()
                 self.last_error = None

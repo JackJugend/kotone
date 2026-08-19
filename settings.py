@@ -33,6 +33,7 @@ AOTY_ICON_URL = "https://cdn.albumoftheyear.org/images/favicon.png"
 AOTY_ICON_ATTACHMENT = AOTY_ICON_URL
 AOTY_SOURCE_EMOJI = "<:aoty:1539095897084924004>"
 MUSICBRAINZ_SOURCE_EMOJI = "<:music_brainz:1539096206083629186>"
+LASTFM_SOURCE_EMOJI = "<:lastfm:1539689853506293760>"
 
 # Runtime state.
 #
@@ -105,7 +106,166 @@ def _validate_users(raw_users) -> list[str]:
     return users
 
 
-USERS = _validate_users(CONFIG.get("users"))
+_LEGACY_USERS = (
+    _validate_users(CONFIG.get("users"))
+    if CONFIG.get("users") is not None
+    else []
+)
+_DEFAULT_CHANNEL_ID = int(CONFIG["channel_id"])
+
+
+def _validate_kotone_users(raw_profiles: object) -> dict[str, dict[str, object]]:
+    """Validate optional Discord/AOTY/Last.fm identities kept in config.json.
+
+    A profile with an AOTY username belongs to the strict persistence
+    allow-list. A member without one (for example Gan) may still have a
+    Discord and Last.fm identity, but is never scraped as an AOTY user.
+    """
+
+    if raw_profiles is None:
+        raw_profiles = {
+            "enso": {
+                "discord_id": 805601151366070292,
+                "aoty_username": "enso",
+            },
+            "kulkien": {
+                "discord_id": 463642066401099786,
+                "aoty_username": "kulkien",
+            },
+        }
+    if not isinstance(raw_profiles, dict):
+        raise RuntimeError("config.json -> kotone_users musi być mapą profili.")
+
+    configured_aoty = {username.casefold(): username for username in _LEGACY_USERS}
+    result: dict[str, dict[str, object]] = {}
+    discord_ids: set[int] = set()
+    aoty_names: set[str] = set()
+
+    for raw_name, raw_profile in raw_profiles.items():
+        name = str(raw_name or "").strip()
+        if not name or not isinstance(raw_profile, dict):
+            raise RuntimeError("config.json -> kotone_users zawiera niepoprawny profil.")
+        key = name.casefold()
+        if key in result:
+            raise RuntimeError("config.json -> kotone_users zawiera zduplikowaną nazwę.")
+
+        try:
+            discord_id = int(raw_profile.get("discord_id") or 0)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"config.json -> {name}: niepoprawne discord_id.") from exc
+        if discord_id <= 0 or discord_id in discord_ids:
+            raise RuntimeError(f"config.json -> {name}: discord_id musi być unikalne.")
+
+        aoty_raw = str(raw_profile.get("aoty_username") or "").strip()
+        if (
+            aoty_raw
+            and _LEGACY_USERS
+            and aoty_raw.casefold() not in configured_aoty
+        ):
+            raise RuntimeError(
+                f"config.json -> {name}: aoty_username musi należeć do users."
+            )
+        aoty_username = (
+            configured_aoty.get(aoty_raw.casefold(), aoty_raw)
+            if aoty_raw
+            else None
+        )
+        if aoty_username and aoty_username.casefold() in aoty_names:
+            raise RuntimeError("config.json -> dwa profile wskazują ten sam AOTY user.")
+
+        lastfm_username = str(raw_profile.get("lastfm_username") or "").strip() or None
+        try:
+            channel_id = int(raw_profile.get("channel_id") or _DEFAULT_CHANNEL_ID)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"config.json -> {name}: niepoprawne channel_id.") from exc
+        if channel_id <= 0:
+            raise RuntimeError(f"config.json -> {name}: channel_id musi być dodatnie.")
+        result[key] = {
+            "name": name,
+            "discord_id": discord_id,
+            "aoty_username": aoty_username,
+            "lastfm_username": lastfm_username,
+            "channel_id": channel_id,
+        }
+        discord_ids.add(discord_id)
+        if aoty_username:
+            aoty_names.add(aoty_username.casefold())
+
+    missing_profiles = set(configured_aoty) - aoty_names
+    if missing_profiles:
+        raise RuntimeError(
+            "config.json -> kotone_users nie zawiera profilu dla: "
+            + ", ".join(sorted(missing_profiles))
+        )
+    return result
+
+
+KOTONE_USERS = _validate_kotone_users(CONFIG.get("kotone_users"))
+USERS = [
+    str(profile["aoty_username"])
+    for profile in KOTONE_USERS.values()
+    if profile.get("aoty_username")
+]
+if not USERS:
+    raise RuntimeError("config.json -> kotone_users musi zawierać co najmniej jeden aoty_username.")
+KOTONE_USERS_BY_DISCORD_ID = {
+    int(profile["discord_id"]): dict(profile)
+    for profile in KOTONE_USERS.values()
+}
+KOTONE_USERS_BY_AOTY = {
+    str(profile["aoty_username"]).casefold(): dict(profile)
+    for profile in KOTONE_USERS.values()
+    if profile.get("aoty_username")
+}
+
+
+def _validate_operators(raw_operators: object) -> dict[str, dict[str, object]]:
+    """Resolve short profile names from config into Discord authorization data.
+
+    ``operators`` deliberately contains profile keys (for example ``"enso"``),
+    not copied numeric IDs.  This keeps all identities in ``kotone_users`` and
+    makes adding/removing an administrator a one-line, auditable config edit.
+    """
+
+    if raw_operators is None:
+        raw_operators = ["enso"]
+    if not isinstance(raw_operators, list):
+        raise RuntimeError("config.json -> operators musi być listą profili.")
+
+    result: dict[str, dict[str, object]] = {}
+    for raw_name in raw_operators:
+        key = str(raw_name or "").strip().casefold()
+        profile = KOTONE_USERS.get(key)
+        if profile is None:
+            raise RuntimeError(
+                "config.json -> operators wskazuje nieznany profil: "
+                f"{raw_name!r}."
+            )
+        result[key] = dict(profile)
+
+    if not result:
+        raise RuntimeError("config.json -> operators nie może być puste.")
+    return result
+
+
+OPERATORS = _validate_operators(CONFIG.get("operators"))
+OPERATOR_DISCORD_IDS = frozenset(
+    int(profile["discord_id"])
+    for profile in OPERATORS.values()
+)
+
+
+def is_operator_discord_id(discord_id: object) -> bool:
+    """Return whether a Discord account may run an administrative command."""
+
+    try:
+        return int(discord_id) in OPERATOR_DISCORD_IDS
+    except (TypeError, ValueError):
+        return False
+
+
+LASTFM_API_KEY = str(os.getenv("LASTFM_API_KEY") or "").strip()
+LASTFM_API_ENABLED = bool(LASTFM_API_KEY)
 TOKEN = os.getenv("DISCORD_TOKEN") or CONFIG.get("discord_token", "")
 
 if not TOKEN:
@@ -115,19 +275,21 @@ if not TOKEN:
 
 APPLICATION_ID = int(CONFIG["application_id"])
 GUILD_ID = int(CONFIG["guild_id"])
-CHANNEL_ID = int(CONFIG["channel_id"])
+CHANNEL_ID = _DEFAULT_CHANNEL_ID
 
 USER_CHANNELS = {
-    str(username).casefold(): int(channel_id)
-    for username, channel_id in CONFIG.get("user_channels", {}).items()
+    str(profile["aoty_username"]).casefold(): int(profile["channel_id"])
+    for profile in KOTONE_USERS.values()
+    if profile.get("aoty_username")
 }
 
 # Mapowanie Discord ID -> własny profil AOTY jest polityką dostępu, a nie
 # szczegółem komendy /import lub /manual. Trzymamy je przy pozostałej
 # konfiguracji, aby obie komendy zawsze korzystały z dokładnie tej samej listy.
 _DEFAULT_IMPORT_USERS_BY_DISCORD_ID = {
-    805601151366070292: "enso",
-    463642066401099786: "kulkien",
+    int(profile["discord_id"]): str(profile["aoty_username"])
+    for profile in KOTONE_USERS.values()
+    if profile.get("aoty_username")
 }
 
 
@@ -301,14 +463,13 @@ AOTY_DB_ONLY_STATE_FILE = os.path.join(
     DATA_DIR or BASE_DIR,
     "aoty_db_only_state.json",
 )
-# Stable Discord user ID allowed to toggle the global AOTY pause. A username
-# is mutable, so authorization must never depend on a display name.
-try:
-    AOTY_DB_ONLY_ADMIN_USER_ID = int(
-        CONFIG.get("aoty_db_only_admin_user_id", 805601151366070292)
-    )
-except (TypeError, ValueError):
-    AOTY_DB_ONLY_ADMIN_USER_ID = 805601151366070292
+# Independent public-provider switches.  Unlike ``/dbonly``'s historic AOTY
+# state this file controls only optional fallback APIs, so an operator can
+# pause Last.fm or MusicBrainz without silencing the AOTY monitor.
+SOURCE_SWITCH_STATE_FILE = os.path.join(
+    DATA_DIR or BASE_DIR,
+    "source_switches.json",
+)
 AOTY_CACHE_MAX_ENTRIES = _runtime_int("aoty_cache_max_entries", 512, 32)
 AOTY_REQUEST_TIMEOUT_CONNECT = _runtime_float("aoty_connect_timeout", 8.0, 2.0)
 AOTY_REQUEST_TIMEOUT_READ = _runtime_float("aoty_read_timeout", 25.0, 5.0)
@@ -334,7 +495,9 @@ MUSICBRAINZ_FALLBACK_ENABLED = bool(
     RUNTIME.get("musicbrainz_fallback_enabled", True)
 )
 MUSICBRAINZ_MIN_REQUEST_INTERVAL = _runtime_float(
-    "musicbrainz_min_request_interval", 1.05, 1.0
+    # MusicBrainz requires no more than one request per second.  The extra
+    # margin avoids accidental boundary bursts from a shared Railway IP.
+    "musicbrainz_min_request_interval", 1.25, 1.0
 )
 MUSICBRAINZ_REQUEST_TIMEOUT = _runtime_float(
     "musicbrainz_request_timeout", 15.0, 3.0
@@ -344,6 +507,20 @@ MUSICBRAINZ_OUTAGE_COOLDOWN = _runtime_float(
 )
 MUSICBRAINZ_FALLBACK_RETRY_INTERVAL = _runtime_int(
     "musicbrainz_fallback_retry_interval", 24 * 60 * 60, 60 * 60
+)
+
+# Last.fm does not publish a fixed public quota and explicitly forbids
+# continuous multi-request bursts. Kotone therefore uses a stricter local
+# policy than MusicBrainz: one request at a time, at least two seconds apart,
+# with a shared outage pause after a rate-limit or server failure.
+LASTFM_MIN_REQUEST_INTERVAL = _runtime_float(
+    "lastfm_min_request_interval", 2.0, 1.0
+)
+LASTFM_OUTAGE_COOLDOWN = _runtime_float(
+    "lastfm_outage_cooldown", 15 * 60.0, 60.0
+)
+ARTIST_SOURCE_TTL = _runtime_int(
+    "artist_source_ttl", 30 * 24 * 60 * 60, 24 * 60 * 60
 )
 
 # Lokalny backup SQLite na tym samym volume. Railway backups nadal są mocno

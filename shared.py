@@ -223,6 +223,9 @@ class ReleaseVariables:
     tracklist: list[dict] = field(default_factory=list)
     tracklist_text: Any = None
     metadata_sources: dict[str, str] = field(default_factory=dict)
+    # Provider-specific IDs/counts remain separate from the shared fields
+    # above.  They are used only by the details tab, never to replace AOTY.
+    source_data: dict[str, dict] = field(default_factory=dict)
 
     # Metadane konkretnej oceny usera.
     has_review: bool = False
@@ -451,6 +454,7 @@ def build_release_variables(
         tracklist=tracklist,
         tracklist_text=details.get("tracklist_text") or missing,
         metadata_sources=dict(details.get("metadata_sources") or {}),
+        source_data=dict(details.get("source_data") or {}),
         has_review=bool(item.get("has_review")),
         has_track_ratings=bool(item.get("has_track_ratings")),
         liked=bool(item.get("liked")),

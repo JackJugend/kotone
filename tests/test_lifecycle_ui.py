@@ -278,6 +278,30 @@ class SharedAssetTests(unittest.TestCase):
     f"project dependencies unavailable: {PROJECT_IMPORT_ERROR}",
 )
 class DetailViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timeout_edits_public_message_with_channel_token(self):
+        """Twenty minutes outlives an interaction webhook's edit token."""
+
+        view = views_module.TimedDisableView(timeout=20 * 60)
+        button = discord.ui.Button(label="Test")
+        view.add_item(button)
+        normal_message = SimpleNamespace(edit=AsyncMock())
+        channel = SimpleNamespace(
+            get_partial_message=Mock(return_value=normal_message),
+        )
+        webhook_message = SimpleNamespace(
+            id=123,
+            channel=channel,
+            edit=AsyncMock(),
+        )
+        view.bind_message(webhook_message)
+
+        await view.on_timeout()
+
+        self.assertTrue(button.disabled)
+        channel.get_partial_message.assert_called_once_with(123)
+        normal_message.edit.assert_awaited_once_with(view=view)
+        webhook_message.edit.assert_not_awaited()
+
     def test_review_tab_uses_the_shared_must_hear_cover(self):
         item = {
             "album_id": "42",
