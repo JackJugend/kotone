@@ -128,7 +128,7 @@ async def _show_artist_command(
             if callable(stop):
                 stop()
             home_embeds = _home_embeds_for_view(source_view, interaction.message)
-            await interaction.message.edit(
+            await _edit_component_message(interaction,
                 embeds=_embeds_with_release_tab(home_embeds, embed),
                 view=source_view,
             )
@@ -198,6 +198,25 @@ def _home_embeds_for_view(
     if callable(build_page):
         return [build_page(getattr(view, "page_index", 0))]
     return list(getattr(message, "embeds", [])[:1])
+
+
+async def _edit_component_message(
+    interaction: discord.Interaction,
+    **kwargs,
+) -> None:
+    """Edit the message that owns a component after a deferred callback.
+
+    ``interaction.message`` is usually a webhook-backed message.  On some
+    clients it can be stale after ``defer`` and silently leave Home visible.
+    The interaction's original response is the component's owning message,
+    so it is the authoritative route.  The direct-message fallback keeps
+    manually created messages and test doubles compatible.
+    """
+
+    try:
+        await interaction.edit_original_response(**kwargs)
+    except (AttributeError, discord.HTTPException):
+        await interaction.message.edit(**kwargs)
 
 
 VIEW_TIMEOUT_SECONDS = 20 * 60
@@ -548,7 +567,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
             username=self.username,
             author_icon_url=self.author_icon_url,
         )
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab([self.main_embed], embed),
             view=self,
         )
@@ -592,7 +611,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
             return
 
         _set_active_action(self, REVIEW_BUTTON)
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab(
                 [self.main_embed],
                 build_review_embed(
@@ -617,7 +636,9 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
     ):
         _set_active_action(self, DETAILS_BUTTON)
         if self.details_embed is not None:
-            await interaction.response.edit_message(
+            await interaction.response.defer()
+            await _edit_component_message(
+                interaction,
                 embeds=_embeds_with_release_tab(
                     [self.main_embed],
                     self.details_embed,
@@ -634,7 +655,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
             username=self.username,
             author_icon_url=self.author_icon_url,
         )
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab([self.main_embed], embed),
             view=self,
         )
@@ -772,7 +793,7 @@ class MultiRatingView(TimedDisableView):
             username=self.username,
             author_icon_url=self.author_icon_url,
         )
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab(self.main_embeds, embed),
             view=self,
         )
@@ -800,7 +821,7 @@ class MultiRatingView(TimedDisableView):
 
         item = self.items[self.selected_index]
         _set_active_action(self, REVIEW_BUTTON)
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab(
                 self.main_embeds,
                 build_review_embed(
@@ -824,7 +845,7 @@ class MultiRatingView(TimedDisableView):
             username=self.username,
             author_icon_url=self.author_icon_url,
         )
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab(self.main_embeds, embed),
             view=self,
         )
@@ -1058,7 +1079,7 @@ class AlbumRatingView(TimedDisableView):
         _set_active_action(self, REVIEW_BUTTON)
         self._set_user_selector_visible(True)
         avatar = await _aoty_avatar(self.selected_username)
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab(
                 [self.main_embed],
                 build_review_embed(
@@ -1095,7 +1116,7 @@ class AlbumRatingView(TimedDisableView):
         await interaction.response.defer()
         await _clear_artist_result(self)
         embed = await build_combined_tracklist_embed(self.release_item)
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab([self.main_embed], embed),
             view=self,
         )
@@ -1111,7 +1132,7 @@ class AlbumRatingView(TimedDisableView):
         await interaction.response.defer()
         await _clear_artist_result(self)
         embed = await build_release_details_embed(self.release_item)
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab([self.main_embed], embed),
             view=self,
         )
@@ -1385,7 +1406,7 @@ class ProfilePagerView(TimedDisableView):
             username=self.username,
             author_icon_url=avatar,
         )
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab(
                 [self.build_page_embed(self.page_index)],
                 embed,
@@ -1421,7 +1442,7 @@ class ProfilePagerView(TimedDisableView):
         self.current_tab = REVIEW_BUTTON
         self._rebuild_components()
         avatar = await _aoty_avatar(self.username)
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab(
                 [self.build_page_embed(self.page_index)],
                 build_review_embed(
@@ -1452,7 +1473,7 @@ class ProfilePagerView(TimedDisableView):
                 else None
             ),
         )
-        await interaction.message.edit(
+        await _edit_component_message(interaction,
             embeds=_embeds_with_release_tab(
                 [self.build_page_embed(self.page_index)],
                 embed,

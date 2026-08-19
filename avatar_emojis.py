@@ -17,6 +17,7 @@ import requests
 from PIL import Image, ImageDraw, ImageOps
 
 from database import DB
+from http_client import HTTP
 from settings import GUILD_ID, KOTONE_AVATAR_EMOJI_NAMES
 
 MAX_EMOJI_BYTES = 256 * 1024
@@ -68,6 +69,9 @@ class AvatarEmojiSynchronizer:
     async def sync_cached(self) -> None:
         """Create missing emojis from existing SQLite avatars without AOTY IO."""
 
+        if HTTP.status().get("challenge_open"):
+            print("[AVATAR EMOJI] Pominięto sync: aktywny cooldown AOTY.")
+            return
         for username in KOTONE_AVATAR_EMOJI_NAMES:
             await self.sync_user(username)
 
@@ -76,6 +80,8 @@ class AvatarEmojiSynchronizer:
 
         canonical = DB.canonical_username(username)
         if canonical is None:
+            return False
+        if HTTP.status().get("challenge_open"):
             return False
         emoji_name = KOTONE_AVATAR_EMOJI_NAMES.get(canonical.casefold())
         avatar_url = DB.get_avatar(canonical)
