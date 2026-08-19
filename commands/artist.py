@@ -13,11 +13,11 @@ from shared import (
     score_or_missing,
     set_aoty_footer,
 )
-from views import TimedDisableView
+from views import TimedDisableView, VIEW_TIMEOUT_SECONDS
 
 
 MAX_ARTIST_RELEASES = 18
-ARTIST_VIEW_TIMEOUT_SECONDS = 30 * 60
+ARTIST_VIEW_TIMEOUT_SECONDS = VIEW_TIMEOUT_SECONDS
 
 
 SORT_LABELS = {

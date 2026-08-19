@@ -357,6 +357,8 @@ def build_release_variables(
         ratings_count,
         critic_score,
         critic_reviews_count,
+        album_id=album_id,
+        official=details.get("must_hear"),
     )
     display_cover = (
         marked_cover_url(album_id, raw_cover)

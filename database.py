@@ -862,6 +862,7 @@ class Database:
                     ratings_count TEXT,
                     critic_score TEXT,
                     critic_reviews_count TEXT,
+                    must_hear INTEGER,
                     release_date TEXT,
                     year TEXT,
                     album_format TEXT,
@@ -886,6 +887,7 @@ class Database:
             self._ensure_column("releases", "metadata_sources_json", "TEXT")
             self._ensure_column("releases", "critic_score", "TEXT")
             self._ensure_column("releases", "critic_reviews_count", "TEXT")
+            self._ensure_column("releases", "must_hear", "INTEGER")
 
             self.connection.execute(
                 """
@@ -3259,6 +3261,11 @@ class Database:
         legacy_authoritative = not isinstance(raw_section_complete, dict)
         source = str(details.get("source") or "").strip().casefold()
         source = source if source in {"aoty", "musicbrainz"} else ""
+        official_must_hear = details.get("must_hear")
+        must_hear_complete = source == "aoty" and isinstance(
+            official_must_hear,
+            bool,
+        )
 
         def section_complete(name: str) -> bool:
             # Older callers and test fixtures predate the parser contract and
@@ -3358,9 +3365,9 @@ class Database:
                     critic_reviews_count, release_date, year,
                     album_format, label, labels_json, genres_json,
                     secondary_genres_json, vibes_json, ranking_year,
-                    year_ranking, year_ranking_text, metadata_source,
+                    year_ranking, year_ranking_text, must_hear, metadata_source,
                     metadata_sources_json, fetched_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(album_id) DO UPDATE SET
                     artist = COALESCE(excluded.artist, releases.artist),
                     artist_url = COALESCE(excluded.artist_url, releases.artist_url),
@@ -3407,6 +3414,8 @@ class Database:
                     year_ranking_text = CASE WHEN ? THEN
                         excluded.year_ranking_text
                         ELSE releases.year_ranking_text END,
+                    must_hear = CASE WHEN ? THEN
+                        excluded.must_hear ELSE releases.must_hear END,
                     metadata_source = COALESCE(
                         excluded.metadata_source,
                         releases.metadata_source
@@ -3436,6 +3445,7 @@ class Database:
                     details.get("ranking_year"),
                     details.get("year_ranking"),
                     details.get("year_ranking_text"),
+                    int(official_must_hear) if must_hear_complete else None,
                     source or None,
                     _json_dump(metadata_sources),
                     now,
@@ -3454,6 +3464,7 @@ class Database:
                     section_complete("ranking"),
                     section_complete("ranking"),
                     section_complete("ranking"),
+                    must_hear_complete,
                 ),
             )
 
@@ -3616,6 +3627,9 @@ class Database:
             "ranking_year": row["ranking_year"],
             "year_ranking": row["year_ranking"],
             "year_ranking_text": row["year_ranking_text"],
+            "must_hear": (
+                None if row["must_hear"] is None else bool(row["must_hear"])
+            ),
             "metadata_source": row["metadata_source"],
             "metadata_sources": metadata_sources,
             "tracklist": [

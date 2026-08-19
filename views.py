@@ -467,11 +467,11 @@ async def _clear_artist_result(view: discord.ui.View) -> None:
         pass
 
 
-VIEW_TIMEOUT_SECONDS = 15 * 60
+VIEW_TIMEOUT_SECONDS = 20 * 60
 
 
 class TimedDisableView(discord.ui.View):
-    """A view that visibly disables every control after 15 minutes."""
+    """A view that visibly disables every control after 20 minutes."""
 
     def __init__(
         self,

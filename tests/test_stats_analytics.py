@@ -178,6 +178,18 @@ class StatsEngineTests(unittest.TestCase):
         self.assertFalse(must_hear_album("84", "2,204", "80", "18"))
         self.assertFalse(must_hear_album("84", "2,204", "74", "14"))
 
+    def test_official_must_hear_marker_overrides_legacy_score_heuristic(self):
+        self.assertTrue(
+            must_hear_album(
+                "79.5", "1,965", "70.1", "2", official=True
+            )
+        )
+        self.assertFalse(
+            must_hear_album(
+                "84", "2,204", "74", "18", official=False
+            )
+        )
+
 
 class AnalyticsDatabaseTests(unittest.TestCase):
     def setUp(self):

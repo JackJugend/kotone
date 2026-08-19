@@ -1886,6 +1886,10 @@ def _extract_aoty_critic_score(soup: BeautifulSoup) -> str | None:
                 break
 
     page_text = " ".join(soup.get_text(" ", strip=True).split())
+    # This is AOTY's own editorial marker; it cannot be reconstructed from
+    # user/critic scores, as the site can mark releases that break any such
+    # numerical rule.
+    must_hear = bool(re.search(r"\bmust\s+hear\s+album\b", page_text, re.I))
     match = re.search(
         r"Critic\s*Score\s*(100|\d{1,2})(?!\d)",
         page_text,
@@ -2506,6 +2510,7 @@ def get_album_details(album_url: str) -> dict:
         "ratings_count": ratings_count,
         "critic_score": critic_score,
         "critic_reviews_count": critic_reviews_count,
+        "must_hear": must_hear,
         "release_date": release_date,
         "year": year,
         "album_format": album_format,

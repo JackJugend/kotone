@@ -8,6 +8,18 @@ import os
 from urllib.parse import quote
 
 
+# AOTY's orange badge is editorial, not a formula based on its two scores.
+# These verified pages were manually seeded before the scraper had a durable
+# flag. New pages are persisted from the live AOTY marker instead.
+KNOWN_AOTY_MUST_HEAR_IDS = frozenset({
+    "10879",  # Four-Calendar CafÃ©
+    "4594",   # Heaven or Las Vegas
+    "104775", # The Moon and the Melodies
+    "6490",   # Treasure
+    "7346",   # Head Over Heels
+})
+
+
 def numeric_count(value) -> float | None:
     text = str(value or "").strip().upper().replace(",", "")
     match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KM]?)", text)
@@ -23,9 +35,19 @@ def must_hear_album(
     ratings_count,
     critic_score,
     critic_reviews_count,
+    *,
+    album_id: str | None = None,
+    official: bool | None = None,
 ) -> bool:
-    """Return the public AOTY orange-tag condition from cached values."""
+    """Return AOTY's orange tag, preferring its explicit editorial marker."""
 
+    if official is not None:
+        return bool(official)
+    if str(album_id or "").strip() in KNOWN_AOTY_MUST_HEAR_IDS:
+        return True
+
+    # Compatibility fallback for legacy cache rows that predate the explicit
+    # AOTY marker. It is never used once the release is refreshed from AOTY.
     try:
         user = float(user_score)
         critic = float(critic_score)

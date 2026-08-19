@@ -131,6 +131,8 @@ class HealthServer:
             details.get("ratings_count"),
             details.get("critic_score"),
             details.get("critic_reviews_count"),
+            album_id=album_id,
+            official=details.get("must_hear"),
         ):
             self.must_hear_cover_last_failure = "no_longer_eligible"
             raise web.HTTPNotFound()
