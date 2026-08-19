@@ -6,7 +6,13 @@ import requests
 import aoty
 from services import DATA
 from lastfm_database import LASTFM_DB
-from settings import KOTONE_USERS_BY_AOTY, SOURCE_EMOJIS, resolve_aoty_username
+from settings import (
+    KOTONE_USERS,
+    KOTONE_USERS_BY_AOTY,
+    SOURCE_EMOJIS,
+    resolve_aoty_username,
+    resolve_kotone_profile,
+)
 from display_utils import display_romanized_name
 from shared import (
     build_profile_variables,
@@ -62,18 +68,128 @@ def _lastfm_count(value: object) -> str:
         return "—"
 
 
+def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord.Embed]:
+    """Build Gan's no-AOTY profile entirely from the Last.fm SQLite archive."""
+
+    profile_key = str(kotone_profile.get("name") or "").strip()
+    lastfm_username = str(kotone_profile.get("lastfm_username") or "").strip()
+    lastfm_profile = LASTFM_DB.get_profile(profile_key) or {}
+    archive = LASTFM_DB.archive_statistics(profile_key)
+    latest = LASTFM_DB.latest_scrobble(profile_key)
+    profile_url = str(
+        lastfm_profile.get("profile_url")
+        or f"https://www.last.fm/user/{lastfm_username}"
+    )
+    avatar = str(lastfm_profile.get("avatar_url") or "").strip() or None
+    red = discord.Color.from_rgb(206, 69, 69)
+
+    header = discord.Embed(
+        title=str(kotone_profile.get("name") or profile_key),
+        url=profile_url,
+        description="Profil Kotone oparty wyłącznie na danych Last.fm.",
+        color=red,
+    )
+    header.add_field(
+        name="Źródło",
+        value=f"{SOURCE_EMOJIS['lastfm']} **Last.fm · @{lastfm_username}**",
+        inline=False,
+    )
+    if avatar:
+        header.set_thumbnail(url=avatar)
+
+    details = discord.Embed(
+        title=f"{SOURCE_EMOJIS['lastfm']} Last.fm — @{lastfm_username}",
+        url=profile_url,
+        color=red,
+    )
+    details.add_field(
+        name="Profil Last.fm",
+        value=(
+            f"**{_lastfm_count(lastfm_profile.get('total_scrobbles'))}** scrobbli  •  "
+            f"**{_lastfm_count(lastfm_profile.get('artist_count'))}** wykonawców\n"
+            f"**{_lastfm_count(lastfm_profile.get('album_count'))}** albumów  •  "
+            f"**{_lastfm_count(lastfm_profile.get('track_count'))}** utworów"
+        ),
+        inline=False,
+    )
+    details.add_field(
+        name="Archiwum Kotone",
+        value=(
+            f"**{_lastfm_count(archive['scrobbles'])}** scrobbli  •  "
+            f"**{_lastfm_count(archive['artists'])}** wykonawców\n"
+            f"**{_lastfm_count(archive['albums'])}** albumów  •  "
+            f"**{_lastfm_count(archive['tracks'])}** utworów"
+        ),
+        inline=False,
+    )
+    if latest:
+        album = f" — {latest['album']}" if latest.get("album") else ""
+        details.add_field(
+            name="Ostatni scrobble",
+            value=(
+                f"**{latest.get('artist') or '—'} — "
+                f"{latest.get('track') or '—'}**{album}"
+            ),
+            inline=False,
+        )
+    if avatar:
+        details.set_thumbnail(url=avatar)
+    details.set_footer(text="Last.fm • dane zapisane przez Kotone")
+    return [header, details]
+
+
+async def profile_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    """Offer Kotone profiles, including Last.fm-only Gan, before AOTY names."""
+
+    needle = str(current or "").strip().casefold()
+    choices: list[discord.app_commands.Choice[str]] = []
+    seen: set[str] = set()
+    for key, profile in KOTONE_USERS.items():
+        label = str(profile.get("name") or key)
+        aliases = " ".join(
+            [
+                key,
+                label,
+                str(profile.get("aoty_username") or ""),
+                str(profile.get("lastfm_username") or ""),
+            ]
+        ).casefold()
+        if needle and needle not in aliases:
+            continue
+        value = str(profile.get("aoty_username") or label)
+        if value.casefold() not in seen:
+            suffix = "Last.fm" if not profile.get("aoty_username") else "Kotone"
+            choices.append(discord.app_commands.Choice(name=f"{label} · {suffix}", value=value))
+            seen.add(value.casefold())
+    for choice in await username_autocomplete(interaction, current):
+        if choice.value.casefold() not in seen:
+            choices.append(choice)
+            seen.add(choice.value.casefold())
+    return choices[:10]
+
+
 def setup_profile_command(tree: discord.app_commands.CommandTree):
     @tree.command(
         name="profile",
-        description="Pokazuje profil użytkownika AOTY.",
+        description="Pokazuje profil AOTY albo Last.fm użytkownika Kotone.",
     )
-    @discord.app_commands.describe(username="Użytkownik AOTY")
-    @discord.app_commands.autocomplete(username=username_autocomplete)
+    @discord.app_commands.describe(username="Użytkownik AOTY lub Kotone")
+    @discord.app_commands.autocomplete(username=profile_autocomplete)
     async def profile_command(
         interaction: discord.Interaction,
         username: str | None = None,
     ):
         await interaction.response.defer()
+        kotone_profile = resolve_kotone_profile(interaction.user.id, username)
+        if kotone_profile and not kotone_profile.get("aoty_username"):
+            await interaction.followup.send(
+                embeds=_build_lastfm_only_embeds(kotone_profile),
+            )
+            return
+
         username = resolve_aoty_username(interaction.user.id, username)
         if not username:
             await interaction.followup.send(

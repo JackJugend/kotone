@@ -239,6 +239,35 @@ KOTONE_USERS_BY_AOTY = {
 }
 
 
+def resolve_kotone_profile(
+    discord_user_id: int | str | None,
+    supplied_name: str | None,
+) -> dict[str, object] | None:
+    """Resolve a Kotone profile by Discord account or any configured name.
+
+    Unlike ``resolve_aoty_username`` this also supports profiles such as Gan,
+    which intentionally have a Last.fm identity but no AOTY account.
+    """
+
+    supplied = str(supplied_name or "").strip().casefold()
+    if supplied:
+        for key, profile in KOTONE_USERS.items():
+            aliases = {
+                key,
+                str(profile.get("name") or "").casefold(),
+                str(profile.get("aoty_username") or "").casefold(),
+                str(profile.get("lastfm_username") or "").casefold(),
+            }
+            if supplied in aliases:
+                return dict(profile)
+        return None
+    try:
+        profile = KOTONE_USERS_BY_DISCORD_ID.get(int(discord_user_id or 0))
+    except (TypeError, ValueError):
+        profile = None
+    return dict(profile) if profile else None
+
+
 def resolve_aoty_username(
     discord_user_id: int | str | None,
     supplied_username: str | None,
