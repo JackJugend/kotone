@@ -124,25 +124,48 @@ class RatingMonitor:
         flags_text = f"  •  {flags}" if flags else ""
 
         embed = discord.Embed(
-            title=variables.display_album,
+            title=(
+                f"{score_icon(variables.score)} "
+                f"{variables.display_artist} — {must_hear_title_marker(variables)} "
+                f"**{variables.display_album}**"
+                f"{release_year_suffix(variables.year)}"
+            ),
             url=variables.url,
-            description=f"**{variables.display_artist}**",
+            description="\n".join(description_lines),
             color=score_color(variables.score),
         )
+
         embed.add_field(
-            name=score_icon(variables.score),
-            value=" ",
+            name=(
+                f"<:aoty:1539095897084924004> "
+                f"**{aoty_score_or_missing(variables.aoty_user_score, variables.ratings_count)}**"
+            ),
+            value=f"/{variables.ratings_count}",
             inline=True,
         )
+        embed.add_field(
+            name=f"\🏆 **{variables.year_ranking_text}**",
+            value=f"for **{variables.year}**",
+            inline=True,
+        )
+
+        if avatar:
+            embed.set_author(
+                name=f"{username}  •  {variables.date}",
+                url=f"https://www.albumoftheyear.org/user/{username}",
+                icon_url=avatar,
+            )
+        else:
+            embed.set_author(name=f"{username}  •  {variables.date}")
 
         if variables.cover:
             embed.set_thumbnail(url=variables.cover)
 
-        footer_text = f"{username} AOTY  •  {variables.date}{flags_text}  ⚠️"
-        if avatar:
-            embed.set_footer(text=footer_text, icon_url=avatar)
-        else:
-            embed.set_footer(text=footer_text)
+        set_aoty_footer(
+            embed,
+            f"{variables.album_format}  •  {variables.release_date}  •  "
+            f"{variables.labels_text}{footer_flags}",
+        )
 
         view = SingleRatingView(
             username=username,

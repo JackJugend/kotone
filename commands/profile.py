@@ -356,7 +356,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
                         f"{last_scrobble['track']}**{album_text}"
                     )
                 embed.add_field(
-                    name=f"{avatar_emoji} Dane odsłuchów".strip(),
+                    name=f"{avatar_emoji} last.fm".strip(),
                     value="\n".join(lines),
                     inline=False,
                 )
