@@ -278,6 +278,24 @@ class SharedAssetTests(unittest.TestCase):
     f"project dependencies unavailable: {PROJECT_IMPORT_ERROR}",
 )
 class DetailViewTests(unittest.IsolatedAsyncioTestCase):
+    async def test_controls_reject_anyone_except_the_command_invoker(self):
+        view = views_module.TimedDisableView(owner_id=805601151366070292)
+        outsider = SimpleNamespace(
+            user=SimpleNamespace(id=463642066401099786),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+
+        self.assertFalse(await view.interaction_check(outsider))
+        outsider.response.send_message.assert_awaited_once()
+        self.assertTrue(outsider.response.send_message.await_args.kwargs["ephemeral"])
+
+        owner = SimpleNamespace(
+            user=SimpleNamespace(id=805601151366070292),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+        self.assertTrue(await view.interaction_check(owner))
+        owner.response.send_message.assert_not_awaited()
+
     async def test_timeout_edits_public_message_with_channel_token(self):
         """Twenty minutes outlives an interaction webhook's edit token."""
 

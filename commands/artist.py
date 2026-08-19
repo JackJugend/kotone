@@ -484,9 +484,11 @@ class ArtistSortView(TimedDisableView):
         aoty_min=None,
         aoty_max=None,
         timeout=ARTIST_VIEW_TIMEOUT_SECONDS,
+        owner_id: int | None = None,
     ):
         super().__init__(
-            timeout=timeout
+            timeout=timeout,
+            owner_id=owner_id,
         )
 
         self.discography = discography
@@ -966,6 +968,7 @@ async def build_artist_response(
     decade: int | None = None,
     aoty_min: int | None = None,
     aoty_max: int | None = None,
+    owner_id: int | None = None,
 ) -> tuple[discord.Embed, ArtistSortView] | None:
     """Build exactly the same interactive artist result used by /artist."""
 
@@ -986,6 +989,7 @@ async def build_artist_response(
         decade=decade,
         aoty_min=aoty_min,
         aoty_max=aoty_max,
+        owner_id=owner_id,
     )
     embed = await view.build_embed()
     return embed, view
@@ -1090,6 +1094,7 @@ def setup_artist_command(
                 artist,
                 aoty_min=aoty_min,
                 aoty_max=aoty_max,
+                owner_id=interaction.user.id,
             )
             if result is None:
                 await interaction.followup.send(

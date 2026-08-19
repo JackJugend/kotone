@@ -61,8 +61,9 @@ class RatingDistributionView(TimedDisableView):
         *,
         distributions: dict[str, dict],
         avatar_items: list[dict],
+        owner_id: int | None = None,
     ):
-        super().__init__()
+        super().__init__(owner_id=owner_id)
         self.distributions = distributions
         self.avatar_items = avatar_items
         self.active_category = "all"
@@ -343,6 +344,7 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         view = RatingDistributionView(
             distributions=distributions,
             avatar_items=avatar_items,
+            owner_id=interaction.user.id,
         )
         content = await view.render("all")
         filename = f"ratingdistribution-{canonical}-all.png"

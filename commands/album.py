@@ -13,6 +13,7 @@ from display_utils import display_romanized_name
 from settings import USERS
 from presence_cache import PRESENCE_CACHE
 from shared import (
+    add_centered_inline_fields,
     aoty_score_or_missing,
     load_release_variables,
     must_hear_title_marker,
@@ -22,6 +23,7 @@ from shared import (
     score_icon,
     score_or_nr,
     set_aoty_footer,
+    user_avatar_emoji,
 )
 from views import AlbumRatingView
 
@@ -367,11 +369,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             variables.ratings_count,
         )
 
-        embed.add_field(
-                name="AOTY",
-                value=f"**{aoty_score}**",
-                inline=True,
-        )
+        rating_fields = [("AOTY", f"**{aoty_score}**")]
 
         # Pełny zapis SQLite jest źródłem domyślnym. AOTY jest używane tylko,
         # gdy danego usera/wydania nie ma jeszcze w trwałym cache.
@@ -405,12 +403,15 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             else:
                 rating_value = f"{score_or_nr(None)}{flags_text}"
 
-            embed.add_field(
-                name=username,
-                value=rating_value,
-                inline=True,
-            )
+            avatar_emoji = user_avatar_emoji(username)
+            field_name = f"{avatar_emoji} {username}".strip()
+            rating_fields.append((field_name, rating_value))
             await asyncio.sleep(0.15)
+
+        # Values may contain flags (✎/☰/❤︎), but alignment is based on the
+        # number of actual score fields.  The helper fills an incomplete
+        # Discord row with invisible \u200b spacer fields only when needed.
+        add_centered_inline_fields(embed, rating_fields)
 
         # The artist line above an /album card is display-only, so it must use
         # the same romanization rule as the title, autocomplete and views.
@@ -435,6 +436,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             release_item=release_item,
             usernames=USERS[:25],
             rating_infos=rating_infos,
+            owner_id=interaction.user.id,
         )
 
         message = await interaction.followup.send(

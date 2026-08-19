@@ -112,7 +112,10 @@ async def _show_artist_command(
         # common TimedDisableView from this module.
         from commands.artist import build_artist_response
 
-        result = await build_artist_response(artist)
+        result = await build_artist_response(
+            artist,
+            owner_id=getattr(source_view, "owner_id", None),
+        )
         if result is None:
             await interaction.followup.send(
                 f"❌ Nie znaleziono artysty **{artist}** na AOTY ani w SQLite.",
@@ -219,12 +222,30 @@ class TimedDisableView(discord.ui.View):
         self,
         *,
         timeout: float = VIEW_TIMEOUT_SECONDS,
+        owner_id: int | None = None,
     ):
         super().__init__(timeout=timeout)
+        # Components represent one command session.  Public embeds remain
+        # visible to everyone, but changing a select/button is reserved for
+        # the person who opened that session.
+        self.owner_id = int(owner_id) if owner_id is not None else None
         self.message = None
         self.artist_message = None
         self._bound_channel = None
         self._bound_message_id: int | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Allow only the original invoker to use this public view."""
+
+        user_id = getattr(getattr(interaction, "user", None), "id", None)
+        if self.owner_id is None or user_id == self.owner_id:
+            return True
+
+        await interaction.response.send_message(
+            "Tylko osoba, która wywołała tę komendę, może używać tych kontrolek.",
+            ephemeral=True,
+        )
+        return False
 
     def bind_message(self, message) -> None:
         """Remember a public message in a form that survives webhook expiry.
@@ -457,9 +478,11 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         album_url: str | None = None,
         author_icon_url: str | None = None,
         timeout: float = VIEW_TIMEOUT_SECONDS,
+        owner_id: int | None = None,
     ):
         super().__init__(
-            timeout=timeout
+            timeout=timeout,
+            owner_id=owner_id,
         )
 
         self.username = username
@@ -682,8 +705,9 @@ class MultiRatingView(TimedDisableView):
         main_embeds: list[discord.Embed],
         author_icon_url: str | None = None,
         timeout: float = VIEW_TIMEOUT_SECONDS,
+        owner_id: int | None = None,
     ):
-        super().__init__(timeout=timeout)
+        super().__init__(timeout=timeout, owner_id=owner_id)
         self.username = username
         self.items = [dict(item) for item in items]
         self.main_embeds = main_embeds
@@ -863,7 +887,7 @@ class AlbumReviewTabView(TimedDisableView):
     """The review-only user picker shown beneath the lower review embed."""
 
     def __init__(self, owner: "AlbumRatingView"):
-        super().__init__()
+        super().__init__(owner_id=owner.owner_id)
         self.owner = owner
         self.add_item(
             UserRatingSelect(
@@ -889,8 +913,9 @@ class AlbumRatingView(TimedDisableView):
         usernames: list[str],
         rating_infos: dict[str, dict],
         timeout: float = VIEW_TIMEOUT_SECONDS,
+        owner_id: int | None = None,
     ):
-        super().__init__(timeout=timeout)
+        super().__init__(timeout=timeout, owner_id=owner_id)
         self.main_embed = main_embed
         self.release_item = dict(release_item)
         self.usernames = usernames
@@ -1224,8 +1249,9 @@ class ProfilePagerView(TimedDisableView):
         build_page_embed: Callable[[int], discord.Embed],
         favorites: list[dict] | None = None,
         timeout: float = VIEW_TIMEOUT_SECONDS,
+        owner_id: int | None = None,
     ):
-        super().__init__(timeout=timeout)
+        super().__init__(timeout=timeout, owner_id=owner_id)
         self.username = username
         self.ratings = [dict(item) for item in ratings[:50]]
         self.favorites = [

@@ -125,6 +125,29 @@ def score_or_nr(score: Any) -> str:
     value = score_value_or_nr(score)
     return f"{score_icon(None)} NR" if value == "NR" else f"{score_icon(value)} {value}"
 
+
+def add_centered_inline_fields(
+    embed: discord.Embed,
+    fields: list[tuple[str, str]],
+) -> None:
+    """Append rating fields while centring incomplete three-column rows.
+
+    Discord has a fixed three-column layout for inline embed fields.  Empty
+    zero-width fields are structural spacers only; they do not add visible
+    text or replace rating flags in a value.
+    """
+
+    visible = [(str(name), str(value)) for name, value in fields]
+    remainder = len(visible) % 3
+    spacer = ("\u200b", "\u200b")
+    if remainder == 1:
+        visible = [spacer, *visible, spacer]
+    elif remainder == 2:
+        visible = [*visible, spacer]
+    for name, value in visible:
+        embed.add_field(name=name, value=value, inline=True)
+
+
 def score_or_missing(score: Any) -> str:
     """Render every missing aoty ratings info consistently as a white ``—`` marker."""
 
@@ -369,6 +392,27 @@ def build_release_variables(
         album_id=album_id,
         official=details.get("must_hear"),
     )
+
+
+def user_avatar_emoji(username: str) -> str:
+    """Return the current cached custom emoji for a Kotone profile.
+
+    The ID lives in SQLite because Discord replaces it whenever an AOTY
+    avatar changes.  Keeping the lookup here gives all command embeds the
+    same stable ``<:name:id>`` representation without copying IDs into code.
+    A missing/unsynchronised emoji deliberately degrades to empty text.
+    """
+
+    try:
+        # Lazy import keeps the shared display module free of startup cycles.
+        from database import DB
+
+        state = DB.get_avatar_emoji_state(username) or {}
+        emoji_id = str(state.get("emoji_id") or "").strip()
+        name = str(username or "").strip().casefold()
+        return f"<:{name}:{emoji_id}>" if name and emoji_id else ""
+    except Exception:
+        return ""
     display_cover = (
         marked_cover_url(album_id, raw_cover)
         if must_hear

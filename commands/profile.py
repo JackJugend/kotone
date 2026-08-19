@@ -216,6 +216,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             ratings=recent_ratings,
             favorites=variables.favorites,
             build_page_embed=build_page_embed,
+            owner_id=interaction.user.id,
         )
 
         message = await interaction.followup.send(
