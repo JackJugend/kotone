@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import traceback
 
 import discord
 
@@ -246,6 +247,26 @@ class TimedDisableView(discord.ui.View):
             ephemeral=True,
         )
         return False
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item,
+    ) -> None:
+        """Make button/select failures actionable in Railway logs."""
+
+        label = getattr(item, "label", None) or getattr(item, "placeholder", None) or "?"
+        print(f"[COMPONENT] {type(self).__name__} {label}: {type(error).__name__}: {error}")
+        traceback.print_exception(type(error), error, error.__traceback__)
+        try:
+            message = "❌ Nie udało się otworzyć tej zakładki. Błąd zapisano w logach Kotone."
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     def bind_message(self, message) -> None:
         """Remember a public message in a form that survives webhook expiry.
