@@ -297,6 +297,35 @@ class ScoreEmojiSynchronizer:
         )
         return await self.client.http.request(rename_route, json={"name": name})
 
+    @staticmethod
+    def _retry_delay(error: Exception) -> float | None:
+        """Return a safe retry delay only for transient Discord API errors."""
+
+        status = int(getattr(error, "status", 0) or 0)
+        retry_after = float(getattr(error, "retry_after", 0) or 0)
+        if status == 429:
+            return max(5.0, min(900.0, retry_after or 60.0))
+        if 500 <= status < 600:
+            return 60.0
+        return None
+
+    async def _create_or_replace_with_retry(self, **kwargs) -> dict:
+        """Wait through Discord's emoji rate limits instead of stopping sync."""
+
+        while True:
+            try:
+                return await self._create_or_replace_emoji(**kwargs)
+            except Exception as exc:
+                delay = self._retry_delay(exc)
+                if delay is None:
+                    raise
+                name = str(kwargs.get("name") or "emoji")
+                print(
+                    f"[EMOJI] :{name}: limit Discorda; "
+                    f"ponawiam za {int(delay + 0.999)} s."
+                )
+                await asyncio.sleep(delay)
+
     def load_cached(self) -> None:
         """Make already-uploaded emoji available immediately after restart."""
 
@@ -340,7 +369,7 @@ class ScoreEmojiSynchronizer:
                     continue
 
                 try:
-                    created_emoji = await self._create_or_replace_emoji(
+                    created_emoji = await self._create_or_replace_with_retry(
                         existing=existing if needs_rebuild else None,
                         name=name,
                         image=render_score_emoji(score),
@@ -408,7 +437,7 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
                 )
                 if existing is None or needs_rebuild:
                     try:
-                        existing = await self._create_or_replace_emoji(
+                        existing = await self._create_or_replace_with_retry(
                             existing=existing if needs_rebuild else None,
                             name=name,
                             image=render_status_emoji(key),
