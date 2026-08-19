@@ -324,6 +324,27 @@ def build_profile_variables(
     )
 
 
+def user_avatar_emoji(username: str) -> str:
+    """Return the current cached custom emoji for a Kotone profile.
+
+    The ID lives in SQLite because Discord replaces it whenever an AOTY
+    avatar changes.  Keeping the lookup here gives all command embeds the
+    same stable ``<:name:id>`` representation without copying IDs into code.
+    A missing/unsynchronised emoji deliberately degrades to empty text.
+    """
+
+    try:
+        # Lazy import keeps the shared display module free of startup cycles.
+        from database import DB
+
+        state = DB.get_avatar_emoji_state(username) or {}
+        emoji_id = str(state.get("emoji_id") or "").strip()
+        name = str(username or "").strip().casefold()
+        return f"<:{name}:{emoji_id}>" if name and emoji_id else ""
+    except Exception:
+        return ""
+
+
 def build_release_variables(
     item: dict | None,
     details: dict | None = None,
@@ -392,27 +413,6 @@ def build_release_variables(
         album_id=album_id,
         official=details.get("must_hear"),
     )
-
-
-def user_avatar_emoji(username: str) -> str:
-    """Return the current cached custom emoji for a Kotone profile.
-
-    The ID lives in SQLite because Discord replaces it whenever an AOTY
-    avatar changes.  Keeping the lookup here gives all command embeds the
-    same stable ``<:name:id>`` representation without copying IDs into code.
-    A missing/unsynchronised emoji deliberately degrades to empty text.
-    """
-
-    try:
-        # Lazy import keeps the shared display module free of startup cycles.
-        from database import DB
-
-        state = DB.get_avatar_emoji_state(username) or {}
-        emoji_id = str(state.get("emoji_id") or "").strip()
-        name = str(username or "").strip().casefold()
-        return f"<:{name}:{emoji_id}>" if name and emoji_id else ""
-    except Exception:
-        return ""
     display_cover = (
         marked_cover_url(album_id, raw_cover)
         if must_hear
