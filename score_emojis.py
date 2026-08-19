@@ -20,7 +20,7 @@ from score_emoji_registry import set_score_emojis
 from status_emoji_registry import set_status_emojis
 
 SCORE_EMOJI_PREFIX = "score_"
-SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v5-large-centered"
+SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v6-grey-remainder"
 SCORE_EMOJI_SIZE = 96
 SCORE_EMOJI_MAX_BYTES = 256 * 1024
 STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v3-transparent"
@@ -126,6 +126,8 @@ def render_score_emoji(score: int | None) -> bytes:
         return output.getvalue()
 
     bar_left, bar_top, bar_right, bar_bottom = 9, 74, size - 9, 85
+    # AOTY keeps the unfilled progress track visible in a light cool grey.
+    draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), fill=(119, 124, 132, 255))
     filled_right = bar_left + round((bar_right - bar_left) * value / 100)
     if value > 0:
         draw.rectangle((bar_left, bar_top, max(bar_left, filled_right), bar_bottom), fill=(*_bar_color(value), 255))
