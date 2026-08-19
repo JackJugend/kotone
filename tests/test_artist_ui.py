@@ -109,11 +109,11 @@ class DisplayNormalizationTests(unittest.TestCase):
         self.assertIn("/must-hear-cover/42/", str(variables.cover))
         from must_hear import cover_token
 
-        self.assertTrue(
-            str(variables.cover).endswith(
-                f"/{cover_token('42', 'https://cdn.albumoftheyear.org/current.jpg')}.png"
-            )
+        self.assertIn(
+            f"/{cover_token('42', 'https://cdn.albumoftheyear.org/current.jpg')}.png",
+            str(variables.cover),
         )
+        self.assertIn("cover=https%3A%2F%2Fcdn.albumoftheyear.org%2Fcurrent.jpg", str(variables.cover))
 
 
 class LastFMParserTests(unittest.TestCase):

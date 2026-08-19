@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from urllib.parse import unquote
 
 from aiohttp import web
 
@@ -24,7 +25,7 @@ from services import DATA
 from settings import PORT
 from source_switches import SOURCES
 import lastfm
-from stats_cover_cache import load_cover_bytes
+from stats_cover_cache import load_cover_bytes, safe_cover_url
 
 
 class HealthServer:
@@ -130,7 +131,14 @@ class HealthServer:
         if not details:
             self.must_hear_cover_last_failure = "release_not_cached"
             raise web.HTTPNotFound()
-        cover_url = str(details.get("cover") or "").strip()
+        stored_cover_url = str(details.get("cover") or "").strip()
+        # The rating row can carry a newer cover than the separate release
+        # cache.  Preserve that exact public URL in the endpoint so its badge
+        # can still be rendered after an AOTY/Last.fm cache refresh.
+        requested_cover_url = safe_cover_url(
+            unquote(str(request.query.get("cover") or ""))
+        )
+        cover_url = requested_cover_url or safe_cover_url(stored_cover_url) or ""
 
         def original_cover(reason: str) -> None:
             """Keep Discord thumbnails visible if the generated badge fails.

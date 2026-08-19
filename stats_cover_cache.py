@@ -19,7 +19,7 @@ CACHE_DIR = Path(DATA_DIR or BASE_DIR) / "stats-cover-cache"
 _LOCK = RLock()
 
 
-def _safe_cover_url(value) -> str | None:
+def safe_cover_url(value) -> str | None:
     url = str(value or "").strip()
     if url.startswith("//"):
         url = "https:" + url
@@ -32,10 +32,18 @@ def _safe_cover_url(value) -> str | None:
         or host.endswith(".coverartarchive.org")
         or host == "archive.org"
         or host.endswith(".archive.org")
+        or host == "last.fm"
+        or host.endswith(".last.fm")
+        or host == "lastfm.freetls.fastly.net"
+        or host.endswith(".akamaized.net")
     )
     if parsed.scheme != "https" or not allowed:
         return None
     return url
+
+
+# Kept as a private compatibility alias for the older graphics tests.
+_safe_cover_url = safe_cover_url
 
 
 def _cache_path(url: str) -> Path:
@@ -44,7 +52,7 @@ def _cache_path(url: str) -> Path:
 
 
 def _load_one(url: str) -> bytes | None:
-    safe_url = _safe_cover_url(url)
+    safe_url = safe_cover_url(url)
     if safe_url is None:
         return None
     path = _cache_path(safe_url)

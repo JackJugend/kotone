@@ -91,6 +91,7 @@ def marked_cover_url(album_id: str, cover_url: str) -> str | None:
     return (
         f"https://{domain}/must-hear-cover/"
         f"{quote(album_id, safe='')}/{token}.png"
+        f"?cover={quote(cover_url, safe='')}"
     )
 
 
