@@ -19,6 +19,11 @@ KNOWN_AOTY_MUST_HEAR_IDS = frozenset({
     "7346",   # Head Over Heels
 })
 
+# Discord caches generated thumbnail URLs very aggressively. Bump this when
+# the deterministic badge artwork changes so a freshly invoked command shows
+# the new rendering instead of a previously cached PNG.
+MUST_HEAR_BADGE_RENDER_VERSION = "2"
+
 
 def numeric_count(value) -> float | None:
     text = str(value or "").strip().upper().replace(",", "")
@@ -75,7 +80,9 @@ def cover_token(album_id: str, cover_url: str) -> str:
     """
 
     del cover_url  # Kept in the signature for existing callers/tests.
-    payload = str(album_id or "").strip().encode("utf-8")
+    payload = (
+        f"{MUST_HEAR_BADGE_RENDER_VERSION}|{str(album_id or '').strip()}"
+    ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:20]
 
 
