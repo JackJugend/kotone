@@ -369,7 +369,7 @@ class ScoreEmojiSynchronizer:
                 # referenced by SQLite after the new set is complete.
                 await self._delete_legacy_emojis(
                     await self._list_application_emojis(),
-                    names_or_prefixes=("kotone_score_",),
+                    names_or_prefixes=("kotone_score_", "tmp_score_"),
                 )
             print(
                 "[SCORE EMOJI] Dostępne "
@@ -428,6 +428,9 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
                         "kotone_like",
                         "kotone_tracklist",
                         "kotone_review",
+                        "tmp_like",
+                        "tmp_tracklist",
+                        "tmp_review",
                     ),
                 )
             print("[STATUS EMOJI] Zsynchronizowano transparentne flagi wydania.")
