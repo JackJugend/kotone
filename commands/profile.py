@@ -64,6 +64,29 @@ def _lastfm_count(value: object) -> str:
         return "—"
 
 
+def _lastfm_archive_progress(profile_key: object, archive: dict | None = None) -> str:
+    """Explain archive progress without comparing Last.fm library counters.
+
+    The API's artist/album counts are library counters, while Kotone counts
+    distinct names in scrobbles.  Only the total scrobble count is comparable.
+    """
+
+    progress = LASTFM_DB.archive_progress(profile_key)
+    saved = int((archive or progress).get("scrobbles") or 0)
+    total = progress.get("total_scrobbles")
+    if total:
+        base = f"**{_lastfm_count(saved)} / {_lastfm_count(total)}** scrobbli"
+    else:
+        base = f"**{_lastfm_count(saved)}** scrobbli"
+    if progress.get("complete"):
+        return f"{base} • archiwum kompletne"
+    total_pages = progress.get("total_pages")
+    next_page = progress.get("next_page")
+    if total_pages:
+        return f"{base} • import w tle: strona {next_page}/{total_pages}"
+    return f"{base} • oczekuje na pierwszy import"
+
+
 def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord.Embed]:
     """Build Gan's no-AOTY profile entirely from the Last.fm SQLite archive."""
 
@@ -99,7 +122,7 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
         color=red,
     )
     details.add_field(
-        name="Profil Last.fm",
+        name="Konto Last.fm",
         value=(
             f"**{_lastfm_count(lastfm_profile.get('total_scrobbles'))}** scrobbli  •  "
             f"**{_lastfm_count(lastfm_profile.get('artist_count'))}** wykonawców\n"
@@ -109,12 +132,14 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
         inline=False,
     )
     details.add_field(
-        name="Archiwum Kotone",
+        name="Historia odsłuchów w Kotone",
         value=(
-            f"**{_lastfm_count(archive['scrobbles'])}** scrobbli  •  "
-            f"**{_lastfm_count(archive['artists'])}** wykonawców\n"
+            f"{_lastfm_archive_progress(profile_key, archive)}\n"
+            f"**{_lastfm_count(archive['artists'])}** wykonawców  •  "
             f"**{_lastfm_count(archive['albums'])}** albumów  •  "
-            f"**{_lastfm_count(archive['tracks'])}** utworów"
+            f"**{_lastfm_count(archive['tracks'])}** utworów\n"
+            "*Liczby wykonawców i albumów dotyczą wyłącznie zapisanych "
+            "scrobbli, więc mogą różnić się od biblioteki Last.fm.*"
         ),
         inline=False,
     )
@@ -136,6 +161,7 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
 
 def _build_lastfm_embed(
     *,
+    profile_key: str,
     username: str,
     profile: dict | None,
     archive: dict | None,
@@ -153,7 +179,7 @@ def _build_lastfm_embed(
     )
     if profile:
         embed.add_field(
-            name="Profil Last.fm",
+            name="Konto Last.fm",
             value=(
                 f"**{_lastfm_count(profile.get('total_scrobbles'))}** scrobbli  •  "
                 f"**{_lastfm_count(profile.get('artist_count'))}** wykonawców\n"
@@ -164,12 +190,14 @@ def _build_lastfm_embed(
         )
     if archive:
         embed.add_field(
-            name="Archiwum Kotone",
+            name="Historia odsłuchów w Kotone",
             value=(
-                f"**{_lastfm_count(archive.get('scrobbles'))}** scrobbli  •  "
-                f"**{_lastfm_count(archive.get('artists'))}** wykonawców\n"
+                f"{_lastfm_archive_progress(profile_key, archive)}\n"
+                f"**{_lastfm_count(archive.get('artists'))}** wykonawców  •  "
                 f"**{_lastfm_count(archive.get('albums'))}** albumów  •  "
-                f"**{_lastfm_count(archive.get('tracks'))}** utworów"
+                f"**{_lastfm_count(archive.get('tracks'))}** utworów\n"
+                "*Liczby wykonawców i albumów dotyczą wyłącznie zapisanych "
+                "scrobbli, więc mogą różnić się od biblioteki Last.fm.*"
             ),
             inline=False,
         )
@@ -326,6 +354,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             else None
         )
         lastfm_embed = _build_lastfm_embed(
+            profile_key=str((kotone_profile or {}).get("name") or ""),
             username=str((kotone_profile or {}).get("lastfm_username") or ""),
             profile=lastfm_profile,
             archive=lastfm_archive_stats,

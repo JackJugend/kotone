@@ -383,6 +383,27 @@ class LastFMDatabase:
             "tracks": int(row["tracks"] or 0),
         }
 
+    def archive_progress(self, profile_key: object) -> dict[str, int | bool | None]:
+        """Return explicit import progress without conflating it with library totals.
+
+        Last.fm's profile counters describe its own library/account.  Kotone's
+        archive counters describe distinct names encountered in stored
+        listening history, so they are intentionally not interchangeable.
+        """
+
+        state = self.state(profile_key)
+        archived = self.archive_statistics(profile_key)
+        total = self._integer(state.get("total_scrobbles"))
+        total_pages = self._integer(state.get("total_pages"))
+        next_page = max(1, self._integer(state.get("next_page")) or 1)
+        return {
+            "scrobbles": archived["scrobbles"],
+            "total_scrobbles": total,
+            "total_pages": total_pages,
+            "next_page": next_page,
+            "complete": bool(state.get("complete")),
+        }
+
     def artist_scrobble_count(
         self,
         profile_key: object,

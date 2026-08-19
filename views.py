@@ -1213,7 +1213,7 @@ class ProfilePositionSelect(discord.ui.Select):
                     value=f"rating:{absolute_index}",
                     description=(
                         f"Ocena • {dropdown_score_or_nr(item.get('score'))} "
-                        f"{rating_flags_text(item)}"
+                        f"{rating_flags_text(item, custom_emoji=False)}"
                     ).strip()[:100],
                     default=(
                         owner.selected_source == "rating"

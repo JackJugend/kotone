@@ -20,6 +20,10 @@ from score_emoji_registry import score_emoji
 from status_emoji_registry import status_emoji
 from settings import (
     AOTY_ICON_ATTACHMENT,
+    EMBED_SCORE_EMOJIS,
+    EMBED_STATUS_EMOJIS,
+    MENU_SCORE_EMOJIS,
+    MENU_STATUS_EMOJIS,
     MUST_HEAR_EMOJIS,
     USERS,
 )
@@ -65,7 +69,7 @@ def score_color(score: Any) -> discord.Color:
 def score_icon(score: Any) -> str:
     value = _score_number(score)
     if value is None:
-        return score_emoji(None) or "\⚪"
+        return score_emoji(None) or EMBED_SCORE_EMOJIS["unrated"]
 
     return score_emoji(value) or _legacy_score_icon(value)
 
@@ -74,26 +78,26 @@ def _legacy_score_icon(value: int) -> str:
     """Fallback dots used only until the application emoji bootstrap ends."""
 
     if value == 100:
-        return "\💎"
+        return EMBED_SCORE_EMOJIS["diamond"]
     if value >= 90:
-        return "\💚"
+        return EMBED_SCORE_EMOJIS["green"]
     if value >= 80:
-        return "\🟢"
+        return EMBED_SCORE_EMOJIS["lime"]
     if value >= 70:
-        return "\🟢"
+        return EMBED_SCORE_EMOJIS["lime"]
     if value >= 60:
-        return "\🟡"
+        return EMBED_SCORE_EMOJIS["yellow"]
     if value >= 50:
-        return "\🟡"
+        return EMBED_SCORE_EMOJIS["yellow"]
     if value >= 40:
-        return "\🟠"
+        return EMBED_SCORE_EMOJIS["orange"]
     if value >= 30:
-        return "\🟠"
+        return EMBED_SCORE_EMOJIS["orange"]
     if value >= 20:
-        return "\🔴"
+        return EMBED_SCORE_EMOJIS["red"]
     if value >= 10:
-        return "\❓"
-    return "\⚫"
+        return EMBED_SCORE_EMOJIS["unknown"]
+    return EMBED_SCORE_EMOJIS["black"]
 
 
 def _score_number(score: Any) -> int | None:
@@ -154,7 +158,9 @@ def dropdown_score_or_nr(score: Any) -> str:
 
     value = score_value_or_nr(score)
     if value == "NR":
-        return "⚪ NR"
+        return f"{MENU_SCORE_EMOJIS['unrated']} NR"
+    # Do not obtain this from the embed helper: a Select description needs the
+    # native emoji without the protective backslash or app-emoji markup.
     marker = _legacy_score_icon(_score_number(value) or 0).removeprefix("\\")
     return f"{marker} {value}"
 
@@ -619,12 +625,13 @@ def rating_flags_text(
 
     flags: list[str] = []
 
+    fallback = EMBED_STATUS_EMOJIS if custom_emoji else MENU_STATUS_EMOJIS
     if has_review:
-        flags.append((status_emoji("review") if custom_emoji else None) or "✎")
+        flags.append((status_emoji("review") if custom_emoji else None) or fallback["review"])
     if has_track_ratings:
-        flags.append((status_emoji("tracklist") if custom_emoji else None) or "☰")
+        flags.append((status_emoji("tracklist") if custom_emoji else None) or fallback["tracklist"])
     if liked:
-        flags.append((status_emoji("like") if custom_emoji else None) or "❤︎⁠")
+        flags.append((status_emoji("like") if custom_emoji else None) or fallback["like"])
 
     return " ".join(flags)
 

@@ -38,6 +38,34 @@ MUST_HEAR_USERS_EMOJI = "<:musthear_users:1539713390820458566>"
 MUST_HEAR_CRITICS_EMOJI = "<:musthear_critics:1539713389557841981>"
 MUST_HEAR_BOTH_EMOJI = "<:musthear_both:1539713387150319679>"
 
+# Emoji mają dwa świadomie rozdzielone warianty.  Discord nie renderuje emoji
+# aplikacji w opisie pozycji ``Select`` (pokazuje tam dosłownie ``<:...>``),
+# dlatego menu zawsze korzystają z wersji natywnej.  Embedy mogą korzystać z
+# wersji aplikacji po jej synchronizacji, a w razie braku wracają do tej samej
+# wersji natywnej z zachowanym backslashem.
+EMBED_STATUS_EMOJIS = {
+    "review": "\\✎",
+    "tracklist": "\\☰",
+    "like": "\\❤︎⁠",
+}
+MENU_STATUS_EMOJIS = {
+    "review": "✎",
+    "tracklist": "☰",
+    "like": "❤︎⁠",
+}
+EMBED_SCORE_EMOJIS = {
+    "unrated": "\\⚪",
+    "diamond": "\\💎",
+    "green": "\\💚",
+    "lime": "\\🟢",
+    "yellow": "\\🟡",
+    "orange": "\\🟠",
+    "red": "\\🔴",
+    "unknown": "\\❓",
+    "black": "\\⚫",
+}
+MENU_SCORE_EMOJIS = {key: value.removeprefix("\\") for key, value in EMBED_SCORE_EMOJIS.items()}
+
 # Ręcznie przygotowane przez właściciela aplikacji, transparentne ikony flag.
 # Ich ID są stałe dopóki emoji należą do aplikacji Kotone; synchronizator ich
 # nie renderuje ani nie nadpisuje lokalną wersją.
@@ -45,6 +73,10 @@ MANUAL_STATUS_EMOJI_IDS = {
     "tracklist": "1539780590751187014",
     "review": "1539780589240983592",
     "like": "1539780587936551002",
+}
+APPLICATION_STATUS_EMOJIS = {
+    key: f"<:kotone_{key}:{emoji_id}>"
+    for key, emoji_id in MANUAL_STATUS_EMOJI_IDS.items()
 }
 
 # Public presentation assets live in one global mapping. Commands and views
