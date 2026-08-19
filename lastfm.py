@@ -70,6 +70,7 @@ class LastFMClient:
         self._lock = threading.Lock()
         self._next_request_at = 0.0
         self._blocked_until = 0.0
+        self._last_error: str | None = None
 
     def status(self) -> dict[str, float | bool]:
         """Return the state of the shared conservative rate gate."""
@@ -80,6 +81,7 @@ class LastFMClient:
             "configured": LASTFM_API_ENABLED,
             "blocked": remaining > 0,
             "blocked_seconds": round(remaining, 1),
+            "last_error": self._last_error,
         }
 
     def _json(self, method: str, **params: object) -> dict[str, Any]:
@@ -113,8 +115,11 @@ class LastFMClient:
                         retry_after = 0.0
                     pause = max(retry_after, LASTFM_OUTAGE_COOLDOWN)
                     self._blocked_until = time.monotonic() + pause
+                    self._last_error = (
+                        f"HTTP {response.status_code}: Last.fm temporary unavailable"
+                    )
                     raise LastFMUnavailable(
-                        f"HTTP {response.status_code}: Last.fm temporarily unavailable",
+                        self._last_error,
                         retry_after=pause,
                     )
                 response.raise_for_status()
@@ -123,24 +128,35 @@ class LastFMClient:
                     code = str(payload.get("error") or "")
                     if code in {"26", "29"}:
                         self._blocked_until = time.monotonic() + LASTFM_OUTAGE_COOLDOWN
+                        self._last_error = (
+                            f"Last.fm API {code}: "
+                            f"{payload.get('message') or 'rate limited'}"
+                        )
                         raise LastFMUnavailable(
-                            f"Last.fm API {code}: {payload.get('message') or 'rate limited'}",
+                            self._last_error,
                             retry_after=LASTFM_OUTAGE_COOLDOWN,
                         )
             except (requests.RequestException, ValueError) as exc:
                 self._blocked_until = time.monotonic() + LASTFM_OUTAGE_COOLDOWN
+                self._last_error = f"{type(exc).__name__}: {exc}"
                 raise LastFMUnavailable(
-                    str(exc), retry_after=LASTFM_OUTAGE_COOLDOWN
+                    self._last_error, retry_after=LASTFM_OUTAGE_COOLDOWN
                 ) from exc
             finally:
                 self._next_request_at = time.monotonic() + LASTFM_MIN_REQUEST_INTERVAL
 
         if not isinstance(payload, dict):
+            self._last_error = "Last.fm returned invalid JSON"
             raise LastFMUnavailable("Last.fm zwrócił niepoprawny JSON.")
         if "error" in payload:
-            raise LastFMUnavailable(
-                f"Last.fm API {payload.get('error')}: {payload.get('message') or 'unknown error'}"
+            self._last_error = (
+                f"Last.fm API {payload.get('error')}: "
+                f"{payload.get('message') or 'unknown error'}"
             )
+            raise LastFMUnavailable(
+                self._last_error
+            )
+        self._last_error = None
         return payload
 
     def artist_info(self, artist: object, *, username: object = None) -> dict[str, Any] | None:

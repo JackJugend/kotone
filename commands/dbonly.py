@@ -120,15 +120,18 @@ def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
                 )
             else:
                 lastfm_runtime = "gotowy"
-            message = "\n".join(
-                (
-                    "**Źródła Kotone**",
-                    f"• AOTY scraper: {'⏸ zablokowany' if HTTP.db_only_enabled() else '▶ włączony'} — {aoty_runtime}",
-                    f"• MusicBrainz API: {'▶ włączone' if switches['musicbrainz'] else '⏸ zablokowane'} — {musicbrainz_runtime}",
-                    f"• Last.fm API: {'▶ włączone' if switches['lastfm'] else '⏸ zablokowane'} — {lastfm_runtime}",
-                    "Komendy Discord czytają SQLite niezależnie od tych przełączników.",
-                )
+            lines = [
+                "**Źródła Kotone**",
+                f"• AOTY scraper: {'⏸ zablokowany' if HTTP.db_only_enabled() else '▶ włączony'} — {aoty_runtime}",
+                f"• MusicBrainz API: {'▶ włączone' if switches['musicbrainz'] else '⏸ zablokowane'} — {musicbrainz_runtime}",
+                f"• Last.fm API: {'▶ włączone' if switches['lastfm'] else '⏸ zablokowane'} — {lastfm_runtime}",
+            ]
+            if lastfm_status.get("last_error"):
+                lines.append(f"  ↳ Last.fm: {lastfm_status['last_error']}")
+            lines.append(
+                "Komendy Discord czytają SQLite niezależnie od tych przełączników."
             )
+            message = "\n".join(lines)
         else:
             if source not in {"aoty", "musicbrainz", "lastfm", "all"}:
                 await interaction.response.send_message(
