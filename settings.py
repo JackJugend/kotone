@@ -38,6 +38,19 @@ MUST_HEAR_USERS_EMOJI = "<:musthear_users:1539713390820458566>"
 MUST_HEAR_CRITICS_EMOJI = "<:musthear_critics:1539713389557841981>"
 MUST_HEAR_BOTH_EMOJI = "<:musthear_both:1539713387150319679>"
 
+# Public presentation assets live in one global mapping. Commands and views
+# should import these names rather than duplicating Discord emoji IDs.
+SOURCE_EMOJIS = {
+    "aoty": AOTY_SOURCE_EMOJI,
+    "musicbrainz": MUSICBRAINZ_SOURCE_EMOJI,
+    "lastfm": LASTFM_SOURCE_EMOJI,
+}
+MUST_HEAR_EMOJIS = {
+    "users": MUST_HEAR_USERS_EMOJI,
+    "critics": MUST_HEAR_CRITICS_EMOJI,
+    "both": MUST_HEAR_BOTH_EMOJI,
+}
+
 # Runtime state.
 #
 # SQLite jest teraz głównym magazynem stanu. data.json służy wyłącznie jako

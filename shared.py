@@ -18,9 +18,7 @@ from display_utils import display_genres, display_release_date, display_romanize
 from must_hear import marked_cover_url, must_hear_album, must_hear_kind, numeric_count
 from settings import (
     AOTY_ICON_ATTACHMENT,
-    MUST_HEAR_BOTH_EMOJI,
-    MUST_HEAR_CRITICS_EMOJI,
-    MUST_HEAR_USERS_EMOJI,
+    MUST_HEAR_EMOJIS,
     USERS,
 )
 
@@ -177,6 +175,9 @@ class ReleaseVariables:
     display_album: str = ""
     date: str = ""
     url: str = ""
+    # ``raw_cover`` is durable provider artwork. ``cover`` can be a generated
+    # Must Hear endpoint and must never be written back into SQLite/card data.
+    raw_cover: str | None = None
     cover: str | None = None
     release_format: str | None = None
     album_id: str = ""
@@ -410,6 +411,7 @@ def build_release_variables(
         display_album=display_romanized_name(album),
         date=str(item.get("date") or missing),
         url=str(item.get("url") or details.get("url") or ""),
+        raw_cover=raw_cover,
         cover=display_cover,
         release_format=item.get("release_format") or details.get("album_format"),
         album_id=album_id,
@@ -474,18 +476,13 @@ def must_hear_title_marker(variables: ReleaseVariables) -> str:
 
     if not variables.must_hear:
         return ""
-    return {
-        "both": MUST_HEAR_BOTH_EMOJI,
-        "critics": MUST_HEAR_CRITICS_EMOJI,
-        "users": MUST_HEAR_USERS_EMOJI,
-    }[
-        must_hear_kind(
-            variables.aoty_user_score,
-            variables.ratings_count,
-            variables.critic_score,
-            variables.critic_reviews_count,
-        )
-    ]
+    kind = must_hear_kind(
+        variables.aoty_user_score,
+        variables.ratings_count,
+        variables.critic_score,
+        variables.critic_reviews_count,
+    )
+    return MUST_HEAR_EMOJIS[kind]
 
 
 async def load_release_variables(

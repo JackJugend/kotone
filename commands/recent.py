@@ -211,6 +211,7 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
                 username=username,
                 items=batch_items,
                 main_embeds=batch_embeds,
+                author_icon_url=avatar,
             )
             message = await interaction.followup.send(
                 embeds=batch_embeds,

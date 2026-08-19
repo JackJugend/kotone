@@ -152,17 +152,29 @@ class DataService:
         if not LASTFM_API_ENABLED or not SOURCES.enabled("lastfm"):
             return None
         profile = KOTONE_USERS_BY_AOTY.get(str(username or "").casefold()) or {}
-        try:
-            return await _thread_call(
-                priority,
-                lastfm.LASTFM.album_info,
-                item.get("artist"),
-                item.get("album") or item.get("title"),
-                username=profile.get("lastfm_username"),
-            )
-        except lastfm.LastFMUnavailable as exc:
-            print(f"[LASTFM] fallback: {type(exc).__name__}: {exc}")
-            return None
+        last_error: lastfm.LastFMUnavailable | None = None
+        for artist in lastfm.artist_lookup_candidates(item.get("artist")):
+            try:
+                result = await _thread_call(
+                    priority,
+                    lastfm.LASTFM.album_info,
+                    artist,
+                    item.get("album") or item.get("title"),
+                    username=profile.get("lastfm_username"),
+                )
+                if result:
+                    # Keep the canonical AOTY credit in SQLite; this alias is
+                    # only a Last.fm lookup key, never a replacement artist.
+                    return result
+            except lastfm.LastFMUnavailable as exc:
+                last_error = exc
+                # 429/5xx/network cooldowns are global: do not attempt even
+                # the alias. A normal 404 is local to this exact credit.
+                if exc.retry_after > 0:
+                    break
+        if last_error is not None:
+            print(f"[LASTFM] fallback: {type(last_error).__name__}: {last_error}")
+        return None
 
     async def _persist_lastfm_release_fallback(
         self,

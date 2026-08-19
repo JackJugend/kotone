@@ -9,12 +9,7 @@ import discord
 import aoty
 from services import DATA
 from display_utils import display_romanized_name
-from settings import (
-    AOTY_SOURCE_EMOJI,
-    LASTFM_SOURCE_EMOJI,
-    MUSICBRAINZ_SOURCE_EMOJI,
-    USERS,
-)
+from settings import SOURCE_EMOJIS, USERS
 from shared import (
     aoty_score_value,
     build_release_variables,
@@ -53,8 +48,22 @@ def _trim_description(text: str, limit: int = 4000) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+async def _aoty_avatar(username: str) -> str | None:
+    """Read an already-cached AOTY avatar without making a web request."""
 
-def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
+    try:
+        return await DATA.get_avatar(username)
+    except Exception:
+        return None
+
+
+def build_review_embed(
+    username: str,
+    item: dict,
+    extra: dict,
+    *,
+    author_icon_url: str | None = None,
+) -> discord.Embed:
     score = extra.get("score") or item.get("score")
     review_text = extra.get("review_text") or "Brak recenzji."
 
@@ -79,6 +88,7 @@ def build_review_embed(username: str, item: dict, extra: dict) -> discord.Embed:
     embed.set_author(
         name=f"{username}  •  {extra.get('date') or item.get('date') or '—'}",
         url=f"https://www.albumoftheyear.org/user/{username}/",
+        icon_url=author_icon_url,
     )
 
     if variables.cover:
@@ -161,13 +171,8 @@ def _details_source_prefix(variables, section: str, value: object) -> str:
     if _details_value(value) == "—":
         return ""
     source = str(variables.metadata_sources.get(section) or "").casefold()
-    if source == "musicbrainz":
-        return f"{MUSICBRAINZ_SOURCE_EMOJI} "
-    if source == "lastfm":
-        return f"{LASTFM_SOURCE_EMOJI} "
-    if source in {"", "aoty"}:
-        return f"{AOTY_SOURCE_EMOJI} "
-    return ""
+    emoji = SOURCE_EMOJIS.get(source or "aoty")
+    return f"{emoji} " if emoji else ""
 
 
 async def build_release_details_embed(
@@ -224,20 +229,20 @@ async def build_release_details_embed(
         mb_group = _details_value(musicbrainz_data.get("musicbrainz_release_group_id"))
         mb_country = _details_value(musicbrainz_data.get("release_country"))
         if mb_release != "—":
-            lines.append(f"{MUSICBRAINZ_SOURCE_EMOJI} **MusicBrainz release ID:** `{mb_release}`")
+            lines.append(f"{SOURCE_EMOJIS['musicbrainz']} **MusicBrainz release ID:** `{mb_release}`")
         if mb_group != "—":
-            lines.append(f"{MUSICBRAINZ_SOURCE_EMOJI} **MusicBrainz release-group ID:** `{mb_group}`")
+            lines.append(f"{SOURCE_EMOJIS['musicbrainz']} **MusicBrainz release-group ID:** `{mb_group}`")
         if mb_country != "—":
-            lines.append(f"{MUSICBRAINZ_SOURCE_EMOJI} **Release country:** {mb_country}")
+            lines.append(f"{SOURCE_EMOJIS['musicbrainz']} **Release country:** {mb_country}")
 
     lastfm_data = variables.source_data.get("lastfm") or {}
     if lastfm_data:
         listeners = _details_value(lastfm_data.get("listeners_count"))
         scrobbles = _details_value(lastfm_data.get("playcount"))
         if listeners != "—":
-            lines.append(f"{LASTFM_SOURCE_EMOJI} **Last.fm listeners:** {listeners}")
+            lines.append(f"{SOURCE_EMOJIS['lastfm']} **Last.fm listeners:** {listeners}")
         if scrobbles != "—":
-            lines.append(f"{LASTFM_SOURCE_EMOJI} **Last.fm scrobbles:** {scrobbles}")
+            lines.append(f"{SOURCE_EMOJIS['lastfm']} **Last.fm scrobbles:** {scrobbles}")
 
     embed = discord.Embed(
         title=(
@@ -281,7 +286,12 @@ def _rating_track_maps(rows: list[dict]) -> tuple[dict[int, dict], dict[str, dic
     return by_number, by_title
 
 
-async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
+async def build_combined_tracklist_embed(
+    item: dict,
+    *,
+    username: str | None = None,
+    author_icon_url: str | None = None,
+) -> discord.Embed:
     """Join the public tracklist with every configured user's track scores.
 
     Public rows come from ``release_tracks`` (or AOTY when the cache is
@@ -425,6 +435,12 @@ async def build_combined_tracklist_embed(item: dict) -> discord.Embed:
     )
     if variables.cover:
         embed.set_thumbnail(url=variables.cover)
+    if username:
+        embed.set_author(
+            name=f"{username}  •  {variables.date}",
+            url=f"https://www.albumoftheyear.org/user/{username}/",
+            icon_url=author_icon_url,
+        )
     set_aoty_footer(
         embed,
         f"AOTY tracklist  •  {variables.album_format}  •  oceny użytkowników",
@@ -746,6 +762,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         tracklist_embed: discord.Embed | None = None,
         artist_url: str | None = None,
         album_url: str | None = None,
+        author_icon_url: str | None = None,
         timeout: float = VIEW_TIMEOUT_SECONDS,
     ):
         super().__init__(
@@ -761,6 +778,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         self.details_embed = details_embed
         self.tracklist_embed = tracklist_embed
         self._extra_cache = extra
+        self.author_icon_url = author_icon_url
 
         # Keep compatibility with existing command arguments while making the
         # selected item self-contained for all shared callbacks.
@@ -840,7 +858,11 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         _set_active_action(self, TRACKLIST_BUTTON)
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_combined_tracklist_embed(self.item)
+        embed = await build_combined_tracklist_embed(
+            self.item,
+            username=self.username,
+            author_icon_url=self.author_icon_url,
+        )
         await interaction.message.edit(
             embed=embed,
             view=self,
@@ -890,6 +912,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
                 self.username,
                 self.item,
                 extra,
+                author_icon_url=self.author_icon_url,
             ),
             view=self,
         )
@@ -918,6 +941,7 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         embed = await build_release_details_embed(
             self.item,
             username=self.username,
+            author_icon_url=self.author_icon_url,
         )
         await interaction.message.edit(
             embed=embed,
@@ -973,6 +997,7 @@ class MultiRatingView(TimedDisableView):
         username: str,
         items: list[dict],
         main_embeds: list[discord.Embed],
+        author_icon_url: str | None = None,
         timeout: float = VIEW_TIMEOUT_SECONDS,
     ):
         super().__init__(timeout=timeout)
@@ -981,6 +1006,7 @@ class MultiRatingView(TimedDisableView):
         self.main_embeds = main_embeds
         self.selected_index = 0
         self._selected_extra = None
+        self.author_icon_url = author_icon_url
         self.add_item(
             RatingSelect(
                 self,
@@ -1050,7 +1076,11 @@ class MultiRatingView(TimedDisableView):
         _set_active_action(self, TRACKLIST_BUTTON)
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_combined_tracklist_embed(item)
+        embed = await build_combined_tracklist_embed(
+            item,
+            username=self.username,
+            author_icon_url=self.author_icon_url,
+        )
         await interaction.message.edit(embeds=[embed], view=self)
 
     @discord.ui.button(label=REVIEW_BUTTON, style=discord.ButtonStyle.secondary, row=0)
@@ -1077,7 +1107,14 @@ class MultiRatingView(TimedDisableView):
         item = self.items[self.selected_index]
         _set_active_action(self, REVIEW_BUTTON)
         await interaction.message.edit(
-            embeds=[build_review_embed(self.username, item, extra)],
+            embeds=[
+                build_review_embed(
+                    self.username,
+                    item,
+                    extra,
+                    author_icon_url=self.author_icon_url,
+                )
+            ],
             view=self,
         )
 
@@ -1087,7 +1124,11 @@ class MultiRatingView(TimedDisableView):
         _set_active_action(self, DETAILS_BUTTON)
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_release_details_embed(item, username=self.username)
+        embed = await build_release_details_embed(
+            item,
+            username=self.username,
+            author_icon_url=self.author_icon_url,
+        )
         await interaction.message.edit(
             embeds=[embed],
             view=self,
@@ -1321,8 +1362,14 @@ class AlbumRatingView(TimedDisableView):
         item["date"] = extra.get("date")
         _set_active_action(self, REVIEW_BUTTON)
         self._set_user_selector_visible(True)
+        avatar = await _aoty_avatar(self.selected_username)
         await interaction.message.edit(
-            embed=build_review_embed(self.selected_username, item, extra),
+            embed=build_review_embed(
+                self.selected_username,
+                item,
+                extra,
+                author_icon_url=avatar,
+            ),
             view=self,
         )
 
@@ -1627,7 +1674,12 @@ class ProfilePagerView(TimedDisableView):
         self._rebuild_components()
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_combined_tracklist_embed(item)
+        avatar = await _aoty_avatar(self.username)
+        embed = await build_combined_tracklist_embed(
+            item,
+            username=self.username,
+            author_icon_url=avatar,
+        )
         await interaction.message.edit(embed=embed, view=self)
 
     # Compatibility name for older tests/callers; this is intentionally the
@@ -1657,8 +1709,14 @@ class ProfilePagerView(TimedDisableView):
             return
         self.current_tab = REVIEW_BUTTON
         self._rebuild_components()
+        avatar = await _aoty_avatar(self.username)
         await interaction.message.edit(
-            embed=build_review_embed(self.username, item, extra),
+            embed=build_review_embed(
+                self.username,
+                item,
+                extra,
+                author_icon_url=avatar,
+            ),
             view=self,
         )
 
@@ -1674,5 +1732,10 @@ class ProfilePagerView(TimedDisableView):
         embed = await build_release_details_embed(
             item,
             username=self.username if self.selected_source == "rating" else None,
+            author_icon_url=(
+                await _aoty_avatar(self.username)
+                if self.selected_source == "rating"
+                else None
+            ),
         )
         await interaction.message.edit(embed=embed, view=self)

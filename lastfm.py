@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+import re
 from typing import Any
 
 import requests
@@ -31,6 +32,24 @@ class LastFMUnavailable(RuntimeError):
     def __init__(self, message: str, *, retry_after: float = 0.0):
         super().__init__(message)
         self.retry_after = max(0.0, float(retry_after))
+
+
+def artist_lookup_candidates(value: object) -> list[str]:
+    """Return conservative Last.fm aliases for an AOTY artist credit.
+
+    AOTY often uses a parent-group plus subunit credit (for example
+    ``tripleS +26 moon``), while Last.fm scrobbles the same release under the
+    parent group. We try the exact credit first and only then its parent.
+    """
+
+    exact = " ".join(str(value or "").split())
+    if not exact:
+        return []
+    candidates = [exact]
+    parent = re.split(r"\s+\+\s+", exact, maxsplit=1)[0].strip()
+    if parent and parent.casefold() != exact.casefold():
+        candidates.append(parent)
+    return candidates
 
 
 def _image_url(images: object) -> str | None:
@@ -122,6 +141,14 @@ class LastFMClient:
                         self._last_error,
                         retry_after=pause,
                     )
+                if 400 <= response.status_code < 500:
+                    # A missing album (404), a malformed query or a bad key
+                    # is not a service-wide outage. Let the caller defer only
+                    # this item; do not silence all Last.fm enrichment.
+                    self._last_error = (
+                        f"HTTP {response.status_code}: Last.fm rejected this request"
+                    )
+                    raise LastFMUnavailable(self._last_error)
                 response.raise_for_status()
                 payload = response.json()
                 if "error" in payload:

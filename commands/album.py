@@ -331,7 +331,9 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 "artist": variables.artist,
                 "album": variables.album,
                 "url": variables.album_url or release_item.get("url"),
-                "cover": variables.cover or release_item.get("cover"),
+                # Preserve the provider artwork for later tabs. ``cover`` is
+                # potentially a generated Must Hear image URL for Discord.
+                "cover": variables.raw_cover or release_item.get("cover"),
                 "release_format": variables.album_format,
             }
         )

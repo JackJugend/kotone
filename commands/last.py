@@ -324,6 +324,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             tracklist_embed=tracklist_embed,
             artist_url=variables.artist_url or None,
             album_url=variables.album_url or variables.url or None,
+            author_icon_url=avatar,
         )
 
         message = await interaction.followup.send(
