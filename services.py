@@ -313,19 +313,49 @@ class DataService:
         if not query:
             return []
 
-        ranked = []
+        # Keep one best result per canonical cache artist.  The alias index is
+        # populated only by background AOTY/MusicBrainz enrichment, therefore
+        # this whole lookup remains SQLite-only for Discord commands.
+        ranked_by_artist: dict[str, dict] = {}
         for item in DB.cached_artists():
             score = aoty.fuzzy_match_score(query, item.get("name") or "")
             if score < 0.28:
                 continue
-            ranked.append(
-                {
-                    **item,
-                    "value": str(item.get("name") or ""),
-                    "score": score,
-                    "source": "SQLite cache",
-                }
-            )
+            key = str(item.get("name") or "").casefold()
+            ranked_by_artist[key] = {
+                **item,
+                "value": str(item.get("name") or ""),
+                "score": score,
+                "source": "SQLite cache",
+            }
+
+        canonical = {str(item.get("name") or "").casefold(): item for item in DB.cached_artists()}
+        query_key = " ".join(query.split()).casefold()
+        for alias in DB.cached_artist_aliases():
+            artist = canonical.get(str(alias.get("artist") or "").casefold())
+            if not artist:
+                continue
+            alias_name = str(alias.get("alias") or "")
+            score = aoty.fuzzy_match_score(query, alias_name)
+            alias_key = " ".join(alias_name.split()).casefold()
+            if query_key and query_key == alias_key:
+                score = max(score, 1.25)
+            elif query_key and query_key in alias_key:
+                score = max(score, 1.05)
+            if score < 0.28:
+                continue
+            key = str(artist.get("name") or "").casefold()
+            candidate = {
+                **artist,
+                "value": str(artist.get("name") or ""),
+                "score": score,
+                "matched_aka": alias_name,
+                "source": "SQLite cache",
+            }
+            if score > float((ranked_by_artist.get(key) or {}).get("score") or 0):
+                ranked_by_artist[key] = candidate
+
+        ranked = list(ranked_by_artist.values())
 
         ranked.sort(
             key=lambda item: (
@@ -350,7 +380,10 @@ class DataService:
     ) -> tuple[dict | None, dict | None]:
         """Resolve an artist and their known releases entirely from SQLite."""
 
-        candidates = self.search_cached_artists(artist_query, limit=1)
+        # Exact aliases resolve before fuzzy ranking, which prevents e.g.
+        # "Shiina Ringo" from accidentally selecting another close artist.
+        canonical = DB.resolve_cached_artist_alias(artist_query)
+        candidates = self.search_cached_artists(canonical or artist_query, limit=1)
         if not candidates:
             return None, None
 
@@ -370,15 +403,62 @@ class DataService:
             },
             key=str.casefold,
         )
+        canonical_key = str(artist_info["name"] or "").casefold()
+        aliases: list[str] = []
+        seen_aliases: set[str] = {canonical_key}
+        for item in DB.cached_artist_aliases():
+            if str(item.get("artist") or "").casefold() != canonical_key:
+                continue
+            alias = " ".join(str(item.get("alias") or "").split())
+            alias_key = alias.casefold()
+            if alias and alias_key not in seen_aliases:
+                aliases.append(alias)
+                seen_aliases.add(alias_key)
         return artist_info, {
             "artist": artist_info["name"],
             "url": artist_url,
             "image": None,
             "releases": releases,
             "genres_text": ", ".join(cached_genres[:10]) or None,
+            "akas": aliases,
+            "akas_text": ", ".join(aliases[:10]) or None,
             "source_data": dict(artist_info["source_data"]),
             "source": "SQLite cache",
         }
+
+    def cached_album_matches(self, artist_query: str, album_query: str) -> list[tuple[float, dict]]:
+        """Rank one cached artist's releases by title or cached MB aliases."""
+
+        artist_info, discography = self.cached_artist_discography(artist_query)
+        if not artist_info or not discography:
+            return []
+        releases = list(discography.get("releases") or [])
+        indexed = {str(item.get("album_id")): item for item in releases}
+        best: dict[str, tuple[float, dict]] = {}
+        for score, release in aoty.rank_artist_releases(releases, album_query):
+            best[str(release.get("album_id"))] = (score, release)
+        query_key = " ".join(str(album_query or "").split()).casefold()
+        for alias in DB.cached_release_aliases(artist_info["name"]):
+            release = indexed.get(str(alias.get("album_id") or ""))
+            if not release:
+                continue
+            alias_name = str(alias.get("alias") or "")
+            score = aoty.fuzzy_match_score(album_query, alias_name)
+            alias_key = " ".join(alias_name.split()).casefold()
+            if query_key and query_key == alias_key:
+                score = max(score, 1.25)
+            elif query_key and query_key in alias_key:
+                score = max(score, 1.05)
+            existing = best.get(str(release["album_id"]))
+            if existing is None or score > existing[0]:
+                best[str(release["album_id"])] = (score, release)
+        return sorted(best.values(), key=lambda pair: pair[0], reverse=True)
+
+    def cached_release_alias_id(self, artist_query: str, album_query: str) -> str | None:
+        """Resolve an exact cached release alias after resolving its artist."""
+
+        canonical_artist = DB.resolve_cached_artist_alias(artist_query) or artist_query
+        return DB.resolve_cached_release_alias(canonical_artist, album_query)
 
     async def _cached_lastfm_artist_image(self, artist: str) -> str | None:
         """Return a cached Last.fm image, fetching at most once per TTL."""

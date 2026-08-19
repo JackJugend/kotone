@@ -220,7 +220,10 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
 
         if file is None:
             await interaction.response.send_message(
-                "Dla `source: AOTY — plik CSV` załącz eksport ocen AOTY.",
+                "Nie dodano pliku. Dla `source: AOTY — plik CSV` załącz eksport "
+                "ocen AOTY. Jeśli chcesz zaimportować historię **Last.fm**, wybierz "
+                "źródło `Last.fm — API lub plik CSV` i dodaj eksport z "
+                "<https://lastfm.ghan.nl/export/>.",
                 ephemeral=True,
             )
             return

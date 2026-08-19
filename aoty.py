@@ -1563,6 +1563,29 @@ def _extract_artist_metadata(
     }
 
 
+def _cache_aoty_artist_aliases(artist: object, metadata: object) -> None:
+    """Persist AOTY's own AKA list only after its page was already fetched.
+
+    This helper performs no network I/O and imports the database lazily to
+    keep the standalone scraper usable in parser tests.  Scope validation is
+    still enforced by ``Database.save_artist_aliases``.
+    """
+
+    if not isinstance(metadata, dict):
+        return
+    aliases = metadata.get("akas")
+    if not aliases:
+        return
+    try:
+        from database import DB
+
+        DB.save_artist_aliases(str(artist or ""), aliases, source="aoty")
+    except Exception:
+        # Alias caching must never turn a valid AOTY response into a command
+        # failure or hide the original page data.
+        return
+
+
 def get_artist_releases(artist_url: str) -> dict:
     artist_base_url = str(artist_url).split("?", 1)[0].rstrip("/") + "/"
     page_url = artist_base_url + "?type=all"
@@ -1579,6 +1602,7 @@ def get_artist_releases(artist_url: str) -> dict:
     artist_metadata = _extract_artist_metadata(
         soup
     )
+    _cache_aoty_artist_aliases(artist_name, artist_metadata)
 
     releases = []
     seen_ids = set()

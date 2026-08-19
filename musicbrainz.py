@@ -104,6 +104,23 @@ def _names(items: object) -> list[str]:
     return [name for _count, name in sorted(names, reverse=True)[:12]]
 
 
+def _aliases(items: object) -> list[str]:
+    """Return display aliases from a MusicBrainz entity, without duplicates."""
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        name = " ".join(str(item.get("name") or "").split())
+        key = _normalized(name)
+        if not name or not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(name)
+    return result
+
+
 def _pick_exact_release(candidates: object, artist: str, album: str) -> dict | None:
     expected_artist = _normalized(artist)
     expected_album = _normalized(album)
@@ -310,7 +327,27 @@ class MusicBrainzClient:
             or _normalized(_artist_name(release.get("artist-credit"))) != _normalized(artist_text)
         ):
             return None
-        return release_to_details(release, requested_format=requested_format)
+        details = release_to_details(release, requested_format=requested_format)
+        # Release-group aliases are the durable MusicBrainz names for the
+        # same work (for example native-script and romanized titles).  This
+        # request runs only in the low-priority enrichment worker; commands
+        # later search the local SQLite index and make no provider request.
+        if group_id:
+            try:
+                group = self._json(
+                    f"/release-group/{group_id}",
+                    params={"fmt": "json", "inc": "aliases"},
+                )
+                aliases = _aliases(group.get("aliases"))
+                if aliases:
+                    details.setdefault("external_metadata", {})[
+                        "release_group_aliases"
+                    ] = aliases
+            except MusicBrainzUnavailable:
+                # The alias is optional: retain the verified release cache
+                # even if this supplementary endpoint is temporarily busy.
+                pass
+        return details
 
     def _earliest_compatible_release_id(
         self,
@@ -383,6 +420,7 @@ class MusicBrainzClient:
         return {
             "artist": str(data.get("name") or name).strip(),
             "musicbrainz_artist_id": str(data.get("id") or "").strip() or None,
+            "aliases": _aliases(data.get("aliases")),
             "country": country,
             "origin_area": str(area.get("name") or "").strip() or None,
             "founded_or_birthdate": str(data.get("life-span", {}).get("begin") or "").strip() or None,

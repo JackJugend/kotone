@@ -185,9 +185,12 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
 
             releases = discography.get("releases", [])
             if current.strip():
-                releases = [
+                # Includes cached MusicBrainz release-group aliases while
+                # remaining completely local to SQLite autocomplete.
+                ranked = DATA.cached_album_matches(artist_value, current)
+                releases = [release for _score, release in ranked] or [
                     release
-                    for _, release in aoty.rank_artist_releases(releases, current)
+                    for _score, release in aoty.rank_artist_releases(releases, current)
                 ]
 
             choices = []
@@ -268,11 +271,16 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             # A cached match is authoritative enough to select the requested
             # release. If it cannot match, live AOTY may supplement it.
             artist_info, discography = DATA.cached_artist_discography(artist)
+            if artist_info:
+                artist = str(artist_info.get("name") or artist)
+                # A precise native-script/romanized MusicBrainz title becomes
+                # the same durable direct choice as a normal autocomplete
+                # selection.  No live AOTY lookup is needed.
+                alias_album_id = DATA.cached_release_alias_id(artist, album)
+                if alias_album_id:
+                    album = f"aoty_album:{alias_album_id}"
             ranked = (
-                aoty.rank_artist_releases(
-                    discography.get("releases", []),
-                    album,
-                )
+                DATA.cached_album_matches(artist, album)
                 if discography
                 else []
             )
@@ -291,9 +299,8 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 )
                 return
 
-            ranked = aoty.rank_artist_releases(
-                discography.get("releases", []),
-                album,
+            ranked = DATA.cached_album_matches(artist, album) or aoty.rank_artist_releases(
+                discography.get("releases", []), album
             )
 
             if not ranked:

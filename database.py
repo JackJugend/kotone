@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 # One-time migration data for pages verified before the scraper stored AOTY's
 # explicit Must Hear marker.  Values are written into ``releases.must_hear``;
@@ -986,6 +986,49 @@ class Database:
                     PRIMARY KEY (artist_key, source)
                 )
                 """
+            )
+            # MusicBrainz aliases make native-script, romanized and common
+            # alternate names searchable without asking MusicBrainz while a
+            # Discord command is being executed.  More than one canonical
+            # artist may share an alias, therefore resolution is deliberately
+            # refused unless the alias is unambiguous.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS artist_aliases (
+                    alias_key TEXT NOT NULL,
+                    alias TEXT NOT NULL,
+                    artist_key TEXT NOT NULL,
+                    artist TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    fetched_at REAL NOT NULL,
+                    PRIMARY KEY(alias_key, artist_key, source)
+                )
+                """
+            )
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_artist_aliases_alias "
+                "ON artist_aliases(alias_key)"
+            )
+            # The same mechanism is used for MusicBrainz release-group
+            # aliases.  They point at an existing AOTY album ID only.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS release_aliases (
+                    artist_key TEXT NOT NULL,
+                    alias_key TEXT NOT NULL,
+                    alias TEXT NOT NULL,
+                    album_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    fetched_at REAL NOT NULL,
+                    PRIMARY KEY(artist_key, alias_key, album_id, source),
+                    FOREIGN KEY(album_id) REFERENCES releases(album_id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_release_aliases_lookup "
+                "ON release_aliases(artist_key, alias_key)"
             )
 
             self.connection.execute(
@@ -2126,6 +2169,129 @@ class Database:
             for row in rows
         ]
 
+    def cached_artist_aliases(self) -> list[dict]:
+        """Return locally stored, unambiguous AOTY/MusicBrainz aliases."""
+
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT alias_key, alias, artist_key, artist
+                FROM artist_aliases
+                ORDER BY alias COLLATE NOCASE, artist COLLATE NOCASE
+                """
+            ).fetchall()
+
+        grouped: dict[str, list[dict]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["alias_key"]), []).append(dict(row))
+        return [
+            values[0]
+            for values in grouped.values()
+            if len({str(value["artist_key"]) for value in values}) == 1
+        ]
+
+    def resolve_cached_artist_alias(self, artist: str) -> str | None:
+        """Resolve an exact cached alias only when it has one target."""
+
+        key = self._artist_image_key(artist)
+        if not key:
+            return None
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT DISTINCT artist_key, artist FROM artist_aliases
+                WHERE alias_key = ?
+                """,
+                (key,),
+            ).fetchall()
+        return str(rows[0]["artist"]) if len(rows) == 1 else None
+
+    def save_artist_aliases(
+        self,
+        artist: str,
+        aliases: Iterable[object],
+        *,
+        source: str,
+    ) -> bool:
+        """Store AOTY or MusicBrainz aliases for an in-scope artist.
+
+        The canonical artist display name is also indexed.  Every call fully
+        replaces one provider's list, so aliases cannot accumulate duplicate
+        spellings after a refresh.
+        """
+
+        name = " ".join(str(artist or "").split())
+        key = self._artist_image_key(name)
+        source = str(source or "").strip().casefold()
+        if not key or source not in {"aoty", "musicbrainz"}:
+            return False
+        with self._lock, self.connection:
+            in_scope = self.connection.execute(
+                """
+                SELECT 1 FROM ratings
+                WHERE active = 1 AND artist = ? COLLATE NOCASE LIMIT 1
+                """,
+                (name,),
+            ).fetchone()
+            if in_scope is None:
+                return False
+            self.connection.execute(
+                "DELETE FROM artist_aliases WHERE artist_key = ? AND source = ?",
+                (key, source),
+            )
+            seen: set[str] = set()
+            values = [] if isinstance(aliases, (str, bytes)) else list(aliases or [])
+            for alias in [name, *values]:
+                display = " ".join(str(alias or "").split())
+                alias_key = self._artist_image_key(display)
+                if not display or not alias_key or alias_key in seen:
+                    continue
+                seen.add(alias_key)
+                self.connection.execute(
+                    """
+                    INSERT INTO artist_aliases(
+                        alias_key, alias, artist_key, artist, source, fetched_at
+                    ) VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                    (alias_key, display, key, name, source, _now()),
+                )
+        return True
+
+    def resolve_cached_release_alias(self, artist: str, album: str) -> str | None:
+        """Resolve an exact MusicBrainz release-group alias to one AOTY ID."""
+
+        artist_key = self._artist_image_key(artist)
+        alias_key = self._artist_image_key(album)
+        if not artist_key or not alias_key:
+            return None
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT DISTINCT album_id FROM release_aliases
+                WHERE artist_key = ? AND alias_key = ? AND source = 'musicbrainz'
+                """,
+                (artist_key, alias_key),
+            ).fetchall()
+        return str(rows[0]["album_id"]) if len(rows) == 1 else None
+
+    def cached_release_aliases(self, artist: str) -> list[dict]:
+        """Return cached, provider-confirmed aliases for one artist's releases."""
+
+        artist_key = self._artist_image_key(artist)
+        if not artist_key:
+            return []
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT alias, alias_key, album_id
+                FROM release_aliases
+                WHERE artist_key = ? AND source = 'musicbrainz'
+                ORDER BY alias COLLATE NOCASE
+                """,
+                (artist_key,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def artist_metadata_candidates(self, username: str, limit: int = 1) -> list[str]:
         """Return a tiny, durable queue of configured-user artists.
 
@@ -2260,6 +2426,10 @@ class Database:
                     _now(), float(retry_after),
                 ),
             )
+        if source == "musicbrainz":
+            # RLock makes this second short transaction safe and keeps the
+            # replacement/de-duplication policy in one public helper.
+            self.save_artist_aliases(name, data.get("aliases") or [], source=source)
         return True
 
     def get_artist_source_data(self, artist: str) -> dict[str, dict]:
@@ -3983,6 +4153,33 @@ class Database:
                 """,
                 (album_id, source, _json_dump(data), str(quality or "unknown"), _now()),
             )
+            if source == "musicbrainz":
+                release = self.connection.execute(
+                    "SELECT artist, album FROM releases WHERE album_id = ?",
+                    (album_id,),
+                ).fetchone()
+                if release is not None:
+                    artist = str(release["artist"] or "").strip()
+                    artist_key = self._artist_image_key(artist)
+                    self.connection.execute(
+                        "DELETE FROM release_aliases WHERE album_id = ? AND source = ?",
+                        (album_id, source),
+                    )
+                    aliases = [str(release["album"] or "").strip()]
+                    aliases.extend(data.get("release_group_aliases") or [])
+                    for alias in aliases:
+                        display = " ".join(str(alias or "").split())
+                        alias_key = self._artist_image_key(display)
+                        if not artist_key or not display or not alias_key:
+                            continue
+                        self.connection.execute(
+                            """
+                            INSERT OR IGNORE INTO release_aliases(
+                                artist_key, alias_key, alias, album_id, source, fetched_at
+                            ) VALUES(?, ?, ?, ?, ?, ?)
+                            """,
+                            (artist_key, alias_key, display, album_id, source, _now()),
+                        )
         return True
 
     def get_release_source_data(self, album_id: str) -> dict[str, dict]:
