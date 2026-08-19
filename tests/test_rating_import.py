@@ -269,6 +269,30 @@ class RatingImportDatabaseTests(unittest.TestCase):
             self.db.get_rating("enso", "cached-id")["notify_pending"]
         )
 
+    def test_changed_csv_row_keeps_old_score_for_offline_monitor_delivery(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "pending-change",
+                "artist": "Akute",
+                "album": "Dzievački i kosmas",
+                "score": "70",
+                "release_format": "LP",
+            },
+        )
+        cutoff = 1_700_000_000.0
+        self.db.mark_notification_delivered("enso", delivered_at=cutoff)
+        record = {
+            **self._record(score="85"),
+            "album_id_hint": "pending-change",
+            "sort_timestamp": cutoff + 1,
+        }
+        result = self.db.import_official_ratings("enso", [record])
+        self.assertEqual(result["queued_notifications"], 1)
+        pending = self.db.get_pending_notifications("enso")
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["pending_old_score"], "70")
+
     def test_manual_review_and_like_preserve_tracks_and_become_due(self):
         self.db.upsert_rating(
             "enso",

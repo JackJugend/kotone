@@ -97,3 +97,42 @@ class LastFMArchiveDatabaseTests(unittest.TestCase):
         )
         self.assertEqual(self.db.latest_scrobble("enso")["track"], "Newest Track")
         self.assertTrue(self.db.state("enso")["complete"])
+
+    def test_known_script_and_romanized_aliases_share_statistics_bucket(self):
+        self.db.import_tracks(
+            "enso",
+            [
+                {
+                    "played_at": 100,
+                    "artist": "椎名林檎",
+                    "album": "加爾基 精液 栗ノ花",
+                    "track": "Track A",
+                },
+                {
+                    "played_at": 200,
+                    "artist": "Sheena Ringo",
+                    "album": "Kalk Samen Chestnut Flower",
+                    "track": "Track B",
+                },
+                {
+                    "played_at": 300,
+                    "artist": "Ringo Sheena",
+                    "album": "加爾基 精液 栗ノ花 Kalk Samen Chestnut Flower",
+                    "track": "Track C",
+                },
+            ],
+        )
+        self.assertEqual(
+            self.db.archive_statistics("enso"),
+            {"scrobbles": 3, "artists": 1, "albums": 1, "tracks": 3},
+        )
+        self.assertEqual(
+            self.db.artist_scrobble_count("enso", "Sheena Ringo"),
+            3,
+        )
+        self.assertEqual(
+            self.db.album_scrobble_count(
+                "enso", "Kalk Samen Chestnut Flower", artist="Sheena Ringo"
+            ),
+            3,
+        )

@@ -1764,6 +1764,50 @@ class Database:
                 (_bool_int(pending), canonical, str(album_id)),
             )
 
+    def get_pending_notifications(self, username: str) -> list[dict]:
+        """Return durable monitor deliveries queued by imports or archives.
+
+        An official CSV can be imported while AOTY is unavailable.  The
+        monitor must be able to deliver those already persisted rows without
+        performing another web request.  For a changed score we retain the
+        import's old value from the audit trail so the Discord message uses
+        the normal change layout rather than pretending it is a new rating.
+        """
+
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return []
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT r.*,
+                    (
+                        SELECT ch.old_value_json
+                        FROM change_history ch
+                        WHERE ch.username = r.username
+                          AND ch.album_id = r.album_id
+                          AND ch.entity_type = 'rating'
+                          AND ch.event_type = 'score_changed'
+                          AND ch.source = 'official_csv_import'
+                        ORDER BY ch.id DESC LIMIT 1
+                    ) AS pending_old_score
+                FROM ratings r
+                WHERE r.username = ?
+                  AND r.active = 1
+                  AND r.notify_pending = 1
+                ORDER BY COALESCE(r.sort_timestamp, r.first_seen_at, 0), r.album_id
+                """,
+                (canonical,),
+            ).fetchall()
+        result: list[dict] = []
+        for row in rows:
+            item = self._row_to_rating(row)
+            old_score = _json_load(row["pending_old_score"], None)
+            if old_score not in (None, "", item.get("score")):
+                item["pending_old_score"] = str(old_score)
+            result.append(item)
+        return result
+
     def mark_notification_delivered(
         self,
         username: str,

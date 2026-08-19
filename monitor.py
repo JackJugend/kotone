@@ -236,6 +236,58 @@ class RatingMonitor:
         except Exception as exc:
             print(f"[PROFILE] {username}: {type(exc).__name__}: {exc}")
 
+    async def _deliver_pending_locked(self, username: str) -> int:
+        """Send persisted import notifications without touching AOTY."""
+
+        pending = DB.get_pending_notifications(username)
+        if not pending:
+            return 0
+        avatar = DB.get_avatar(username)
+        delivered = 0
+        for item in pending:
+            if self._stop_event.is_set():
+                break
+            old_score = item.get("pending_old_score")
+            if old_score is not None:
+                sent = await self.send_changed_rating(
+                    username,
+                    item,
+                    str(old_score),
+                    avatar,
+                )
+            else:
+                sent = await self.send_new_rating(username, item, avatar)
+            if not sent:
+                continue
+            # Delivery is the only point at which a queued import is cleared.
+            # It also gives brand-new rows their normal history event.
+            DB.upsert_rating(
+                username,
+                item,
+                record_history=True,
+                record_changes=True,
+                source="monitor_import_delivery",
+            )
+            DB.mark_notification_delivered(username)
+            delivered += 1
+            await self._sleep(0.5)
+        if delivered:
+            DB.backup_if_due()
+            print(f"[MONITOR] {username}: wysłano {delivered} powiadomień z importu.")
+        return delivered
+
+    async def deliver_pending_notifications(self, username: str) -> dict:
+        """Public, lock-safe pending-delivery path used before every cycle."""
+
+        canonical = DB.canonical_username(username)
+        if canonical is None:
+            return {"error": "użytkownik nie jest wpisany w config.json"}
+        lock = self._locks[canonical.casefold()]
+        if lock.locked():
+            return {"busy": True}
+        async with lock:
+            return {"sent": await self._deliver_pending_locked(canonical)}
+
     async def check_user(
         self,
         username: str,
@@ -256,9 +308,11 @@ class RatingMonitor:
 
         async with lock:
             prefix = "MANUAL" if manual else "AOTY"
+            pending_sent = await self._deliver_pending_locked(username)
             if self._db_only_enabled():
                 return {
                     "db_only": True,
+                    "sent_import": pending_sent,
                     "error": (
                         "Tryb /dbonly jest aktywny; synchronizacja AOTY "
                         "została celowo pominięta."
@@ -276,6 +330,7 @@ class RatingMonitor:
                     print(f"[{prefix}] {username}: {message}")
                 return {
                     "cooldown": True,
+                    "sent_import": pending_sent,
                     "retry_after": cooldown_seconds,
                     "error": message,
                 }
@@ -474,6 +529,7 @@ class RatingMonitor:
                 "changed": len(changed_items),
                 "sent_new": sent_new,
                 "sent_changed": sent_changed,
+                "sent_import": pending_sent,
                 "full": full,
             }
 
@@ -495,6 +551,24 @@ class RatingMonitor:
         while not self.client.is_closed() and not self._stop_event.is_set():
             self.last_cycle_at = time.time()
             cycle_ok = True
+
+            # CSV imports already have all data needed to render an embed.
+            # Drain them first, even during AOTY cooldown or /dbonly.
+            for username in USERS:
+                if self._stop_event.is_set():
+                    break
+                try:
+                    result = await self.deliver_pending_notifications(username)
+                    if result.get("error"):
+                        cycle_ok = False
+                        self.last_error = str(result["error"])
+                except Exception as exc:
+                    cycle_ok = False
+                    self.last_error = f"{type(exc).__name__}: {exc}"
+                    print(
+                        f"[MONITOR] Nie wysłano kolejki importu {username}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
 
             if self._db_only_enabled():
                 message = (
