@@ -201,12 +201,17 @@ async def _open_release_tab(
     """Keep Home intact and publish one lower, disposable tab message."""
 
     await _edit_component_message(interaction, view=source_view)
-    message = await interaction.followup.send(
-        embed=embed,
-        view=tab_view,
-        ephemeral=False,
-        wait=True,
-    )
+    # discord.py 2.7 rejects an explicit ``view=None`` for follow-up
+    # messages. Details and Tracklist intentionally have no lower controls,
+    # so omit the keyword altogether in that case.
+    send_kwargs = {
+        "embed": embed,
+        "ephemeral": False,
+        "wait": True,
+    }
+    if tab_view is not None:
+        send_kwargs["view"] = tab_view
+    message = await interaction.followup.send(**send_kwargs)
     source_view.artist_message = message
     bind_message = getattr(tab_view, "bind_message", None)
     if callable(bind_message):

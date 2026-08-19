@@ -330,6 +330,22 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         normal_message.edit.assert_awaited_once_with(view=view)
         webhook_message.edit.assert_not_awaited()
 
+    async def test_plain_release_tab_omits_none_view(self):
+        source_view = views_module.TimedDisableView()
+        tab_message = SimpleNamespace(channel=None, id=1)
+        interaction = SimpleNamespace(
+            edit_original_response=AsyncMock(),
+            followup=SimpleNamespace(send=AsyncMock(return_value=tab_message)),
+        )
+
+        await views_module._open_release_tab(
+            interaction,
+            source_view,
+            discord.Embed(title="Szczegóły"),
+        )
+
+        self.assertNotIn("view", interaction.followup.send.await_args.kwargs)
+
     def test_review_tab_uses_the_shared_must_hear_cover(self):
         item = {
             "album_id": "42",
