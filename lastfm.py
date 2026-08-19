@@ -76,7 +76,11 @@ class LastFMClient:
 
         with self._lock:
             remaining = max(0.0, self._blocked_until - time.monotonic())
-        return {"blocked": remaining > 0, "blocked_seconds": round(remaining, 1)}
+        return {
+            "configured": LASTFM_API_ENABLED,
+            "blocked": remaining > 0,
+            "blocked_seconds": round(remaining, 1),
+        }
 
     def _json(self, method: str, **params: object) -> dict[str, Any]:
         if not LASTFM_API_ENABLED:

@@ -4109,6 +4109,49 @@ class Database:
             ).fetchall()
         return [self._row_to_rating(row) for row in rows]
 
+    def release_source_metadata_candidates(
+        self,
+        username: str,
+        source: str,
+        limit: int,
+        *,
+        stale_before: float,
+    ) -> list[dict]:
+        """Return a tiny due queue for one optional provider's metadata.
+
+        Commands never invoke this queue.  It lets the idle worker add
+        Last.fm-only counts/cover art even where AOTY already supplied a full
+        release page, without turning normal Discord use into web traffic.
+        """
+
+        canonical = self.canonical_username(username)
+        source = str(source or "").strip().casefold()
+        if canonical is None or source not in {"lastfm", "musicbrainz"} or limit <= 0:
+            return []
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT r.*
+                FROM ratings r
+                LEFT JOIN release_source_cache source_cache
+                  ON source_cache.album_id = r.album_id
+                 AND source_cache.source = ?
+                WHERE r.username = ?
+                  AND r.active = 1
+                  AND NULLIF(TRIM(COALESCE(r.artist, '')), '') IS NOT NULL
+                  AND NULLIF(TRIM(COALESCE(r.album, '')), '') IS NOT NULL
+                  AND (
+                       source_cache.album_id IS NULL
+                       OR COALESCE(source_cache.fetched_at, 0) <= ?
+                  )
+                ORDER BY COALESCE(r.sort_timestamp, r.first_seen_at, 0) DESC,
+                         r.album_id ASC
+                LIMIT ?
+                """,
+                (source, canonical, float(stale_before), int(limit)),
+            ).fetchall()
+        return [self._row_to_rating(row) for row in rows]
+
     # ------------------------------------------------------------------
     # Silent profile archive: every AOTY rating format
     # ------------------------------------------------------------------

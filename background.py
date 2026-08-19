@@ -108,7 +108,12 @@ class BackgroundWorker:
                         username,
                         priority=PRIORITY_MAINTENANCE,
                     )
-                if result.get("releases") or result.get("artists"):
+                if not result.get("releases") and not result.get("artists"):
+                    result["lastfm"] = await DATA.enrich_lastfm_release_sources(
+                        username,
+                        priority=PRIORITY_MAINTENANCE,
+                    )
+                if result.get("releases") or result.get("artists") or result.get("lastfm"):
                     self._enrich_cursor = self._cursor_after(username)
                     self.last_success_at = time.time()
                     self.last_error = None
@@ -131,7 +136,12 @@ class BackgroundWorker:
                         username,
                         priority=PRIORITY_MAINTENANCE,
                     )
-                if result.get("releases") or result.get("artists"):
+                if not result.get("releases") and not result.get("artists"):
+                    result["lastfm"] = await DATA.enrich_lastfm_release_sources(
+                        username,
+                        priority=PRIORITY_MAINTENANCE,
+                    )
+                if result.get("releases") or result.get("artists") or result.get("lastfm"):
                     self._enrich_cursor = self._cursor_after(username)
                     self.last_success_at = time.time()
                     self.last_error = None
@@ -192,8 +202,13 @@ class BackgroundWorker:
                     username,
                     priority=PRIORITY_MAINTENANCE,
                 )
+            if not result.get("releases") and not result.get("details") and not result.get("artists"):
+                result["lastfm"] = await DATA.enrich_lastfm_release_sources(
+                    username,
+                    priority=PRIORITY_MAINTENANCE,
+                )
 
-            if result.get("releases") or result.get("details") or result.get("artists"):
+            if result.get("releases") or result.get("details") or result.get("artists") or result.get("lastfm"):
                 self._enrich_cursor = self._cursor_after(username)
                 self.last_success_at = time.time()
                 self.last_error = None

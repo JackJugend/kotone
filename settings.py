@@ -522,6 +522,9 @@ LASTFM_OUTAGE_COOLDOWN = _runtime_float(
 ARTIST_SOURCE_TTL = _runtime_int(
     "artist_source_ttl", 30 * 24 * 60 * 60, 24 * 60 * 60
 )
+LASTFM_RELEASE_SOURCE_TTL = _runtime_int(
+    "lastfm_release_source_ttl", 30 * 24 * 60 * 60, 24 * 60 * 60
+)
 
 # Lokalny backup SQLite na tym samym volume. Railway backups nadal są mocno
 # zalecane, ale ten plik daje dodatkową warstwę ochrony przed uszkodzeniem DB.

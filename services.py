@@ -37,6 +37,7 @@ from settings import (
     LASTFM_ARTIST_IMAGE_RETRY_INTERVAL,
     LASTFM_ARTIST_IMAGE_TTL,
     LASTFM_API_ENABLED,
+    LASTFM_RELEASE_SOURCE_TTL,
     ARTIST_SOURCE_TTL,
     KOTONE_USERS_BY_AOTY,
     PROFILE_SYNC_INTERVAL,
@@ -75,6 +76,7 @@ class DataService:
         self._release_priority_queue: dict[str, dict] = {}
         self._musicbrainz_blocked_until = 0.0
         self._musicbrainz_last_error: str | None = None
+        self._lastfm_release_retry_after: dict[str, float] = {}
 
     @staticmethod
     def _value_present(value) -> bool:
@@ -481,6 +483,47 @@ class DataService:
             except lastfm.LastFMUnavailable as exc:
                 print(f"[LASTFM] artist fallback: {type(exc).__name__}: {exc}")
         return saved
+
+    async def enrich_lastfm_release_sources(
+        self,
+        username: str,
+        *,
+        priority: int = PRIORITY_MAINTENANCE,
+    ) -> int:
+        """Cache one configured user's Last.fm album payload in an idle pass.
+
+        AOTY remains authoritative, but Last.fm-specific data (listeners,
+        scrobbles and often better cover art) must not wait for AOTY to fail.
+        The one-item queue plus Last.fm's shared two-second gate prevents a
+        profile archive from becoming a burst of API calls.
+        """
+
+        if not LASTFM_API_ENABLED or not SOURCES.enabled("lastfm"):
+            return 0
+        now = time.time()
+        candidates = DB.release_source_metadata_candidates(
+            username,
+            "lastfm",
+            limit=4,
+            stale_before=now - LASTFM_RELEASE_SOURCE_TTL,
+        )
+        for item in candidates:
+            album_id = str(item.get("album_id") or "").strip()
+            if not album_id or self._lastfm_release_retry_after.get(album_id, 0.0) > now:
+                continue
+            details = await self._lastfm_release_fallback(
+                username,
+                item,
+                priority=priority,
+            )
+            if details and DB.save_lastfm_fallback(album_id, details):
+                self._lastfm_release_retry_after.pop(album_id, None)
+                return 1
+            # A valid but unmatched Last.fm result should not be retried on
+            # every idle pass; a temporary error has its own global cooldown.
+            self._lastfm_release_retry_after[album_id] = time.time() + 6 * 60 * 60
+            return 0
+        return 0
 
     @staticmethod
     def _age(timestamp: float | None) -> float:

@@ -66,7 +66,16 @@ def must_hear_album(
 
 
 def cover_token(album_id: str, cover_url: str) -> str:
-    payload = f"{album_id}|{cover_url}".encode("utf-8")
+    """Return an endpoint token which stays valid when a provider changes art.
+
+    The generated image is looked up only from the bot's own in-scope release
+    cache.  Binding the public URL to the artwork URL made perfectly valid
+    Discord thumbnails fail whenever Last.fm/AOTY refreshed that URL between
+    rendering a command and Discord downloading its image.
+    """
+
+    del cover_url  # Kept in the signature for existing callers/tests.
+    payload = str(album_id or "").strip().encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:20]
 
 

@@ -127,9 +127,22 @@ class HealthServer:
             self.must_hear_cover_last_failure = "release_not_cached"
             raise web.HTTPNotFound()
         cover_url = str(details.get("cover") or "").strip()
-        if token != cover_token(album_id, cover_url):
-            self.must_hear_cover_last_failure = "cover_token_mismatch"
+
+        def original_cover(reason: str) -> None:
+            """Keep Discord thumbnails visible if the generated badge fails.
+
+            A 302 is deliberately preferable to a 404 here: Discord follows
+            image redirects, while a failed generated thumbnail otherwise
+            leaves the entire card with no cover at all.
+            """
+
+            self.must_hear_cover_last_failure = reason
+            if cover_url.startswith(("https://", "http://")):
+                raise web.HTTPFound(location=cover_url)
             raise web.HTTPNotFound()
+
+        if token != cover_token(album_id, cover_url):
+            original_cover("cover_token_mismatch")
         if not must_hear_album(
             details.get("user_score"),
             details.get("ratings_count"),
@@ -138,17 +151,14 @@ class HealthServer:
             album_id=album_id,
             official=details.get("must_hear"),
         ):
-            self.must_hear_cover_last_failure = "no_longer_eligible"
-            raise web.HTTPNotFound()
+            original_cover("no_longer_eligible")
         content = await asyncio.to_thread(load_cover_bytes, cover_url)
         if not content:
-            self.must_hear_cover_last_failure = "cover_unavailable"
-            raise web.HTTPNotFound()
+            original_cover("cover_unavailable")
         try:
             marked = await asyncio.to_thread(render_must_hear_png, content)
         except Exception:
-            self.must_hear_cover_last_failure = "cover_render_failed"
-            raise web.HTTPNotFound() from None
+            original_cover("cover_render_failed")
         self.must_hear_cover_served += 1
         self.must_hear_cover_last_failure = None
         return web.Response(

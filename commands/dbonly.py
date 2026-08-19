@@ -5,6 +5,8 @@ from __future__ import annotations
 import discord
 
 from http_client import HTTP
+import lastfm
+from services import DATA
 from settings import GUILD_ID, is_operator_discord_id
 from source_switches import SOURCES
 
@@ -13,6 +15,21 @@ def _is_operator(interaction: discord.Interaction) -> bool:
     """Only configured operators may change the global network policy."""
 
     return is_operator_discord_id(getattr(interaction.user, "id", None))
+
+
+def _remaining(seconds: float | int | None) -> str:
+    """Format a harmless diagnostic duration for the private status panel."""
+
+    total = max(0, round(float(seconds or 0)))
+    if total <= 0:
+        return "brak"
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours} h {minutes} min"
+    if minutes:
+        return f"{minutes} min {seconds} s"
+    return f"{seconds} s"
 
 
 def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
@@ -64,12 +81,51 @@ def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
 
         if mode == "status":
             switches = SOURCES.status()
+            aoty_status = HTTP.status()
+            musicbrainz_status = DATA.musicbrainz_status()
+            lastfm_status = lastfm.LASTFM.status()
+            if HTTP.db_only_enabled():
+                aoty_runtime = "ręcznie zablokowany"
+            elif aoty_status.get("challenge_open"):
+                aoty_runtime = (
+                    "challenge/cooldown: "
+                    f"{_remaining(aoty_status.get('challenge_seconds'))}"
+                )
+            elif aoty_status.get("circuit_open"):
+                aoty_runtime = (
+                    "awaryjny cooldown: "
+                    f"{_remaining(aoty_status.get('circuit_seconds'))}"
+                )
+            else:
+                aoty_runtime = "gotowy"
+
+            if not switches["musicbrainz"]:
+                musicbrainz_runtime = "ręcznie zablokowany"
+            elif musicbrainz_status.get("blocked"):
+                musicbrainz_runtime = (
+                    "cooldown: "
+                    f"{_remaining(musicbrainz_status.get('blocked_seconds'))}"
+                )
+            else:
+                musicbrainz_runtime = "gotowy"
+
+            if not lastfm_status.get("configured"):
+                lastfm_runtime = "brak LASTFM_API_KEY"
+            elif not switches["lastfm"]:
+                lastfm_runtime = "ręcznie zablokowany"
+            elif lastfm_status.get("blocked"):
+                lastfm_runtime = (
+                    "cooldown: "
+                    f"{_remaining(lastfm_status.get('blocked_seconds'))}"
+                )
+            else:
+                lastfm_runtime = "gotowy"
             message = "\n".join(
                 (
                     "**Źródła Kotone**",
-                    f"• AOTY scraper: {'⏸ zablokowany' if HTTP.db_only_enabled() else '▶ włączony'}",
-                    f"• MusicBrainz API: {'▶ włączone' if switches['musicbrainz'] else '⏸ zablokowane'}",
-                    f"• Last.fm API: {'▶ włączone' if switches['lastfm'] else '⏸ zablokowane'}",
+                    f"• AOTY scraper: {'⏸ zablokowany' if HTTP.db_only_enabled() else '▶ włączony'} — {aoty_runtime}",
+                    f"• MusicBrainz API: {'▶ włączone' if switches['musicbrainz'] else '⏸ zablokowane'} — {musicbrainz_runtime}",
+                    f"• Last.fm API: {'▶ włączone' if switches['lastfm'] else '⏸ zablokowane'} — {lastfm_runtime}",
                     "Komendy Discord czytają SQLite niezależnie od tych przełączników.",
                 )
             )
