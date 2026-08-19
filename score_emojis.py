@@ -331,9 +331,18 @@ class ScoreEmojiSynchronizer:
                 await asyncio.sleep(delay)
 
     def load_cached(self) -> None:
-        """Make already-uploaded emoji available immediately after restart."""
+        """Make old and new uploaded score tiles usable during a refresh.
 
-        set_score_emojis(DB.get_score_emoji_map(render_version=SCORE_EMOJI_RENDER_VERSION))
+        Rebuilding a hundred image assets is deliberately throttled.  Showing
+        a valid previous tile while a newer visual revision uploads is far
+        better than falling back to dots for minutes after every deploy.
+        """
+
+        cached = DB.get_score_emoji_map()
+        cached.update(
+            DB.get_score_emoji_map(render_version=SCORE_EMOJI_RENDER_VERSION)
+        )
+        set_score_emojis(cached)
 
     async def sync_all(self) -> None:
         """Upload only missing score tiles, one at a time with gentle pacing."""
@@ -427,7 +436,13 @@ class StatusEmojiSynchronizer(ScoreEmojiSynchronizer):
     """Create the three shared transparent release-flag emoji after startup."""
 
     def load_cached(self) -> None:
-        set_status_emojis(DB.get_status_emoji_map(render_version=STATUS_EMOJI_RENDER_VERSION))
+        # Preserve the previous transparent icon during the short replacement
+        # window; the matching current-version row overwrites it immediately.
+        cached = DB.get_status_emoji_map()
+        cached.update(
+            DB.get_status_emoji_map(render_version=STATUS_EMOJI_RENDER_VERSION)
+        )
+        set_status_emojis(cached)
 
     async def sync_all(self) -> None:
         async with self._lock:

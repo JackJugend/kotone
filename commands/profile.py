@@ -20,7 +20,6 @@ from shared import (
     score_color,
     score_or_nr,
     set_aoty_footer,
-    user_avatar_emoji,
     username_autocomplete,
 )
 from views import ProfilePagerView
@@ -326,7 +325,6 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             if kotone_profile and kotone_profile.get("lastfm_username")
             else None
         )
-        avatar_emoji = user_avatar_emoji(username)
         lastfm_embed = _build_lastfm_embed(
             username=str((kotone_profile or {}).get("lastfm_username") or ""),
             profile=lastfm_profile,
@@ -376,14 +374,14 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
 
             if avatar:
                 embed.set_author(
-                    name=f"{avatar_emoji} {display_username}".strip(),
+                    name=display_username,
                     url=profile_url,
                     icon_url=avatar,
                 )
                 embed.set_thumbnail(url=avatar)
             else:
                 embed.set_author(
-                    name=f"{avatar_emoji} {display_username}".strip(),
+                    name=display_username,
                     url=profile_url,
                 )
 

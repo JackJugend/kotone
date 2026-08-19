@@ -128,12 +128,20 @@ def score_value_or_nr(score: Any) -> str:
 
 
 def score_or_nr(score: Any) -> str:
-    """Render every missing rating consistently as a white ``NR`` marker."""
+    """Render a rating tile, with the complete old text as safe fallback."""
 
     value = score_value_or_nr(score)
     # A custom tile already contains its number (or the letters NR), therefore
     # duplicating text next to it would make every field less readable.
-    return score_icon(None) if value == "NR" else score_icon(value)
+    if value == "NR":
+        return score_emoji(None) or "\\⚪ NR"
+    number = _score_number(value)
+    custom = score_emoji(number) if number is not None else None
+    if custom:
+        return custom
+    # New application emoji are uploaded gradually.  Keep every numeric score
+    # visible until its tile is ready rather than showing only a coloured dot.
+    return f"{_legacy_score_icon(number or 0)} **{value}**"
 
 
 def dropdown_score_or_nr(score: Any) -> str:
