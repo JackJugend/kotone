@@ -9,7 +9,7 @@ from shared import (
     build_release_variables,
     must_hear_title_marker,
     score_color,
-    score_icon,
+    score_or_nr,
 )
 
 
@@ -53,5 +53,5 @@ def build_review_embed(
     )
     if variables.cover:
         embed.set_thumbnail(url=variables.cover)
-    embed.set_footer(text=f"AOTY • {score_icon(score)[1:]} {score or 'NR'}")
+    embed.set_footer(text=f"AOTY • {score_or_nr(score)}")
     return embed

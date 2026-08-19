@@ -15,6 +15,7 @@ from shared import (
     release_year_suffix,
     score_color,
     score_icon,
+    score_or_nr,
     set_aoty_footer,
     username_autocomplete,
 )
@@ -28,7 +29,7 @@ def _rating_embed(username, item, avatar, variables):
     # /recent intentionally shares the primary-card language of /last.  It
     # omits only Secondary Genres; all release flags remain attached to this
     # exact rating in the shared footer.
-    description_lines = [f"# — \⭐ **{variables.score}** \⭐ —"]
+    description_lines = [f"# {score_or_nr(variables.score)}"]
     if variables.genres:
         description_lines.append(variables.all_genres_text)
 

@@ -203,7 +203,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         flags = rating_flags_text(latest)
         footer_flags = f"  •  {flags}" if flags else ""
 
-        description_lines = [f"# — \⭐ **{variables.score}** \⭐ —"]
+        description_lines = [f"# {score_or_nr(variables.score)}"]
         if variables.genres:
             description_lines.append(variables.all_genres_text.title())
         if variables.secondary_genres:

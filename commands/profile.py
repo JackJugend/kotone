@@ -50,7 +50,7 @@ def _recent_line(item: dict) -> str:
     flags_text = f" · {flags}" if flags else ""
 
     return (
-        f"{score_icon(score)} **{score}** · "
+        f"{score_icon(score)} · "
         f"[{artist} — {album}]({url}) · {release_format}{flags_text}"
     )
 

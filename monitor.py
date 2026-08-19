@@ -130,7 +130,7 @@ class RatingMonitor:
             color=score_color(variables.score),
         )
         embed.add_field(
-            name=f"**{variables.score}**  {score_icon(variables.score)}",
+            name=score_icon(variables.score),
             value=" ",
             inline=True,
         )
@@ -185,7 +185,7 @@ class RatingMonitor:
         )
         embed.add_field(
             name=(
-                f"*{old_score}*  ➞  **{variables.score}**  "
+                f"{score_icon(old_score)}  ➞  "
                 f"{score_icon(variables.score)}"
             ),
             value=" ",

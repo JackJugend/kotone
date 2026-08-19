@@ -16,6 +16,8 @@ import discord
 
 from display_utils import display_genres, display_release_date, display_romanized_name
 from must_hear import marked_cover_url, must_hear_album, must_hear_kind, numeric_count
+from score_emoji_registry import score_emoji
+from status_emoji_registry import status_emoji
 from settings import (
     AOTY_ICON_ATTACHMENT,
     MUST_HEAR_EMOJIS,
@@ -63,7 +65,13 @@ def score_color(score: Any) -> discord.Color:
 def score_icon(score: Any) -> str:
     value = _score_number(score)
     if value is None:
-        return "\⚪"
+        return score_emoji(None) or "\⚪"
+
+    return score_emoji(value) or _legacy_score_icon(value)
+
+
+def _legacy_score_icon(value: int) -> str:
+    """Fallback dots used only until the application emoji bootstrap ends."""
 
     if value == 100:
         return "\💎"
@@ -123,7 +131,9 @@ def score_or_nr(score: Any) -> str:
     """Render every missing rating consistently as a white ``NR`` marker."""
 
     value = score_value_or_nr(score)
-    return f"{score_icon(None)} NR" if value == "NR" else f"{score_icon(value)} {value}"
+    # A custom tile already contains its number (or the letters NR), therefore
+    # duplicating text next to it would make every field less readable.
+    return score_icon(None) if value == "NR" else score_icon(value)
 
 
 def dropdown_score_or_nr(score: Any) -> str:
@@ -164,9 +174,9 @@ def score_or_missing(score: Any) -> str:
 
     text = str(score or "").strip()
     if not text or text.casefold() in {"nr", "n/r", "—", "?"}:
-        return f"{score_icon(None)} —"
+        return "\⚪ —"
     value = _whole_score_text(text)
-    return f"{score_icon(value)} {value}"
+    return score_icon(value)
 
 
 def aoty_score_value(score: Any, ratings_count: Any) -> str:
@@ -594,11 +604,11 @@ def rating_flags_text(item_or_variables: dict | ReleaseVariables | None) -> str:
     flags: list[str] = []
 
     if has_review:
-        flags.append("✎")
+        flags.append(status_emoji("review") or "✎")
     if has_track_ratings:
-        flags.append("☰")
+        flags.append(status_emoji("tracklist") or "☰")
     if liked:
-        flags.append("❤︎⁠")
+        flags.append(status_emoji("like") or "❤︎⁠")
 
     return " ".join(flags)
 

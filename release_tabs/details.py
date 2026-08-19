@@ -10,7 +10,7 @@ from shared import (
     load_release_variables,
     must_hear_title_marker,
     score_color,
-    score_icon,
+    score_or_nr,
     set_aoty_footer,
 )
 
@@ -107,10 +107,6 @@ async def build_release_details_embed(
             url=f"https://www.albumoftheyear.org/user/{username}/",
             icon_url=author_icon_url,
         )
-    footer = (
-        f"AOTY • {score_icon(variables.score)[1:]} {variables.score or 'NR'}"
-        if username
-        else "AOTY"
-    )
+    footer = f"AOTY • {score_or_nr(variables.score)}" if username else "AOTY"
     set_aoty_footer(embed, footer)
     return embed

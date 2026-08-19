@@ -46,6 +46,7 @@ from lifecycle import (
 )
 from monitor import RatingMonitor
 from presence_cache import PRESENCE_CACHE
+from score_emojis import ScoreEmojiSynchronizer, StatusEmojiSynchronizer
 from settings import APPLICATION_ID, GUILD_ID, TOKEN
 
 
@@ -73,6 +74,8 @@ tree = discord.app_commands.CommandTree(client)
 monitor = RatingMonitor(client)
 background = BackgroundWorker(client)
 health = HealthServer(client, monitor, background)
+score_emojis = ScoreEmojiSynchronizer(client)
+status_emojis = StatusEmojiSynchronizer(client)
 
 setup_last_command(tree)
 setup_recent_command(tree)
@@ -146,6 +149,7 @@ async def setup_hook() -> None:
 client.setup_hook = setup_hook
 monitor_task: asyncio.Task | None = None
 background_task: asyncio.Task | None = None
+emoji_sync_task: asyncio.Task | None = None
 shutdown_deadline: float | None = None
 shutdown_task: asyncio.Task | None = None
 shutdown_snapshot_task: asyncio.Task | None = None
@@ -183,7 +187,7 @@ def _log_worker_exit(task: asyncio.Task) -> None:
 
 @client.event
 async def on_ready() -> None:
-    global monitor_task, background_task
+    global monitor_task, background_task, emoji_sync_task
 
     print(f"Zalogowano jako {client.user}")
 
@@ -207,6 +211,24 @@ async def on_ready() -> None:
         await monitor.avatar_emojis.sync_cached()
     except Exception as exc:
         print(f"[AVATAR EMOJI] Startowy sync pominięty: {type(exc).__name__}: {exc}")
+
+    # Cached custom emoji become usable instantly. Missing assets are created
+    # afterwards in a detached, throttled task so Railway's startup health
+    # check and Discord command sync never wait for 102 image uploads.
+    score_emojis.load_cached()
+    status_emojis.load_cached()
+    if emoji_sync_task is None or emoji_sync_task.done():
+        async def sync_presentation_emojis() -> None:
+            try:
+                await status_emojis.sync_all()
+                await score_emojis.sync_all()
+            except Exception as exc:
+                print(f"[EMOJI] Sync prezentacji: {type(exc).__name__}: {exc}")
+
+        emoji_sync_task = asyncio.create_task(
+            sync_presentation_emojis(),
+            name="kotone-presentation-emojis",
+        )
 
     health.bind_worker_tasks(
         monitor_task=monitor_task,

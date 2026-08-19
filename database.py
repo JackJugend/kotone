@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 20
 
 # One-time migration data for pages verified before the scraper stored AOTY's
 # explicit Must Hear marker.  Values are written into ``releases.must_hear``;
@@ -954,6 +954,35 @@ class Database:
                 """
             )
 
+            # Score emoji are application-owned presentation assets, not user
+            # data.  Keeping their mutable Discord IDs in SQLite lets every
+            # command render the same rating tile without hard-coding IDs.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS score_emojis (
+                    score INTEGER PRIMARY KEY CHECK(score BETWEEN -1 AND 100),
+                    emoji_id TEXT NOT NULL,
+                    emoji_name TEXT NOT NULL UNIQUE,
+                    render_version TEXT NOT NULL,
+                    synced_at REAL NOT NULL
+                )
+                """
+            )
+
+            # Three compact flag icons use the same application-emoji path as
+            # score tiles.  A generic key keeps their IDs out of UI modules.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS status_emojis (
+                    emoji_key TEXT PRIMARY KEY,
+                    emoji_id TEXT NOT NULL,
+                    emoji_name TEXT NOT NULL UNIQUE,
+                    render_version TEXT NOT NULL,
+                    synced_at REAL NOT NULL
+                )
+                """
+            )
+
             # Source-specific payloads are deliberately separate from the
             # AOTY-shaped release cache. This preserves every provider's IDs,
             # timestamps and match quality without allowing a fallback to
@@ -1759,6 +1788,90 @@ class Database:
                 WHERE username = ?
                 """,
                 (str(message)[:1000], _now(), canonical),
+            )
+
+    def get_score_emoji_map(self, *, render_version: str | None = None) -> dict[int, str]:
+        """Return valid application emoji markup indexed by whole score."""
+
+        query = "SELECT score, emoji_id, emoji_name FROM score_emojis"
+        parameters: tuple[object, ...] = ()
+        if render_version is not None:
+            query += " WHERE render_version = ?"
+            parameters = (str(render_version),)
+        with self._lock:
+            rows = self.connection.execute(query, parameters).fetchall()
+        return {
+            int(row["score"]): f"<:{row['emoji_name']}:{row['emoji_id']}>"
+            for row in rows
+        }
+
+    def save_score_emoji(
+        self,
+        score: int,
+        emoji_id: object,
+        emoji_name: str,
+        render_version: str,
+    ) -> None:
+        """Persist one bot-managed rating tile after Discord accepted it."""
+
+        value = int(score)
+        if not -1 <= value <= 100:
+            raise ValueError("score emoji musi mieścić się w zakresie NR albo 0–100")
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO score_emojis(
+                    score, emoji_id, emoji_name, render_version, synced_at
+                ) VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(score) DO UPDATE SET
+                    emoji_id = excluded.emoji_id,
+                    emoji_name = excluded.emoji_name,
+                    render_version = excluded.render_version,
+                    synced_at = excluded.synced_at
+                """,
+                (value, str(emoji_id), str(emoji_name), str(render_version), _now()),
+            )
+
+    def get_status_emoji_map(self, *, render_version: str | None = None) -> dict[str, str]:
+        """Return uploaded icon markup keyed by ``like``, ``tracklist`` etc."""
+
+        query = "SELECT emoji_key, emoji_id, emoji_name FROM status_emojis"
+        parameters: tuple[object, ...] = ()
+        if render_version is not None:
+            query += " WHERE render_version = ?"
+            parameters = (str(render_version),)
+        with self._lock:
+            rows = self.connection.execute(query, parameters).fetchall()
+        return {
+            str(row["emoji_key"]): f"<:{row['emoji_name']}:{row['emoji_id']}>"
+            for row in rows
+        }
+
+    def save_status_emoji(
+        self,
+        emoji_key: str,
+        emoji_id: object,
+        emoji_name: str,
+        render_version: str,
+    ) -> None:
+        """Persist one application icon only after Discord has accepted it."""
+
+        key = str(emoji_key).strip().casefold()
+        if key not in {"like", "tracklist", "review"}:
+            raise ValueError("nieznany klucz emoji statusu")
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO status_emojis(
+                    emoji_key, emoji_id, emoji_name, render_version, synced_at
+                ) VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(emoji_key) DO UPDATE SET
+                    emoji_id = excluded.emoji_id,
+                    emoji_name = excluded.emoji_name,
+                    render_version = excluded.render_version,
+                    synced_at = excluded.synced_at
+                """,
+                (key, str(emoji_id), str(emoji_name), str(render_version), _now()),
             )
 
     # ------------------------------------------------------------------
