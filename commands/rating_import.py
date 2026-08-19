@@ -17,11 +17,36 @@ from rating_import import (
 from settings import (
     GUILD_ID,
     IMPORT_USERS_BY_DISCORD_ID,
+    KOTONE_USERS,
     KOTONE_USERS_BY_DISCORD_ID,
+    is_operator_discord_id,
 )
 
 
 MAX_CSV_BYTES = 2 * 1024 * 1024
+
+
+async def _kotone_user_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[discord.app_commands.Choice[str]]:
+    """Offer every configured Kotone profile only to import operators."""
+
+    if not is_operator_discord_id(getattr(interaction.user, "id", None)):
+        return []
+    needle = str(current or "").casefold()
+    choices: list[discord.app_commands.Choice[str]] = []
+    for key, profile in KOTONE_USERS.items():
+        labels = [str(key)]
+        if profile.get("aoty_username"):
+            labels.append(f"AOTY: {profile['aoty_username']}")
+        if profile.get("lastfm_username"):
+            labels.append(f"Last.fm: {profile['lastfm_username']}")
+        label = " · ".join(labels)
+        if needle and needle not in label.casefold():
+            continue
+        choices.append(discord.app_commands.Choice(name=label[:100], value=str(key)))
+    return choices[:25]
 
 
 def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
@@ -32,7 +57,9 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
     @discord.app_commands.describe(
         source="Źródło importu",
         file="Wymagany wyłącznie dla eksportu AOTY CSV",
+        username="Użytkownik Kotone; operator może wskazać inną osobę",
     )
+    @discord.app_commands.autocomplete(username=_kotone_user_autocomplete)
     @discord.app_commands.choices(
         source=[
             discord.app_commands.Choice(name="AOTY — plik CSV", value="aoty"),
@@ -43,6 +70,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         interaction: discord.Interaction,
         source: str = "aoty",
         file: discord.Attachment | None = None,
+        username: str | None = None,
     ) -> None:
         if interaction.guild_id != GUILD_ID:
             await interaction.response.send_message(
@@ -59,15 +87,39 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             return
 
         discord_user_id = int(getattr(interaction.user, "id", 0) or 0)
-        kotone_profile = KOTONE_USERS_BY_DISCORD_ID.get(discord_user_id)
-        username = IMPORT_USERS_BY_DISCORD_ID.get(discord_user_id)
-        if source == "lastfm" and kotone_profile is None:
+        actor_profile = KOTONE_USERS_BY_DISCORD_ID.get(discord_user_id)
+        is_operator = is_operator_discord_id(discord_user_id)
+        requested_key = str(username or "").strip().casefold()
+        if requested_key and not is_operator:
             await interaction.response.send_message(
-                "Nie masz uprawnień do importu Last.fm.",
+                "Tylko operator może importować dane innego użytkownika Kotone.",
                 ephemeral=True,
             )
             return
-        if source == "aoty" and username is None:
+        profile_key = requested_key or str((actor_profile or {}).get("name") or "").casefold()
+        kotone_profile = KOTONE_USERS.get(profile_key)
+        if kotone_profile is None:
+            await interaction.response.send_message(
+                "Wybierz użytkownika Kotone z config.json.",
+                ephemeral=True,
+            )
+            return
+
+        actor_aoty_username = IMPORT_USERS_BY_DISCORD_ID.get(discord_user_id)
+        target_aoty_username = str(kotone_profile.get("aoty_username") or "").strip()
+        if source == "lastfm" and not kotone_profile.get("lastfm_username"):
+            await interaction.response.send_message(
+                "Wybrany użytkownik nie ma ustawionego konta Last.fm.",
+                ephemeral=True,
+            )
+            return
+        if source == "aoty" and not target_aoty_username:
+            await interaction.response.send_message(
+                "Wybrany użytkownik nie ma ustawionego konta AOTY.",
+                ephemeral=True,
+            )
+            return
+        if source == "aoty" and not is_operator and actor_aoty_username is None:
             await interaction.response.send_message(
                 "Nie masz uprawnień do `/import`.",
                 ephemeral=True,
@@ -77,7 +129,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         if source == "lastfm":
             await interaction.response.defer(ephemeral=True, thinking=True)
             result = await LASTFM_ARCHIVE.import_newest_now(
-                str((kotone_profile or {}).get("name") or "")
+                str(kotone_profile.get("name") or "")
             )
             if result.get("error"):
                 await interaction.followup.send(
@@ -97,7 +149,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             )
             return
 
-        canonical = DB.canonical_username(username)
+        canonical = DB.canonical_username(target_aoty_username)
         if canonical is None:
             await interaction.response.send_message(
                 "Przypisany użytkownik AOTY nie znajduje się w kotone.",
