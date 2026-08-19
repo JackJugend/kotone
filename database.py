@@ -37,7 +37,18 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
+
+# One-time migration data for pages verified before the scraper stored AOTY's
+# explicit Must Hear marker.  Values are written into ``releases.must_hear``;
+# runtime presentation never reads this tuple.
+_LEGACY_MUST_HEAR_SEED_IDS = (
+    "10879",  # Four-Calendar Café
+    "4594",   # Heaven or Las Vegas
+    "104775", # The Moon and the Melodies
+    "6490",   # Treasure
+    "7346",   # Head Over Heels
+)
 
 
 def _json_dump(value) -> str:
@@ -979,6 +990,7 @@ class Database:
             )
 
             self._import_legacy_rating_history_locked()
+            self._seed_legacy_must_hear_flags_locked()
 
             self.connection.execute(
                 """
@@ -987,6 +999,29 @@ class Database:
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value
                 """,
                 (str(SCHEMA_VERSION),),
+            )
+
+    def _seed_legacy_must_hear_flags_locked(self) -> None:
+        """Move pre-SQLite verified Must Hear flags into the release cache.
+
+        The insertion is restricted to releases already rated by a configured
+        user, preserving Kotone's no-outsider-persistence rule.  Existing
+        explicit AOTY values always win; this only fills a historical NULL.
+        """
+
+        now = _now()
+        for album_id in _LEGACY_MUST_HEAR_SEED_IDS:
+            self.connection.execute(
+                """
+                INSERT INTO releases(album_id, must_hear, fetched_at)
+                SELECT ?, 1, ?
+                WHERE EXISTS(
+                    SELECT 1 FROM ratings WHERE album_id = ? LIMIT 1
+                )
+                ON CONFLICT(album_id) DO UPDATE SET
+                    must_hear = COALESCE(releases.must_hear, excluded.must_hear)
+                """,
+                (album_id, now, album_id),
             )
 
     # ------------------------------------------------------------------

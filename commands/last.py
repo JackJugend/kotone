@@ -17,7 +17,8 @@ from shared import (
     set_aoty_footer,
     username_autocomplete,
 )
-from views import SingleRatingView, build_release_details_embed
+from release_tabs import build_release_details_embed
+from views import SingleRatingView
 
 
 def setup_last_command(tree: discord.app_commands.CommandTree):

@@ -277,6 +277,28 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             migrated.close()
 
+    def test_legacy_must_hear_seed_is_moved_into_sqlite(self):
+        """Historical flags live in ``releases`` after the v16 migration."""
+
+        db = self.make_db()
+        db.upsert_rating(
+            "enso",
+            {"album_id": "104775", "artist": "A", "album": "Moon"},
+        )
+        db.connection.execute(
+            "UPDATE meta SET value='15' WHERE key='schema_version'"
+        )
+        db.connection.commit()
+        db.close()
+
+        migrated = self.make_db()
+        try:
+            details = migrated.get_release_details("104775")
+            self.assertIsNotNone(details)
+            self.assertTrue(details["must_hear"])
+        finally:
+            migrated.close()
+
     def test_config_allow_list_change_snapshots_before_prune_once(self):
         db = self.make_db(users=("enso",))
         db.upsert_rating(

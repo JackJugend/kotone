@@ -8,17 +8,6 @@ import os
 from urllib.parse import quote
 
 
-# AOTY's orange badge is editorial, not a formula based on its two scores.
-# These verified pages were manually seeded before the scraper had a durable
-# flag. New pages are persisted from the live AOTY marker instead.
-KNOWN_AOTY_MUST_HEAR_IDS = frozenset({
-    "10879",  # Four-Calendar CafÃ©
-    "4594",   # Heaven or Las Vegas
-    "104775", # The Moon and the Melodies
-    "6490",   # Treasure
-    "7346",   # Head Over Heels
-})
-
 # Discord caches generated thumbnail URLs very aggressively. Bump this when
 # the deterministic badge artwork changes so a freshly invoked command shows
 # the new rendering instead of a previously cached PNG.
@@ -48,9 +37,6 @@ def must_hear_album(
 
     if official is not None:
         return bool(official)
-    if str(album_id or "").strip() in KNOWN_AOTY_MUST_HEAR_IDS:
-        return True
-
     # Compatibility fallback for legacy cache rows that predate the explicit
     # AOTY marker. AOTY has three independent visual states:
     # orange = community threshold, blue = critics threshold, purple = both.
