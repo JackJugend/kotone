@@ -3966,6 +3966,54 @@ class Database:
                 }
         return result
 
+    def link_lastfm_tracks_to_releases(self, tracks: list[dict]) -> list[dict]:
+        """Attach an AOTY album ID only when MusicBrainz IDs match exactly.
+
+        Display names are deliberately *not* fuzzy-matched: remasters,
+        translations and similarly named releases must never silently attach a
+        scrobble to the wrong AOTY rating.  A cached MusicBrainz release,
+        release-group or recording ID is a durable cross-service identity.
+        """
+
+        if not tracks:
+            return []
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT album_id, data_json FROM release_source_cache
+                WHERE source = 'musicbrainz'
+                """
+            ).fetchall()
+
+        release_index: dict[str, str] = {}
+        recording_index: dict[str, str] = {}
+        for row in rows:
+            payload = _json_load(row["data_json"], {})
+            if not isinstance(payload, dict):
+                continue
+            album_id = str(row["album_id"])
+            for key in ("musicbrainz_release_id", "musicbrainz_release_group_id"):
+                value = str(payload.get(key) or "").strip().casefold()
+                if value:
+                    release_index.setdefault(value, album_id)
+            for item in payload.get("tracks") or []:
+                if not isinstance(item, dict):
+                    continue
+                value = str(item.get("musicbrainz_recording_id") or "").strip().casefold()
+                if value:
+                    recording_index.setdefault(value, album_id)
+
+        linked: list[dict] = []
+        for track in tracks:
+            copied = dict(track)
+            album_mbid = str(copied.get("album_mbid") or "").strip().casefold()
+            track_mbid = str(copied.get("track_mbid") or "").strip().casefold()
+            album_id = release_index.get(album_mbid) or recording_index.get(track_mbid)
+            if album_id:
+                copied["aoty_album_id"] = album_id
+            linked.append(copied)
+        return linked
+
     def get_release_details(self, album_id: str) -> dict | None:
         album_id = str(album_id or "").strip()
         if not album_id:

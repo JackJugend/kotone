@@ -9,6 +9,8 @@ import discord
 
 from database import DB
 from lastfm_archive import LASTFM_ARCHIVE
+from lastfm_database import LASTFM_DB
+from lastfm_import import LastFMImportError, parse_lastfm_scrobbles_csv
 from rating_import import (
     RatingImportError,
     parse_aoty_ratings_csv,
@@ -24,6 +26,7 @@ from settings import (
 
 
 MAX_CSV_BYTES = 2 * 1024 * 1024
+MAX_LASTFM_CSV_BYTES = 20 * 1024 * 1024
 
 
 async def _kotone_user_autocomplete(
@@ -52,18 +55,17 @@ async def _kotone_user_autocomplete(
 def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
     @tree.command(
         name="import",
-        description="Importuje eksport ocen AOTY do kotone.",
+        description="Importuje dane AOTY lub Last.fm do Kotone.",
     )
     @discord.app_commands.describe(
         source="Źródło importu",
-        file="Wymagany wyłącznie dla eksportu AOTY CSV",
-        username="Użytkownik Kotone; operator może wskazać inną osobę",
+        file="Plik CSV AOTY lub Last.fm (opcjonalny dla Last.fm API)",
     )
     @discord.app_commands.autocomplete(username=_kotone_user_autocomplete)
     @discord.app_commands.choices(
         source=[
             discord.app_commands.Choice(name="AOTY — plik CSV", value="aoty"),
-            discord.app_commands.Choice(name="Last.fm — najnowsze scrobble", value="lastfm"),
+            discord.app_commands.Choice(name="Last.fm — API lub plik CSV", value="lastfm"),
         ]
     )
     async def import_command(
@@ -90,13 +92,14 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         actor_profile = KOTONE_USERS_BY_DISCORD_ID.get(discord_user_id)
         is_operator = is_operator_discord_id(discord_user_id)
         requested_key = str(username or "").strip().casefold()
-        if requested_key and not is_operator:
+        actor_key = str((actor_profile or {}).get("name") or "").casefold()
+        if requested_key and not is_operator and requested_key != actor_key:
             await interaction.response.send_message(
                 "Tylko operator może importować dane innego użytkownika Kotone.",
                 ephemeral=True,
             )
             return
-        profile_key = requested_key or str((actor_profile or {}).get("name") or "").casefold()
+        profile_key = requested_key or actor_key
         kotone_profile = KOTONE_USERS.get(profile_key)
         if kotone_profile is None:
             await interaction.response.send_message(
@@ -128,6 +131,64 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
 
         if source == "lastfm":
             await interaction.response.defer(ephemeral=True, thinking=True)
+            if file is not None:
+                filename = str(file.filename or "")
+                if not filename.casefold().endswith(".csv"):
+                    await interaction.followup.send(
+                        "Załącz plik `.csv` z historią Last.fm.",
+                        ephemeral=True,
+                    )
+                    return
+                if int(file.size or 0) > MAX_LASTFM_CSV_BYTES:
+                    await interaction.followup.send(
+                        "Plik Last.fm jest za duży. Maksymalny rozmiar to 20 MB.",
+                        ephemeral=True,
+                    )
+                    return
+                try:
+                    payload = await file.read()
+                    if len(payload) > MAX_LASTFM_CSV_BYTES:
+                        raise LastFMImportError("plik przekracza limit 20 MB")
+                    parsed = await asyncio.to_thread(parse_lastfm_scrobbles_csv, payload)
+                    tracks = await asyncio.to_thread(
+                        DB.link_lastfm_tracks_to_releases,
+                        list(parsed["tracks"]),
+                    )
+                    inserted = await asyncio.to_thread(
+                        LASTFM_DB.import_tracks,
+                        str(kotone_profile.get("name") or ""),
+                        tracks,
+                    )
+                    stats = await asyncio.to_thread(
+                        LASTFM_DB.archive_statistics,
+                        str(kotone_profile.get("name") or ""),
+                    )
+                except LastFMImportError as exc:
+                    await interaction.followup.send(
+                        f"❌ Niepoprawny CSV Last.fm: {exc}",
+                        ephemeral=True,
+                    )
+                    return
+                except Exception as exc:
+                    await interaction.followup.send(
+                        f"❌ Import Last.fm nie powiódł się: `{type(exc).__name__}: {exc}`",
+                        ephemeral=True,
+                    )
+                    return
+                await interaction.followup.send(
+                    f"✅ **Last.fm CSV → {kotone_profile.get('lastfm_username')}**\n"
+                    f"• wykryty format: **{parsed['format']}**\n"
+                    f"• dodane scrobble: **{inserted}**\n"
+                    f"• duplikaty w pliku: **{parsed['duplicates']}**\n"
+                    f"• odrzucone wiersze: **{len(parsed['rejected'])}**\n"
+                    f"• archiwum Kotone: **{stats['scrobbles']}** scrobbli · "
+                    f"**{stats['artists']}** wykonawców · **{stats['albums']}** albumów · "
+                    f"**{stats['tracks']}** utworów\n\n"
+                    "Daty zapisano w UTC. Powiązania z AOTY są tworzone tylko "
+                    "dla dokładnie zgodnych identyfikatorów MusicBrainz.",
+                    ephemeral=True,
+                )
+                return
             result = await LASTFM_ARCHIVE.import_newest_now(
                 str(kotone_profile.get("name") or "")
             )

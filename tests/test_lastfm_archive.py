@@ -59,6 +59,10 @@ class LastFMArchiveDatabaseTests(unittest.TestCase):
         self.assertEqual(self.db.state("enso")["next_page"], 2)
         self.assertFalse(self.db.state("enso")["complete"])
         self.assertEqual(self.db.get_profile("enso")["total_scrobbles"], 1234)
+        self.assertEqual(
+            self.db.archive_statistics("enso"),
+            {"scrobbles": 2, "artists": 2, "albums": 2, "tracks": 2},
+        )
 
         self.db.import_page(
             "enso",

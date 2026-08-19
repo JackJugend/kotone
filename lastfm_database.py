@@ -63,12 +63,28 @@ class LastFMDatabase:
                     artist_mbid TEXT,
                     album_mbid TEXT,
                     track_mbid TEXT,
+                    aoty_album_id TEXT,
                     url TEXT,
                     PRIMARY KEY (profile_key, played_at, artist, track)
                 );
                 CREATE INDEX IF NOT EXISTS idx_lastfm_scrobbles_recent
                     ON scrobbles(profile_key, played_at DESC);
                 """
+            )
+            self._ensure_column("scrobbles", "aoty_album_id", "TEXT")
+            self.connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_lastfm_scrobbles_aoty_album
+                ON scrobbles(aoty_album_id)"""
+            )
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute(f"PRAGMA table_info({table})")
+        }
+        if column not in columns:
+            self.connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
             )
 
     @staticmethod
@@ -161,26 +177,7 @@ class LastFMDatabase:
         inserted = 0
         with self._lock, self.connection:
             for track in rows:
-                cursor = self.connection.execute(
-                    """
-                    INSERT OR IGNORE INTO scrobbles(
-                        profile_key, played_at, artist, album, track,
-                        artist_mbid, album_mbid, track_mbid, url
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        key,
-                        int(track["played_at"]),
-                        str(track["artist"]),
-                        track.get("album"),
-                        str(track["track"]),
-                        track.get("artist_mbid"),
-                        track.get("album_mbid"),
-                        track.get("track_mbid"),
-                        track.get("url"),
-                    ),
-                )
-                inserted += max(0, int(cursor.rowcount or 0))
+                inserted += self._insert_track_locked(key, track)
             next_page = number + 1
             complete = int(next_page > total_pages)
             self.connection.execute(
@@ -220,30 +217,56 @@ class LastFMDatabase:
         inserted = 0
         with self._lock, self.connection:
             for track in page.get("tracks") or []:
-                cursor = self.connection.execute(
-                    """
-                    INSERT OR IGNORE INTO scrobbles(
-                        profile_key, played_at, artist, album, track,
-                        artist_mbid, album_mbid, track_mbid, url
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        key,
-                        int(track["played_at"]),
-                        str(track["artist"]),
-                        track.get("album"),
-                        str(track["track"]),
-                        track.get("artist_mbid"),
-                        track.get("album_mbid"),
-                        track.get("track_mbid"),
-                        track.get("url"),
-                    ),
-                )
-                inserted += max(0, int(cursor.rowcount or 0))
+                inserted += self._insert_track_locked(key, track)
             self.connection.execute(
                 "UPDATE import_state SET last_page_at = ?, last_error = NULL WHERE profile_key = ?",
                 (time.time(), key),
             )
+        return inserted
+
+    def _insert_track_locked(self, profile_key: str, track: dict) -> int:
+        """Insert one scrobble, preferring durable MBIDs over display names."""
+
+        played_at = int(track["played_at"])
+        track_mbid = str(track.get("track_mbid") or "").strip() or None
+        if track_mbid and self.connection.execute(
+            """
+            SELECT 1 FROM scrobbles
+            WHERE profile_key = ? AND played_at = ? AND track_mbid = ? LIMIT 1
+            """,
+            (profile_key, played_at, track_mbid),
+        ).fetchone():
+            return 0
+        cursor = self.connection.execute(
+            """
+            INSERT OR IGNORE INTO scrobbles(
+                profile_key, played_at, artist, album, track,
+                artist_mbid, album_mbid, track_mbid, aoty_album_id, url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                profile_key,
+                played_at,
+                str(track["artist"]),
+                track.get("album"),
+                str(track["track"]),
+                track.get("artist_mbid"),
+                track.get("album_mbid"),
+                track_mbid,
+                track.get("aoty_album_id"),
+                track.get("url"),
+            ),
+        )
+        return max(0, int(cursor.rowcount or 0))
+
+    def import_tracks(self, profile_key: object, tracks: Iterable[dict]) -> int:
+        """Import attachment rows without changing the API pagination cursor."""
+
+        key = self._key(profile_key)
+        inserted = 0
+        with self._lock, self.connection:
+            for track in tracks:
+                inserted += self._insert_track_locked(key, track)
         return inserted
 
     def mark_error(self, profile_key: object, error: object) -> None:
@@ -270,6 +293,92 @@ class LastFMDatabase:
                 (key,),
             ).fetchone()
         return dict(row) if row else None
+
+    def archive_statistics(self, profile_key: object) -> dict[str, int]:
+        """Return counters calculated solely from Kotone's stored scrobbles."""
+
+        key = self._key(profile_key)
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS scrobbles,
+                    COUNT(DISTINCT LOWER(TRIM(artist))) AS artists,
+                    COUNT(DISTINCT LOWER(TRIM(track))) AS tracks,
+                    COUNT(DISTINCT CASE
+                        WHEN TRIM(COALESCE(album, '')) <> ''
+                        THEN LOWER(TRIM(album))
+                    END) AS albums
+                FROM scrobbles WHERE profile_key = ?
+                """,
+                (key,),
+            ).fetchone()
+        return {
+            "scrobbles": int(row["scrobbles"] or 0),
+            "artists": int(row["artists"] or 0),
+            "albums": int(row["albums"] or 0),
+            "tracks": int(row["tracks"] or 0),
+        }
+
+    def artist_scrobble_count(
+        self,
+        profile_key: object,
+        artist: object,
+        *,
+        artist_mbid: object = None,
+    ) -> int:
+        """Count one artist from archive, preferring an exact MusicBrainz ID."""
+
+        key = self._key(profile_key)
+        mbid = str(artist_mbid or "").strip()
+        with self._lock:
+            if mbid:
+                row = self.connection.execute(
+                    """SELECT COUNT(*) AS count FROM scrobbles
+                    WHERE profile_key = ? AND artist_mbid = ?""",
+                    (key, mbid),
+                ).fetchone()
+            else:
+                row = self.connection.execute(
+                    """SELECT COUNT(*) AS count FROM scrobbles
+                    WHERE profile_key = ? AND LOWER(TRIM(artist)) = LOWER(TRIM(?))""",
+                    (key, str(artist or "")),
+                ).fetchone()
+        return int(row["count"] or 0)
+
+    def album_scrobble_count(
+        self,
+        profile_key: object,
+        album: object,
+        *,
+        album_mbid: object = None,
+        aoty_album_id: object = None,
+    ) -> int:
+        """Count one album from archive, preferring AOTY then MusicBrainz IDs."""
+
+        key = self._key(profile_key)
+        aoty_id = str(aoty_album_id or "").strip()
+        mbid = str(album_mbid or "").strip()
+        with self._lock:
+            if aoty_id:
+                row = self.connection.execute(
+                    """SELECT COUNT(*) AS count FROM scrobbles
+                    WHERE profile_key = ? AND aoty_album_id = ?""",
+                    (key, aoty_id),
+                ).fetchone()
+            elif mbid:
+                row = self.connection.execute(
+                    """SELECT COUNT(*) AS count FROM scrobbles
+                    WHERE profile_key = ? AND album_mbid = ?""",
+                    (key, mbid),
+                ).fetchone()
+            else:
+                row = self.connection.execute(
+                    """SELECT COUNT(*) AS count FROM scrobbles
+                    WHERE profile_key = ? AND LOWER(TRIM(album)) = LOWER(TRIM(?))""",
+                    (key, str(album or "")),
+                ).fetchone()
+        return int(row["count"] or 0)
 
 
 LASTFM_DB = LastFMDatabase()

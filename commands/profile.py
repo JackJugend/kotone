@@ -155,6 +155,11 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             if kotone_profile and kotone_profile.get("lastfm_username")
             else None
         )
+        lastfm_archive_stats = (
+            LASTFM_DB.archive_statistics((kotone_profile or {}).get("name"))
+            if kotone_profile and kotone_profile.get("lastfm_username")
+            else None
+        )
         avatar_emoji = user_avatar_emoji(username)
 
         if favorite_kind == "artists":
@@ -210,13 +215,28 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
                     url=profile_url,
                 )
 
-            if lastfm_profile:
+            if lastfm_profile or (lastfm_archive_stats and lastfm_archive_stats["scrobbles"]):
+                lastfm_username = str(
+                    (lastfm_profile or {}).get("lastfm_username")
+                    or (kotone_profile or {}).get("lastfm_username")
+                    or ""
+                )
                 lines = [
-                    f"{SOURCE_EMOJIS['lastfm']} **Last.fm · @{lastfm_profile['lastfm_username']}**",
-                    f"🎧 {_lastfm_count(lastfm_profile.get('total_scrobbles'))} scrobbli"
-                    f" • { _lastfm_count(lastfm_profile.get('artist_count')) } wykonawców"
-                    f" • { _lastfm_count(lastfm_profile.get('album_count')) } albumów",
+                    f"{SOURCE_EMOJIS['lastfm']} **Last.fm · @{lastfm_username}**",
                 ]
+                if lastfm_profile:
+                    lines.append(
+                        f"Profil Last.fm: {_lastfm_count(lastfm_profile.get('total_scrobbles'))} scrobbli"
+                        f" • {_lastfm_count(lastfm_profile.get('artist_count'))} wykonawców"
+                        f" • {_lastfm_count(lastfm_profile.get('album_count'))} albumów"
+                    )
+                if lastfm_archive_stats:
+                    lines.append(
+                        f"Archiwum Kotone: {_lastfm_count(lastfm_archive_stats['scrobbles'])} scrobbli"
+                        f" • {_lastfm_count(lastfm_archive_stats['artists'])} wykonawców"
+                        f" • {_lastfm_count(lastfm_archive_stats['albums'])} albumów"
+                        f" • {_lastfm_count(lastfm_archive_stats['tracks'])} utworów"
+                    )
                 if last_scrobble:
                     album_text = f" — {last_scrobble['album']}" if last_scrobble.get('album') else ""
                     lines.append(

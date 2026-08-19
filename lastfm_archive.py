@@ -6,6 +6,7 @@ import asyncio
 import time
 
 import lastfm
+from database import DB
 from lastfm_database import LASTFM_DB
 from settings import (
     KOTONE_USERS,
@@ -84,6 +85,10 @@ class LastFMArchive:
                     )
                     if page is None:
                         raise lastfm.LastFMUnavailable("Last.fm nie zwrócił nowych scrobbli.")
+                    page["tracks"] = await asyncio.to_thread(
+                        DB.link_lastfm_tracks_to_releases,
+                        list(page.get("tracks") or []),
+                    )
                     inserted = LASTFM_DB.refresh_newest_page(key, page)
                     self.last_success_at = now
                     self.last_error = None
@@ -110,6 +115,10 @@ class LastFMArchive:
             )
             if page is None:
                 raise lastfm.LastFMUnavailable("Last.fm nie zwrócił historii scrobbli.")
+            page["tracks"] = await asyncio.to_thread(
+                DB.link_lastfm_tracks_to_releases,
+                list(page.get("tracks") or []),
+            )
             inserted = LASTFM_DB.import_page(key, page)
             self.last_success_at = now
             self.last_error = None
@@ -164,6 +173,10 @@ class LastFMArchive:
             )
             if page is None:
                 raise lastfm.LastFMUnavailable("Last.fm nie zwrócił historii scrobbli.")
+            page["tracks"] = await asyncio.to_thread(
+                DB.link_lastfm_tracks_to_releases,
+                list(page.get("tracks") or []),
+            )
             state = LASTFM_DB.state(key)
             if state.get("complete"):
                 inserted = LASTFM_DB.refresh_newest_page(key, page)
