@@ -21,9 +21,9 @@ def add_must_hear_badge(cover: Image.Image) -> Image.Image:
     cover = cover.copy().convert("RGB")
     draw = ImageDraw.Draw(cover)
     size = min(cover.size)
-    # Keep a compact AOTY-like corner rather than covering a third of a small
-    # Discord thumbnail.
-    corner = max(20, int(size * 0.22))
+    # Slightly larger than AOTY's CSS corner so it stays readable in Discord
+    # thumbnails, without covering a third of a small cover.
+    corner = max(24, int(size * 0.26))
     width = cover.width
     draw.polygon(
         ((width - corner, 0), (width, 0), (width, corner)),
@@ -32,7 +32,7 @@ def add_must_hear_badge(cover: Image.Image) -> Image.Image:
 
     center_x = width - corner * 0.30
     center_y = corner * 0.29
-    outer = max(6, corner * 0.16)
+    outer = max(7, corner * 0.18)
     inner = outer * 0.44
     points = []
     for index in range(10):
