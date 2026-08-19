@@ -123,6 +123,10 @@ class HealthServer:
         album_id = str(request.match_info.get("album_id") or "").strip()
         token = str(request.match_info.get("token") or "").strip()
         details = await asyncio.to_thread(DB.get_release_details, album_id)
+        if details is None:
+            # Older/imported rows may have the original rating card (and its
+            # cover) but not yet a matching ``releases`` cache row.
+            details = await asyncio.to_thread(DB.get_any_active_rating_for_album, album_id)
         if not details:
             self.must_hear_cover_last_failure = "release_not_cached"
             raise web.HTTPNotFound()

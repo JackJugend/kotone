@@ -2110,6 +2110,32 @@ class Database:
 
         return self._row_to_rating(row) if row else None
 
+    def get_any_active_rating_for_album(self, album_id: str) -> dict | None:
+        """Return one in-scope rating card for a public cover fallback.
+
+        A cached release record is richer, but old imports can legitimately
+        have an active rating before the separate ``releases`` row exists.
+        The Must Hear image route uses this only to avoid a missing Discord
+        thumbnail; it never exposes an unconfigured user's data.
+        """
+
+        album_id = str(album_id or "").strip()
+        if not album_id:
+            return None
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT * FROM ratings
+                WHERE album_id = ? AND active = 1
+                ORDER BY CASE WHEN NULLIF(TRIM(COALESCE(cover_url, '')), '') IS NULL
+                              THEN 1 ELSE 0 END,
+                         COALESCE(detail_synced_at, sort_timestamp, 0) DESC
+                LIMIT 1
+                """,
+                (album_id,),
+            ).fetchone()
+        return self._row_to_rating(row) if row else None
+
     def _upsert_rating_locked(
         self,
         username: str,
