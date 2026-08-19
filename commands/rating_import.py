@@ -8,12 +8,17 @@ import io
 import discord
 
 from database import DB
+from lastfm_archive import LASTFM_ARCHIVE
 from rating_import import (
     RatingImportError,
     parse_aoty_ratings_csv,
     unmatched_report_csv,
 )
-from settings import GUILD_ID, IMPORT_USERS_BY_DISCORD_ID
+from settings import (
+    GUILD_ID,
+    IMPORT_USERS_BY_DISCORD_ID,
+    KOTONE_USERS_BY_DISCORD_ID,
+)
 
 
 MAX_CSV_BYTES = 2 * 1024 * 1024
@@ -25,11 +30,19 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         description="Importuje eksport ocen AOTY do kotone.",
     )
     @discord.app_commands.describe(
-        file="Plik CSV pobrany przez AOTY Settings → Export Ratings",
+        source="Źródło importu",
+        file="Wymagany wyłącznie dla eksportu AOTY CSV",
+    )
+    @discord.app_commands.choices(
+        source=[
+            discord.app_commands.Choice(name="AOTY — plik CSV", value="aoty"),
+            discord.app_commands.Choice(name="Last.fm — najnowsze scrobble", value="lastfm"),
+        ]
     )
     async def import_command(
         interaction: discord.Interaction,
-        file: discord.Attachment,
+        source: str = "aoty",
+        file: discord.Attachment | None = None,
     ) -> None:
         if interaction.guild_id != GUILD_ID:
             await interaction.response.send_message(
@@ -38,14 +51,52 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             )
             return
 
+        if source not in {"aoty", "lastfm"}:
+            await interaction.response.send_message(
+                "Nieznane źródło importu.",
+                ephemeral=True,
+            )
+            return
+
         discord_user_id = int(getattr(interaction.user, "id", 0) or 0)
+        kotone_profile = KOTONE_USERS_BY_DISCORD_ID.get(discord_user_id)
         username = IMPORT_USERS_BY_DISCORD_ID.get(discord_user_id)
-        if username is None:
+        if source == "lastfm" and kotone_profile is None:
+            await interaction.response.send_message(
+                "Nie masz uprawnień do importu Last.fm.",
+                ephemeral=True,
+            )
+            return
+        if source == "aoty" and username is None:
             await interaction.response.send_message(
                 "Nie masz uprawnień do `/import`.",
                 ephemeral=True,
             )
             return
+
+        if source == "lastfm":
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            result = await LASTFM_ARCHIVE.import_newest_now(
+                str((kotone_profile or {}).get("name") or "")
+            )
+            if result.get("error"):
+                await interaction.followup.send(
+                    f"❌ Import Last.fm nie wystartował: {result['error']}",
+                    ephemeral=True,
+                )
+                return
+            profile = result["profile"]
+            status = "zakończony" if result["complete"] else "kontynuowany w tle"
+            await interaction.followup.send(
+                f"✅ **Last.fm → {profile['lastfm_username']}**\n"
+                f"• zapisano najnowszą stronę: **{result['page']}/{result['total_pages']}**\n"
+                f"• nowych scrobbli: **{result['inserted']}**\n"
+                f"• łącznie: **{profile.get('total_scrobbles') or '—'}** scrobbli\n"
+                f"• starsza historia: **{status}** (najnowsze → najstarsze).",
+                ephemeral=True,
+            )
+            return
+
         canonical = DB.canonical_username(username)
         if canonical is None:
             await interaction.response.send_message(
@@ -54,6 +105,12 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             )
             return
 
+        if file is None:
+            await interaction.response.send_message(
+                "Dla `source: AOTY — plik CSV` załącz eksport ocen AOTY.",
+                ephemeral=True,
+            )
+            return
         filename = str(file.filename or "")
         if not filename.casefold().endswith(".csv"):
             await interaction.response.send_message(
