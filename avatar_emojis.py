@@ -1,13 +1,18 @@
-"""Synchronizacja emoji serwerowych z avatarami AOTY zapisanymi w SQLite.
+"""Synchronizacja emoji aplikacji z avatarami AOTY zapisanymi w SQLite.
 
 Discord nie pozwala zmienić pliku istniejącego custom emoji.  Dlatego przy
 zmianie avatara tworzymy najpierw tymczasowe emoji, dopiero potem usuwamy
 poprzednie botowe emoji i zmieniamy nazwę nowego na stałą (np. ``enso``).
+
+Używamy Application Emojis, nie emoji serwera: są własnością Kotone i nie
+zaśmiecają listy emoji na żadnym guildzie, a bot może ich używać we własnych
+wiadomościach niezależnie od uprawnień do emoji na serwerze.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 from io import BytesIO
 import time
 from urllib.parse import urlparse
@@ -18,7 +23,7 @@ from PIL import Image, ImageDraw, ImageOps
 
 from database import DB
 from http_client import HTTP
-from settings import GUILD_ID, KOTONE_AVATAR_EMOJI_NAMES
+from settings import KOTONE_AVATAR_EMOJI_NAMES
 
 MAX_EMOJI_BYTES = 256 * 1024
 MAX_SOURCE_AVATAR_BYTES = 4 * 1024 * 1024
@@ -60,11 +65,46 @@ def _safe_aoty_avatar_bytes(url: str) -> bytes:
 
 
 class AvatarEmojiSynchronizer:
-    """Replace only bot-owned cached avatar emojis when their source changes."""
+    """Replace app-owned cached avatar emojis when their source changes."""
 
     def __init__(self, client: discord.Client):
         self.client = client
         self._lock = asyncio.Lock()
+        self._application_id: int | None = None
+
+    async def _application_route(self, method: str, path: str, **parameters):
+        """Build a Discord application-emoji route using discord.py's auth.
+
+        discord.py 2.7 does not yet expose high-level helpers for application
+        emojis, but its authenticated HTTP client is stable and prevents us
+        from storing or manually handling the bot token.
+        """
+
+        if self._application_id is None:
+            application_id = getattr(self.client, "application_id", None)
+            if application_id is None:
+                info = await self.client.application_info()
+                application_id = info.id
+            self._application_id = int(application_id)
+        return discord.http.Route(
+            method,
+            path,
+            application_id=self._application_id,
+            **parameters,
+        )
+
+    async def _list_application_emojis(self) -> list[dict]:
+        route = await self._application_route(
+            "GET",
+            "/applications/{application_id}/emojis",
+        )
+        payload = await self.client.http.request(route)
+        return list((payload or {}).get("items") or [])
+
+    @staticmethod
+    def _image_data_uri(image: bytes) -> str:
+        encoded = base64.b64encode(image).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
 
     async def sync_cached(self) -> None:
         """Create missing emojis from existing SQLite avatars without AOTY IO."""
@@ -102,23 +142,20 @@ class AvatarEmojiSynchronizer:
         emoji_name: str,
         avatar_url: str,
     ) -> bool:
-        guild = self.client.get_guild(GUILD_ID)
-        if guild is None:
-            raise RuntimeError("serwer Discord nie jest jeszcze w cache klienta")
-
         state = DB.get_avatar_emoji_state(username) or {}
         emoji_id = str(state.get("emoji_id") or "")
+        application_emojis = await self._list_application_emojis()
         existing = next(
-            (emoji for emoji in guild.emojis if str(emoji.id) == emoji_id),
+            (emoji for emoji in application_emojis if str(emoji.get("id")) == emoji_id),
             None,
         )
         if existing is not None and state.get("avatar_url") == avatar_url:
             return False
 
-        # Never replace a same-named emoji that Kotone did not create and has
-        # not recorded in SQLite. It could be a manually uploaded server asset.
+        # Never replace a same-named emoji which is not recorded in SQLite.
+        # It may have been uploaded manually in the Discord Developer Portal.
         name_owner = next(
-            (emoji for emoji in guild.emojis if emoji.name == emoji_name),
+            (emoji for emoji in application_emojis if emoji.get("name") == emoji_name),
             None,
         )
         if existing is None and name_owner is not None and not emoji_id:
@@ -127,27 +164,43 @@ class AvatarEmojiSynchronizer:
             )
 
         image = await asyncio.to_thread(_safe_aoty_avatar_bytes, avatar_url)
+        create_route = await self._application_route(
+            "POST",
+            "/applications/{application_id}/emojis",
+        )
         if existing is None:
-            created = await guild.create_custom_emoji(
-                name=emoji_name,
-                image=image,
-                reason=f"Kotone: avatar AOTY użytkownika {username}",
+            created = await self.client.http.request(
+                create_route,
+                json={
+                    "name": emoji_name,
+                    "image": self._image_data_uri(image),
+                },
             )
         else:
             temporary_name = f"k_{emoji_name}_{int(time.time()) % 1000000}"
-            created = await guild.create_custom_emoji(
-                name=temporary_name[:32],
-                image=image,
-                reason=f"Kotone: nowy avatar AOTY użytkownika {username}",
+            created = await self.client.http.request(
+                create_route,
+                json={
+                    "name": temporary_name[:32],
+                    "image": self._image_data_uri(image),
+                },
             )
-            await existing.delete(
-                reason=f"Kotone: zastąpiono avatar AOTY użytkownika {username}",
+            delete_route = await self._application_route(
+                "DELETE",
+                "/applications/{application_id}/emojis/{emoji_id}",
+                emoji_id=existing["id"],
             )
-            await created.edit(
-                name=emoji_name,
-                reason=f"Kotone: przywrócono stałą nazwę emoji {emoji_name}",
+            await self.client.http.request(delete_route)
+            rename_route = await self._application_route(
+                "PATCH",
+                "/applications/{application_id}/emojis/{emoji_id}",
+                emoji_id=created["id"],
+            )
+            created = await self.client.http.request(
+                rename_route,
+                json={"name": emoji_name},
             )
 
-        DB.save_avatar_emoji_state(username, created.id, avatar_url)
+        DB.save_avatar_emoji_state(username, created["id"], avatar_url)
         print(f"[AVATAR EMOJI] {username}: zapisano :{emoji_name}:")
         return True
