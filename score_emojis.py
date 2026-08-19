@@ -24,7 +24,7 @@ SCORE_EMOJI_PREFIX = "score_"
 SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v8-large-centred"
 SCORE_EMOJI_SIZE = 128
 SCORE_EMOJI_MAX_BYTES = 256 * 1024
-STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v4-large-centred"
+STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v5-drawn-heart"
 STATUS_EMOJI_NAMES = {
     "like": "like",
     "tracklist": "tracklist",
@@ -170,37 +170,33 @@ def render_status_emoji(key: str) -> bytes:
     color = (150, 154, 160, 255)
 
     if name == "like":
-        font = _font(96)
-        text = "♥"
-        left, top, right, bottom = draw.textbbox((0, 0), text, font=font, stroke_width=1)
-        draw.text(
-            ((size - (right - left)) / 2 - left, (size - (bottom - top)) / 2 - top - 3),
-            text,
-            font=font,
-            fill=color,
-            stroke_width=0,
-        )
+        # Noto Sans intentionally has no monochrome heart glyph, which
+        # yielded Discord's empty ``□`` fallback.  Draw the heart ourselves
+        # so it is large, centred and identical on Windows/Railway.
+        draw.ellipse((24, 19, 65, 62), fill=color)
+        draw.ellipse((63, 19, 104, 62), fill=color)
+        draw.polygon(((24, 43), (104, 43), (64, 108)), fill=color)
     elif name == "tracklist":
         # AOTY's icon uses two compact numbered rows, optically centred.
-        font = _font(39)
-        for index, y in enumerate((47, 83), start=1):
+        font = _font(46)
+        for index, y in enumerate((42, 86), start=1):
             label = str(index)
             left, top, right, bottom = draw.textbbox((0, 0), label, font=font, stroke_width=2)
             draw.text(
-                (30 - (right - left) / 2 - left, y - (bottom - top) / 2 - top),
+                (29 - (right - left) / 2 - left, y - (bottom - top) / 2 - top),
                 label,
                 font=font,
                 fill=color,
                 stroke_width=1,
                 stroke_fill=(0, 0, 0, 255),
             )
-            _outlined_line(draw, [(53, y), (104, y)], width=8)
+            _outlined_line(draw, [(55, y), (110, y)], width=10)
     else:
         # A clean paper outline with a folded top-right corner.
-        _outlined_line(draw, [(33, 19), (82, 19), (96, 33), (96, 108), (33, 108), (33, 19)], width=8)
-        _outlined_line(draw, [(82, 19), (82, 34), (96, 34)], width=8)
-        _outlined_line(draw, [(49, 65), (80, 65)], width=6)
-        _outlined_line(draw, [(49, 84), (80, 84)], width=6)
+        _outlined_line(draw, [(25, 12), (82, 12), (106, 36), (106, 116), (25, 116), (25, 12)], width=10)
+        _outlined_line(draw, [(82, 12), (82, 37), (106, 37)], width=10)
+        _outlined_line(draw, [(45, 72), (87, 72)], width=8)
+        _outlined_line(draw, [(45, 94), (87, 94)], width=8)
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
