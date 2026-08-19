@@ -883,18 +883,24 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
                 rating_infos=infos,
             )
 
-        self.assertNotIn(view.user_select, view.children)
+        self.assertFalse(
+            any(isinstance(child, views_module.UserRatingSelect) for child in view.children)
+        )
+        tab_message = SimpleNamespace(delete=AsyncMock())
         interaction = SimpleNamespace(
             response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
-            followup=SimpleNamespace(send=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock(return_value=tab_message)),
             message=SimpleNamespace(edit=AsyncMock()),
         )
         await view._show_selected_review(interaction)
-        self.assertIn(view.user_select, view.children)
-        self.assertEqual(view.user_select.placeholder, "Wybierz użytkownika")
-
-        view._set_user_selector_visible(False)
-        self.assertNotIn(view.user_select, view.children)
+        tab_view = interaction.followup.send.await_args.kwargs["view"]
+        self.assertIsInstance(tab_view, views_module.AlbumReviewTabView)
+        selector = next(
+            child for child in tab_view.children
+            if isinstance(child, views_module.UserRatingSelect)
+        )
+        self.assertEqual(selector.placeholder, "Wybierz użytkownika")
+        self.assertIs(view.artist_message, tab_message)
 
 
 @unittest.skipIf(
