@@ -20,7 +20,7 @@ from score_emoji_registry import set_score_emojis
 from status_emoji_registry import set_status_emojis
 
 SCORE_EMOJI_PREFIX = "score_"
-SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v6-grey-remainder"
+SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v7-optical-centering"
 SCORE_EMOJI_SIZE = 96
 SCORE_EMOJI_MAX_BYTES = 256 * 1024
 STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v3-transparent"
@@ -113,8 +113,12 @@ def render_score_emoji(score: int | None) -> bytes:
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     width = right - left
     height = bottom - top
+    # A geometric centre is not enough for narrow glyphs such as ``1``: the
+    # visible ink then looks left-heavy next to a centred progress bar.
+    # Compensate only that optical imbalance, scaled for the 96 px source.
+    narrow_digit_offset = text.count("1") * 3
     draw.text(
-        ((size - width) / 2 - left, 1 + (68 - height) / 2 - top),
+        ((size - width) / 2 - left + narrow_digit_offset, 1 + (68 - height) / 2 - top),
         text,
         font=font,
         fill=(230, 232, 235, 255),
