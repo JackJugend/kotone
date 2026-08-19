@@ -1,0 +1,275 @@
+"""Small independent SQLite archive for public Last.fm listening history.
+
+This database is intentionally separate from ``kotone.sqlite3``.  Kotone's
+AOTY state may be migrated or restored independently, while an incremental
+scrobble archive must keep its long-running newest-to-oldest cursor.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+import threading
+import time
+from pathlib import Path
+from typing import Iterable
+
+from settings import LASTFM_DATABASE_FILE
+
+
+class LastFMDatabase:
+    def __init__(self, path: str = LASTFM_DATABASE_FILE) -> None:
+        self.path = str(path)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(
+            self.path,
+            check_same_thread=False,
+        )
+        self.connection.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
+        with self._lock, self.connection:
+            self.connection.execute("PRAGMA journal_mode=WAL")
+            self.connection.execute("PRAGMA busy_timeout=30000")
+            self.connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS profiles (
+                    profile_key TEXT PRIMARY KEY,
+                    lastfm_username TEXT NOT NULL,
+                    profile_url TEXT,
+                    avatar_url TEXT,
+                    total_scrobbles INTEGER,
+                    artist_count INTEGER,
+                    album_count INTEGER,
+                    track_count INTEGER,
+                    registered_at INTEGER,
+                    fetched_at REAL NOT NULL DEFAULT 0
+                );
+
+                CREATE TABLE IF NOT EXISTS import_state (
+                    profile_key TEXT PRIMARY KEY,
+                    next_page INTEGER NOT NULL DEFAULT 1,
+                    total_pages INTEGER,
+                    total_scrobbles INTEGER,
+                    complete INTEGER NOT NULL DEFAULT 0,
+                    last_page_at REAL NOT NULL DEFAULT 0,
+                    last_error TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS scrobbles (
+                    profile_key TEXT NOT NULL,
+                    played_at INTEGER NOT NULL,
+                    artist TEXT NOT NULL,
+                    album TEXT,
+                    track TEXT NOT NULL,
+                    artist_mbid TEXT,
+                    album_mbid TEXT,
+                    track_mbid TEXT,
+                    url TEXT,
+                    PRIMARY KEY (profile_key, played_at, artist, track)
+                );
+                CREATE INDEX IF NOT EXISTS idx_lastfm_scrobbles_recent
+                    ON scrobbles(profile_key, played_at DESC);
+                """
+            )
+
+    @staticmethod
+    def _key(profile_key: object) -> str:
+        return str(profile_key or "").strip().casefold()
+
+    @staticmethod
+    def _integer(value: object) -> int | None:
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    def save_profile(self, profile_key: object, data: dict) -> None:
+        key = self._key(profile_key)
+        if not key:
+            return
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO profiles(
+                    profile_key, lastfm_username, profile_url, avatar_url,
+                    total_scrobbles, artist_count, album_count, track_count,
+                    registered_at, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(profile_key) DO UPDATE SET
+                    lastfm_username=excluded.lastfm_username,
+                    profile_url=excluded.profile_url,
+                    avatar_url=excluded.avatar_url,
+                    total_scrobbles=excluded.total_scrobbles,
+                    artist_count=excluded.artist_count,
+                    album_count=excluded.album_count,
+                    track_count=excluded.track_count,
+                    registered_at=excluded.registered_at,
+                    fetched_at=excluded.fetched_at
+                """,
+                (
+                    key,
+                    str(data.get("lastfm_username") or key),
+                    data.get("url"),
+                    data.get("avatar_url"),
+                    self._integer(data.get("total_scrobbles")),
+                    self._integer(data.get("artist_count")),
+                    self._integer(data.get("album_count")),
+                    self._integer(data.get("track_count")),
+                    self._integer(data.get("registered_at")),
+                    time.time(),
+                ),
+            )
+
+    def profile_due(self, profile_key: object, interval_seconds: float) -> bool:
+        key = self._key(profile_key)
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT fetched_at FROM profiles WHERE profile_key = ?", (key,)
+            ).fetchone()
+        return row is None or time.time() - float(row["fetched_at"] or 0) >= interval_seconds
+
+    def get_profile(self, profile_key: object) -> dict | None:
+        key = self._key(profile_key)
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT * FROM profiles WHERE profile_key = ?", (key,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def state(self, profile_key: object) -> dict:
+        key = self._key(profile_key)
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT * FROM import_state WHERE profile_key = ?", (key,)
+            ).fetchone()
+        return dict(row) if row else {
+            "profile_key": key,
+            "next_page": 1,
+            "total_pages": None,
+            "total_scrobbles": None,
+            "complete": 0,
+            "last_page_at": 0.0,
+            "last_error": None,
+        }
+
+    def import_page(self, profile_key: object, page: dict) -> int:
+        """Persist one newest-to-oldest API page and advance its cursor."""
+
+        key = self._key(profile_key)
+        number = max(1, int(page.get("page") or 1))
+        total_pages = max(1, int(page.get("total_pages") or 1))
+        rows: Iterable[dict] = page.get("tracks") or []
+        inserted = 0
+        with self._lock, self.connection:
+            for track in rows:
+                cursor = self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO scrobbles(
+                        profile_key, played_at, artist, album, track,
+                        artist_mbid, album_mbid, track_mbid, url
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        key,
+                        int(track["played_at"]),
+                        str(track["artist"]),
+                        track.get("album"),
+                        str(track["track"]),
+                        track.get("artist_mbid"),
+                        track.get("album_mbid"),
+                        track.get("track_mbid"),
+                        track.get("url"),
+                    ),
+                )
+                inserted += max(0, int(cursor.rowcount or 0))
+            next_page = number + 1
+            complete = int(next_page > total_pages)
+            self.connection.execute(
+                """
+                INSERT INTO import_state(
+                    profile_key, next_page, total_pages, total_scrobbles,
+                    complete, last_page_at, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(profile_key) DO UPDATE SET
+                    next_page=excluded.next_page,
+                    total_pages=excluded.total_pages,
+                    total_scrobbles=excluded.total_scrobbles,
+                    complete=excluded.complete,
+                    last_page_at=excluded.last_page_at,
+                    last_error=NULL
+                """,
+                (
+                    key,
+                    next_page,
+                    total_pages,
+                    max(0, int(page.get("total") or 0)),
+                    complete,
+                    time.time(),
+                ),
+            )
+        return inserted
+
+    def refresh_newest_page(self, profile_key: object, page: dict) -> int:
+        """Merge fresh page one after the full archive has completed.
+
+        This deliberately leaves the historical cursor complete: future syncs
+        only add recently played tracks instead of crawling every old page
+        again.
+        """
+
+        key = self._key(profile_key)
+        inserted = 0
+        with self._lock, self.connection:
+            for track in page.get("tracks") or []:
+                cursor = self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO scrobbles(
+                        profile_key, played_at, artist, album, track,
+                        artist_mbid, album_mbid, track_mbid, url
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        key,
+                        int(track["played_at"]),
+                        str(track["artist"]),
+                        track.get("album"),
+                        str(track["track"]),
+                        track.get("artist_mbid"),
+                        track.get("album_mbid"),
+                        track.get("track_mbid"),
+                        track.get("url"),
+                    ),
+                )
+                inserted += max(0, int(cursor.rowcount or 0))
+            self.connection.execute(
+                "UPDATE import_state SET last_page_at = ?, last_error = NULL WHERE profile_key = ?",
+                (time.time(), key),
+            )
+        return inserted
+
+    def mark_error(self, profile_key: object, error: object) -> None:
+        key = self._key(profile_key)
+        state = self.state(key)
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO import_state(profile_key, next_page, complete, last_error)
+                VALUES (?, ?, 0, ?)
+                ON CONFLICT(profile_key) DO UPDATE SET last_error=excluded.last_error
+                """,
+                (key, int(state.get("next_page") or 1), str(error or "")),
+            )
+
+    def latest_scrobble(self, profile_key: object) -> dict | None:
+        key = self._key(profile_key)
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT * FROM scrobbles WHERE profile_key = ?
+                ORDER BY played_at DESC LIMIT 1
+                """,
+                (key,),
+            ).fetchone()
+        return dict(row) if row else None
+
+
+LASTFM_DB = LastFMDatabase()

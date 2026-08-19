@@ -215,6 +215,88 @@ class LastFMClient:
             ],
         }
 
+    def user_info(self, username: object) -> dict[str, Any] | None:
+        """Return lightweight public profile counters for one Last.fm user."""
+
+        name = str(username or "").strip()
+        if not name:
+            return None
+        payload = self._json("user.getInfo", user=name)
+        data = payload.get("user")
+        if not isinstance(data, dict):
+            return None
+        return {
+            "lastfm_username": str(data.get("name") or name).strip(),
+            "url": str(data.get("url") or "").strip() or None,
+            "avatar_url": _image_url(data.get("image")),
+            "total_scrobbles": str(data.get("playcount") or "").strip() or None,
+            "artist_count": str(data.get("artist_count") or "").strip() or None,
+            "album_count": str(data.get("album_count") or "").strip() or None,
+            "track_count": str(data.get("track_count") or "").strip() or None,
+            "registered_at": str((data.get("registered") or {}).get("unixtime") or "").strip() or None,
+        }
+
+    def recent_tracks(
+        self,
+        username: object,
+        *,
+        page: int = 1,
+        limit: int = 200,
+    ) -> dict[str, Any] | None:
+        """Read one newest-first page of public scrobbles without guessing."""
+
+        name = str(username or "").strip()
+        if not name:
+            return None
+        payload = self._json(
+            "user.getRecentTracks",
+            user=name,
+            page=max(1, int(page)),
+            limit=max(1, min(200, int(limit))),
+            extended=1,
+        )
+        data = payload.get("recenttracks")
+        if not isinstance(data, dict):
+            return None
+        raw_tracks = data.get("track") or []
+        if isinstance(raw_tracks, dict):
+            raw_tracks = [raw_tracks]
+        tracks: list[dict[str, Any]] = []
+        for raw in raw_tracks:
+            if not isinstance(raw, dict):
+                continue
+            date = raw.get("date") if isinstance(raw.get("date"), dict) else {}
+            played_at = str(date.get("uts") or "").strip()
+            # The currently playing item has no timestamp and must not be
+            # treated as a durable scrobble.
+            if not played_at.isdigit():
+                continue
+            artist_data = raw.get("artist") if isinstance(raw.get("artist"), dict) else {}
+            album_data = raw.get("album") if isinstance(raw.get("album"), dict) else {}
+            artist = str(artist_data.get("#text") or artist_data.get("name") or "").strip()
+            title = str(raw.get("name") or "").strip()
+            if not artist or not title:
+                continue
+            tracks.append(
+                {
+                    "played_at": int(played_at),
+                    "artist": artist,
+                    "album": str(album_data.get("#text") or album_data.get("name") or "").strip() or None,
+                    "track": title,
+                    "artist_mbid": str(artist_data.get("mbid") or "").strip() or None,
+                    "album_mbid": str(album_data.get("mbid") or "").strip() or None,
+                    "track_mbid": str(raw.get("mbid") or "").strip() or None,
+                    "url": str(raw.get("url") or "").strip() or None,
+                }
+            )
+        attributes = data.get("@attr") if isinstance(data.get("@attr"), dict) else {}
+        return {
+            "page": max(1, int(attributes.get("page") or page)),
+            "total_pages": max(1, int(attributes.get("totalPages") or 1)),
+            "total": max(0, int(attributes.get("total") or 0)),
+            "tracks": tracks,
+        }
+
     def album_info(self, artist: object, album: object, *, username: object = None) -> dict[str, Any] | None:
         artist_name = str(artist or "").strip()
         album_name = str(album or "").strip()

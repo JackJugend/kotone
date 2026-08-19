@@ -14,6 +14,7 @@ import discord
 
 from database import DB
 from http_client import HTTP, PRIORITY_MAINTENANCE
+from lastfm_archive import LASTFM_ARCHIVE
 from services import DATA
 from settings import (
     ARCHIVE_WORKER_ERROR_SLEEP,
@@ -94,6 +95,13 @@ class BackgroundWorker:
     async def _run_once(self) -> float:
         """Do one bounded unit of maintenance and return the next sleep time."""
         self.last_run_at = time.time()
+
+        # One Last.fm page is intentionally independent from AOTY's archive.
+        # It is rate-gated inside LASTFM_ARCHIVE and starts at page one, so the
+        # latest scrobble is available long before the old history completes.
+        lastfm_result = await LASTFM_ARCHIVE.run_one()
+        if lastfm_result.get("error"):
+            print(f"[LASTFM ARCHIVE] {lastfm_result['error']}")
 
         if HTTP.db_only_enabled():
             # /dbonly means no AOTY requests, not no useful background work.

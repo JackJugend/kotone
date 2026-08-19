@@ -5,7 +5,8 @@ import requests
 
 import aoty
 from services import DATA
-from settings import resolve_aoty_username
+from lastfm_database import LASTFM_DB
+from settings import KOTONE_USERS_BY_AOTY, SOURCE_EMOJIS, resolve_aoty_username
 from display_utils import display_romanized_name
 from shared import (
     build_profile_variables,
@@ -13,6 +14,7 @@ from shared import (
     score_color,
     score_icon,
     set_aoty_footer,
+    user_avatar_emoji,
     username_autocomplete,
 )
 from views import ProfilePagerView
@@ -51,6 +53,13 @@ def _recent_line(item: dict) -> str:
         f"{score_icon(score)} **{score}** · "
         f"[{artist} — {album}]({url}) · {release_format}{flags_text}"
     )
+
+
+def _lastfm_count(value: object) -> str:
+    try:
+        return f"{int(value):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return "—"
 
 
 def setup_profile_command(tree: discord.app_commands.CommandTree):
@@ -135,6 +144,18 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         )
         favorites = variables.favorites[:5]
         favorite_kind = variables.favorite_kind
+        kotone_profile = KOTONE_USERS_BY_AOTY.get(username.casefold())
+        lastfm_profile = (
+            LASTFM_DB.get_profile((kotone_profile or {}).get("name"))
+            if kotone_profile and kotone_profile.get("lastfm_username")
+            else None
+        )
+        last_scrobble = (
+            LASTFM_DB.latest_scrobble((kotone_profile or {}).get("name"))
+            if kotone_profile and kotone_profile.get("lastfm_username")
+            else None
+        )
+        avatar_emoji = user_avatar_emoji(username)
 
         if favorite_kind == "artists":
             favorites_field_name = "Favorite Artists"
@@ -178,13 +199,35 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
 
             if avatar:
                 embed.set_author(
-                    name=display_username,
+                    name=f"{avatar_emoji} {display_username}".strip(),
                     url=profile_url,
                     icon_url=avatar,
                 )
                 embed.set_thumbnail(url=avatar)
             else:
-                embed.set_author(name=display_username, url=profile_url)
+                embed.set_author(
+                    name=f"{avatar_emoji} {display_username}".strip(),
+                    url=profile_url,
+                )
+
+            if lastfm_profile:
+                lines = [
+                    f"{SOURCE_EMOJIS['lastfm']} **Last.fm · @{lastfm_profile['lastfm_username']}**",
+                    f"🎧 {_lastfm_count(lastfm_profile.get('total_scrobbles'))} scrobbli"
+                    f" • { _lastfm_count(lastfm_profile.get('artist_count')) } wykonawców"
+                    f" • { _lastfm_count(lastfm_profile.get('album_count')) } albumów",
+                ]
+                if last_scrobble:
+                    album_text = f" — {last_scrobble['album']}" if last_scrobble.get('album') else ""
+                    lines.append(
+                        f"Ostatni scrobble: **{last_scrobble['artist']} — "
+                        f"{last_scrobble['track']}**{album_text}"
+                    )
+                embed.add_field(
+                    name=f"{avatar_emoji} Dane odsłuchów".strip(),
+                    value="\n".join(lines),
+                    inline=False,
+                )
 
             # Zgodnie z ustawieniem profilu AOTY pokazujemy tylko ten typ
             # Favorites, który user ma wybrany jako domyślny.

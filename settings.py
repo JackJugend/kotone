@@ -69,6 +69,9 @@ if DATA_DIR:
 
     DATA_FILE = os.path.join(DATA_DIR, "data.json")
     DATABASE_FILE = os.path.join(DATA_DIR, "kotone.sqlite3")
+    # Listening history is deliberately separate from AOTY ratings so a
+    # migration/recovery of one archive cannot overwrite the other.
+    LASTFM_DATABASE_FILE = os.path.join(DATA_DIR, "kotone-lastfm.sqlite3")
     MIGRATED_DATA_BACKUP_FILE = os.path.join(
         DATA_DIR,
         "data_migrated.json.bak",
@@ -76,6 +79,7 @@ if DATA_DIR:
 else:
     DATA_FILE = DEFAULT_DATA_FILE
     DATABASE_FILE = DEFAULT_DATABASE_FILE
+    LASTFM_DATABASE_FILE = os.path.join(BASE_DIR, "kotone-lastfm.sqlite3")
     MIGRATED_DATA_BACKUP_FILE = os.path.join(
         BASE_DIR,
         "data_migrated.json.bak",
@@ -578,6 +582,17 @@ ARTIST_SOURCE_TTL = _runtime_int(
 )
 LASTFM_RELEASE_SOURCE_TTL = _runtime_int(
     "lastfm_release_source_ttl", 30 * 24 * 60 * 60, 24 * 60 * 60
+)
+# One page per low-priority worker pass, newest -> oldest.  Fresh listening
+# data appears first while the historical archive grows without bursts.
+LASTFM_PROFILE_SYNC_INTERVAL = _runtime_int(
+    "lastfm_profile_sync_interval", 6 * 60 * 60, 15 * 60
+)
+LASTFM_HISTORY_PAGE_SIZE = _runtime_int(
+    "lastfm_history_page_size", 200, 25
+)
+LASTFM_HISTORY_PAGE_INTERVAL = _runtime_int(
+    "lastfm_history_page_interval", 20, 5
 )
 
 # Lokalny backup SQLite na tym samym volume. Railway backups nadal są mocno

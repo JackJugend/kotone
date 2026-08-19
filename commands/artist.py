@@ -4,9 +4,11 @@ import requests
 import aoty
 from commands.album import _music_from_presence
 from services import DATA
+from lastfm_database import LASTFM_DB
 from display_utils import display_genres, display_romanized_name
 from formats import RATING_FORMATS, format_key_from_label
 from presence_cache import PRESENCE_CACHE
+from settings import KOTONE_USERS_BY_DISCORD_ID
 from shared import (
     aoty_score_or_missing,
     build_release_variables,
@@ -1082,11 +1084,20 @@ def setup_artist_command(
                 cached_activities=PRESENCE_CACHE.activities_for(interaction.user.id),
             )
             if presence is None:
-                await interaction.followup.send(
-                    "❌ Nie widzę aktywnego artysty w Twoim Rich Presence."
+                profile = KOTONE_USERS_BY_DISCORD_ID.get(interaction.user.id)
+                scrobble = LASTFM_DB.latest_scrobble(
+                    (profile or {}).get("name")
                 )
-                return
-            artist, _album, source = presence
+                if not scrobble or not scrobble.get("artist"):
+                    await interaction.followup.send(
+                        "❌ Nie widzę aktywnego artysty w Rich Presence ani "
+                        "zapisanego ostatniego scrobbla Last.fm."
+                    )
+                    return
+                artist = str(scrobble["artist"])
+                source = "Last.fm (ostatni scrobble)"
+            else:
+                artist, _album, source = presence
             print(f"[ARTIST] Rich Presence ({source}): {artist}")
 
         try:

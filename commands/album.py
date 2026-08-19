@@ -10,7 +10,8 @@ import aoty
 
 from services import DATA
 from display_utils import display_romanized_name
-from settings import USERS
+from settings import KOTONE_USERS_BY_DISCORD_ID, USERS
+from lastfm_database import LASTFM_DB
 from presence_cache import PRESENCE_CACHE
 from shared import (
     add_centered_inline_fields,
@@ -246,10 +247,21 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 cached_activities=PRESENCE_CACHE.activities_for(interaction.user.id),
             )
             if presence is None:
-                await interaction.followup.send(
-                    "❌ Nie widzę aktywnego albumu w Twoim Rich Presence.")
-                return
-            artist, album, source = presence
+                profile = KOTONE_USERS_BY_DISCORD_ID.get(interaction.user.id)
+                scrobble = LASTFM_DB.latest_scrobble(
+                    (profile or {}).get("name")
+                )
+                if not scrobble or not scrobble.get("album"):
+                    await interaction.followup.send(
+                        "❌ Nie widzę aktywnego albumu w Twoim Rich Presence ani "
+                        "zapisanego ostatniego scrobbla Last.fm."
+                    )
+                    return
+                artist = str(scrobble["artist"])
+                album = str(scrobble["album"])
+                source = "Last.fm (ostatni scrobble)"
+            else:
+                artist, album, source = presence
             print(f"[ALBUM] Rich Presence ({source}): {artist} — {album}")
 
         try:
