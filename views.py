@@ -17,8 +17,8 @@ from release_tabs import (
 )
 from settings import USERS
 from shared import (
+    dropdown_score_or_nr,
     rating_flags_text,
-    score_or_nr,
 )
 
 
@@ -689,7 +689,7 @@ class RatingSelect(discord.ui.Select):
         for index, item in enumerate(items):
             artist = display_romanized_name(item.get("artist") or "—")
             album = display_romanized_name(item.get("album") or item.get("title") or "—")
-            score = score_or_nr(item.get("score"))
+            score = dropdown_score_or_nr(item.get("score"))
             flags = rating_flags_text(item)
             description = f"{score} {flags}".strip()
             options.append(
@@ -882,7 +882,7 @@ class UserRatingSelect(discord.ui.Select):
 
         for username in usernames[:25]:
             info = rating_infos.get(username, {})
-            score = score_or_nr(info.get("score"))
+            score = dropdown_score_or_nr(info.get("score"))
             flags = rating_flags_text(info)
             options.append(
                 discord.SelectOption(
@@ -1212,7 +1212,7 @@ class ProfilePositionSelect(discord.ui.Select):
                     label=f"{artist} — {album}"[:100],
                     value=f"rating:{absolute_index}",
                     description=(
-                        f"Ocena • {score_or_nr(item.get('score'))} "
+                        f"Ocena • {dropdown_score_or_nr(item.get('score'))} "
                         f"{rating_flags_text(item)}"
                     ).strip()[:100],
                     default=(

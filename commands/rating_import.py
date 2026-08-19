@@ -8,8 +8,7 @@ import io
 import discord
 
 from database import DB
-from lastfm_archive import LASTFM_ARCHIVE
-from lastfm_database import LASTFM_DB
+from lastfm_globals import LASTFM_DB
 from lastfm_import import LastFMImportError, parse_lastfm_scrobbles_csv
 from rating_import import (
     RatingImportError,
@@ -59,13 +58,13 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
     )
     @discord.app_commands.describe(
         source="Źródło importu",
-        file="Plik CSV AOTY lub Last.fm (opcjonalny dla Last.fm API)",
+        file="Wymagany plik CSV AOTY albo Last.fm",
     )
     @discord.app_commands.autocomplete(username=_kotone_user_autocomplete)
     @discord.app_commands.choices(
         source=[
             discord.app_commands.Choice(name="AOTY — plik CSV", value="aoty"),
-            discord.app_commands.Choice(name="Last.fm — API lub plik CSV", value="lastfm"),
+            discord.app_commands.Choice(name="Last.fm — plik CSV", value="lastfm"),
         ]
     )
     async def import_command(
@@ -130,86 +129,69 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             return
 
         if source == "lastfm":
+            if file is None:
+                await interaction.response.send_message(
+                    "Dla importu Last.fm załącz plik `.csv`. Eksport możesz "
+                    "pobrać z <https://lastfm.ghan.nl/export/>. Ręczne pobranie "
+                    "najnowszych danych z API jest dostępne dla operatorów w `/check`.",
+                    ephemeral=True,
+                )
+                return
             await interaction.response.defer(ephemeral=True, thinking=True)
-            if file is not None:
-                filename = str(file.filename or "")
-                if not filename.casefold().endswith(".csv"):
-                    await interaction.followup.send(
-                        "Załącz plik `.csv` z historią Last.fm.",
-                        ephemeral=True,
-                    )
-                    return
-                if int(file.size or 0) > MAX_LASTFM_CSV_BYTES:
-                    await interaction.followup.send(
-                        "Plik Last.fm jest za duży. Maksymalny rozmiar to 20 MB.",
-                        ephemeral=True,
-                    )
-                    return
-                try:
-                    payload = await file.read()
-                    if len(payload) > MAX_LASTFM_CSV_BYTES:
-                        raise LastFMImportError("plik przekracza limit 20 MB")
-                    parsed = await asyncio.to_thread(parse_lastfm_scrobbles_csv, payload)
-                    tracks = await asyncio.to_thread(
-                        DB.link_lastfm_tracks_to_releases,
-                        list(parsed["tracks"]),
-                    )
-                    inserted = await asyncio.to_thread(
-                        LASTFM_DB.import_tracks,
-                        str(kotone_profile.get("name") or ""),
-                        tracks,
-                    )
-                    stats = await asyncio.to_thread(
-                        LASTFM_DB.archive_statistics,
-                        str(kotone_profile.get("name") or ""),
-                    )
-                except LastFMImportError as exc:
-                    await interaction.followup.send(
-                        f"❌ Niepoprawny CSV Last.fm: {exc}",
-                        ephemeral=True,
-                    )
-                    return
-                except Exception as exc:
-                    await interaction.followup.send(
-                        f"❌ Import Last.fm nie powiódł się: `{type(exc).__name__}: {exc}`",
-                        ephemeral=True,
-                    )
-                    return
+            filename = str(file.filename or "")
+            if not filename.casefold().endswith(".csv"):
                 await interaction.followup.send(
-                    f"✅ **Last.fm CSV → {kotone_profile.get('lastfm_username')}**\n"
-                    f"• wykryty format: **{parsed['format']}**\n"
-                    f"• dodane scrobble: **{inserted}**\n"
-                    f"• duplikaty w pliku: **{parsed['duplicates']}**\n"
-                    f"• odrzucone wiersze: **{len(parsed['rejected'])}**\n"
-                    f"• archiwum Kotone: **{stats['scrobbles']}** scrobbli · "
-                    f"**{stats['artists']}** wykonawców · **{stats['albums']}** albumów · "
-                    f"**{stats['tracks']}** utworów\n\n"
-                    "Daty zapisano w UTC. Powiązania z AOTY są tworzone tylko "
-                    "dla dokładnie zgodnych identyfikatorów MusicBrainz.",
+                    "Załącz plik `.csv` z historią Last.fm.",
                     ephemeral=True,
                 )
                 return
-            result = await LASTFM_ARCHIVE.import_newest_now(
-                str(kotone_profile.get("name") or ""),
-                # /dbonly controls automatic background refreshes. A manual
-                # /import is an explicit operator/user request and should
-                # still be allowed when a valid API key is configured.
-                manual_override=True,
-            )
-            if result.get("error"):
+            if int(file.size or 0) > MAX_LASTFM_CSV_BYTES:
                 await interaction.followup.send(
-                    f"❌ Import Last.fm nie wystartował: {result['error']}",
+                    "Plik Last.fm jest za duży. Maksymalny rozmiar to 20 MB.",
                     ephemeral=True,
                 )
                 return
-            profile = result["profile"]
-            status = "zakończony" if result["complete"] else "kontynuowany w tle"
+            try:
+                payload = await file.read()
+                if len(payload) > MAX_LASTFM_CSV_BYTES:
+                    raise LastFMImportError("plik przekracza limit 20 MB")
+                parsed = await asyncio.to_thread(parse_lastfm_scrobbles_csv, payload)
+                tracks = await asyncio.to_thread(
+                    DB.link_lastfm_tracks_to_releases,
+                    list(parsed["tracks"]),
+                )
+                inserted = await asyncio.to_thread(
+                    LASTFM_DB.import_tracks,
+                    str(kotone_profile.get("name") or ""),
+                    tracks,
+                )
+                stats = await asyncio.to_thread(
+                    LASTFM_DB.archive_statistics,
+                    str(kotone_profile.get("name") or ""),
+                )
+            except LastFMImportError as exc:
+                await interaction.followup.send(
+                    f"❌ Niepoprawny CSV Last.fm: {exc}",
+                    ephemeral=True,
+                )
+                return
+            except Exception as exc:
+                await interaction.followup.send(
+                    f"❌ Import Last.fm nie powiódł się: `{type(exc).__name__}: {exc}`",
+                    ephemeral=True,
+                )
+                return
             await interaction.followup.send(
-                f"✅ **Last.fm → {profile['lastfm_username']}**\n"
-                f"• zapisano najnowszą stronę: **{result['page']}/{result['total_pages']}**\n"
-                f"• nowych scrobbli: **{result['inserted']}**\n"
-                f"• łącznie: **{profile.get('total_scrobbles') or '—'}** scrobbli\n"
-                f"• starsza historia: **{status}** (najnowsze → najstarsze).",
+                f"✅ **Last.fm CSV → {kotone_profile.get('lastfm_username')}**\n"
+                f"• wykryty format: **{parsed['format']}**\n"
+                f"• dodane scrobble: **{inserted}**\n"
+                f"• duplikaty w pliku: **{parsed['duplicates']}**\n"
+                f"• odrzucone wiersze: **{len(parsed['rejected'])}**\n"
+                f"• archiwum Kotone: **{stats['scrobbles']}** scrobbli · "
+                f"**{stats['artists']}** wykonawców · **{stats['albums']}** albumów · "
+                f"**{stats['tracks']}** utworów\n\n"
+                "Daty zapisano w UTC. Powiązania z AOTY są tworzone tylko "
+                "dla dokładnie zgodnych identyfikatorów MusicBrainz.",
                 ephemeral=True,
             )
             return

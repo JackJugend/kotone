@@ -126,6 +126,17 @@ def score_or_nr(score: Any) -> str:
     return f"{score_icon(None)} NR" if value == "NR" else f"{score_icon(value)} {value}"
 
 
+def dropdown_score_or_nr(score: Any) -> str:
+    """Render a score for Discord select options without escaped emoji.
+
+    Embeds intentionally retain the user's ``\\`` prefix before score emoji.
+    Discord select-menu descriptions render that prefix literally, so they use
+    this small presentation-only variant instead.
+    """
+
+    return score_or_nr(score).removeprefix("\\")
+
+
 def add_centered_inline_fields(
     embed: discord.Embed,
     fields: list[tuple[str, str]],
