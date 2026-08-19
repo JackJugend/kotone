@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -576,13 +576,14 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             item=item,
             main_embed=discord.Embed(),
         )
-        result_view = SimpleNamespace(stop=Mock())
+        artist_message = SimpleNamespace(delete=AsyncMock())
+        result_view = SimpleNamespace(bind_message=Mock())
         interaction = SimpleNamespace(
             response=SimpleNamespace(
                 defer=AsyncMock(),
                 send_message=AsyncMock(),
             ),
-            followup=SimpleNamespace(send=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock(return_value=artist_message)),
             message=SimpleNamespace(edit=AsyncMock()),
         )
 
@@ -600,10 +601,15 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         interaction.message.edit.assert_awaited_once()
         edit_kwargs = interaction.message.edit.await_args.kwargs
         self.assertEqual(edit_kwargs["view"], source_view)
-        self.assertEqual(len(edit_kwargs["embeds"]), 2)
-        interaction.followup.send.assert_not_awaited()
-        result_view.stop.assert_called_once_with()
-        self.assertTrue(source_view.artist_embedded)
+        self.assertNotIn("embeds", edit_kwargs)
+        interaction.followup.send.assert_awaited_once_with(
+            embed=ANY,
+            view=result_view,
+            ephemeral=False,
+            wait=True,
+        )
+        result_view.bind_message.assert_called_once_with(artist_message)
+        self.assertIs(source_view.artist_message, artist_message)
 
     async def test_artist_result_is_reused_once_and_cleared_on_tab_change(self):
         item = {
@@ -617,10 +623,11 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             item=item,
             main_embed=discord.Embed(),
         )
-        result_view = SimpleNamespace(stop=Mock())
+        artist_message = SimpleNamespace(delete=AsyncMock())
+        result_view = SimpleNamespace(bind_message=Mock())
         interaction = SimpleNamespace(
             response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
-            followup=SimpleNamespace(send=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock(return_value=artist_message)),
             message=SimpleNamespace(edit=AsyncMock(), delete=AsyncMock()),
         )
 
@@ -635,14 +642,11 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             )
 
         interaction.message.edit.assert_awaited_once()
-        interaction.followup.send.assert_not_awaited()
-        self.assertIs(source_view.artist_message, interaction.message)
-        self.assertTrue(source_view.artist_embedded)
+        self.assertIs(source_view.artist_message, artist_message)
 
         await views_module._clear_artist_result(source_view)
-        interaction.message.delete.assert_not_awaited()
+        artist_message.delete.assert_awaited_once_with()
         self.assertIsNone(source_view.artist_message)
-        self.assertFalse(source_view.artist_embedded)
 
     async def test_profile_select_contains_ratings_and_favorites(self):
         rating = {
