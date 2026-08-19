@@ -6,6 +6,7 @@ import requests
 import aoty
 from formats import RATING_FORMATS
 from services import DATA
+from settings import resolve_aoty_username
 from shared import (
     aoty_score_or_missing,
     load_release_variables,
@@ -120,7 +121,7 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
     @discord.app_commands.choices(format=format_choices)
     async def recent_command(
         interaction: discord.Interaction,
-        username: str,
+        username: str | None = None,
         amount: discord.app_commands.Range[int, 1, 20] = 5,
         format: str = "all",
         genre: str | None = None,
@@ -133,7 +134,14 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
         user_max: int | None = None,
     ):
         await interaction.response.defer()
-        username = username.strip()
+        username = resolve_aoty_username(interaction.user.id, username)
+        if not username:
+            await interaction.followup.send(
+                "❌ Wpisz `username` albo wywołaj tę komendę z konta "
+                "użytkownika Kotone w `config.json`.",
+                ephemeral=True,
+            )
+            return
 
         try:
             if not await DATA.user_exists(username):

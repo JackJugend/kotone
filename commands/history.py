@@ -7,7 +7,7 @@ import asyncio
 import discord
 
 from database import DB
-from settings import GUILD_ID
+from settings import GUILD_ID, resolve_aoty_username
 from shared import configured_username_autocomplete
 
 
@@ -75,6 +75,9 @@ def _event_text(event: dict) -> str:
     if event_type == "rating_distribution_changed":
         return "📊 Zmieniono Rating Distribution"
 
+    if event_type == "avatar_changed":
+        return "🖼️ Zmieniono avatar AOTY"
+
     if event_type == "profile_field_changed":
         names = {
             "ratings_count": "Ratings",
@@ -130,7 +133,7 @@ def setup_history_command(tree: discord.app_commands.CommandTree):
     )
     async def history_command(
         interaction: discord.Interaction,
-        username: str,
+        username: str | None = None,
         amount: discord.app_commands.Range[int, 1, 20] = 10,
         category: str = "all",
     ):
@@ -141,7 +144,8 @@ def setup_history_command(tree: discord.app_commands.CommandTree):
             )
             return
 
-        canonical = DB.canonical_username(username)
+        username = resolve_aoty_username(interaction.user.id, username)
+        canonical = DB.canonical_username(username or "")
         if canonical is None:
             await interaction.response.send_message(
                 "Historia jest zapisywana tylko dla użytkowników z `config.json`.",

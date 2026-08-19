@@ -15,8 +15,10 @@ from shared import (
     score_color,
     score_icon,
     set_aoty_footer,
+    score_or_nr,
     username_autocomplete,
 )
+from settings import resolve_aoty_username
 from release_tabs import build_release_details_embed
 from views import SingleRatingView
 
@@ -61,7 +63,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
     @discord.app_commands.choices(format=format_choices)
     async def last_command(
         interaction: discord.Interaction,
-        username: str,
+        username: str | None = None,
         format: str = "all",
         genre: str | None = None,
         year: int | None = None,
@@ -73,7 +75,14 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         user_max: int | None = None,
     ):
         await interaction.response.defer()
-        username = username.strip()
+        username = resolve_aoty_username(interaction.user.id, username)
+        if not username:
+            await interaction.followup.send(
+                "❌ Wpisz `username` albo wywołaj tę komendę z konta "
+                "użytkownika Kotone w `config.json`.",
+                ephemeral=True,
+            )
+            return
 
         try:
             if not await DATA.user_exists(username):

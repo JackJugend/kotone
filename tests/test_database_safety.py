@@ -418,6 +418,43 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_avatar_refresh_is_gated_and_audited_with_emoji_state(self):
+        db = self.make_db()
+        try:
+            db.save_profile(
+                "enso",
+                {"username": "enso", "avatar": "https://aoty/old.png"},
+                avatar_checked=True,
+            )
+            self.assertFalse(db.avatar_check_due("enso", 7 * 24 * 60 * 60))
+
+            # The first profile is only a baseline. Once the seven-day gate
+            # has passed, a changed AOTY avatar is an explicit history event.
+            db.connection.execute(
+                "UPDATE users SET avatar_checked_at = 1 WHERE username = 'enso'"
+            )
+            db.connection.commit()
+            self.assertTrue(db.avatar_check_due("enso", 7 * 24 * 60 * 60))
+            db.save_profile(
+                "enso",
+                {"username": "enso", "avatar": "https://aoty/new.png"},
+                avatar_checked=True,
+            )
+            events = db.get_change_history("enso", category="profile", limit=10)
+            avatar_events = [
+                event for event in events if event["event_type"] == "avatar_changed"
+            ]
+            self.assertEqual(len(avatar_events), 1)
+            self.assertEqual(avatar_events[0]["old_value"], "https://aoty/old.png")
+            self.assertEqual(avatar_events[0]["new_value"], "https://aoty/new.png")
+
+            db.save_avatar_emoji_state("enso", 123456, "https://aoty/new.png")
+            state = db.get_avatar_emoji_state("enso")
+            self.assertEqual(state["emoji_id"], "123456")
+            self.assertEqual(state["avatar_url"], "https://aoty/new.png")
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

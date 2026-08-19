@@ -1,6 +1,6 @@
 import discord
 
-from settings import GUILD_ID, USERS, is_operator_discord_id
+from settings import GUILD_ID, USERS, is_operator_discord_id, resolve_aoty_username
 from shared import configured_username_autocomplete
 
 
@@ -20,7 +20,7 @@ def setup_check_command(tree: discord.app_commands.CommandTree, monitor):
     @discord.app_commands.autocomplete(username=config_user_autocomplete)
     async def check_command(
         interaction: discord.Interaction,
-        username: str,
+        username: str | None = None,
     ):
         # Komendy i tak są synchronizowane jako guild commands, ale zostawiamy
         # dodatkowe zabezpieczenie zgodne z config.json.
@@ -38,7 +38,14 @@ def setup_check_command(tree: discord.app_commands.CommandTree, monitor):
             )
             return
 
-        username = username.strip()
+        username = resolve_aoty_username(interaction.user.id, username)
+        if not username:
+            await interaction.response.send_message(
+                "Wpisz użytkownika z configu albo uruchom `/check` ze swojego "
+                "konta Kotone.",
+                ephemeral=True,
+            )
+            return
 
         # Autocomplete zwraca dokładne nazwy z configu, ale Discord nadal
         # pozwala ręcznie wpisać wartość. Akceptujemy więc różną wielkość

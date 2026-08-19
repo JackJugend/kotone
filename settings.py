@@ -235,6 +235,35 @@ KOTONE_USERS_BY_AOTY = {
 }
 
 
+def resolve_aoty_username(
+    discord_user_id: int | str | None,
+    supplied_username: str | None,
+) -> str | None:
+    """Use an explicit AOTY name, otherwise the caller's Kotone profile.
+
+    Commands may safely make their single ``username`` field optional without
+    duplicating Discord-ID lookups.  A person outside ``kotone_users`` still
+    has to supply a name explicitly.
+    """
+
+    explicit = str(supplied_username or "").strip()
+    if explicit:
+        return explicit
+    try:
+        profile = KOTONE_USERS_BY_DISCORD_ID.get(int(discord_user_id or 0))
+    except (TypeError, ValueError):
+        profile = None
+    return str(profile.get("aoty_username") or "").strip() if profile else None
+# Stable names for bot-managed custom avatar emojis. Their mutable Discord ID
+# and cached AOTY URL live in SQLite, while every module can use this mapping
+# without duplicating profile-name rules.
+KOTONE_AVATAR_EMOJI_NAMES = {
+    str(profile["aoty_username"]).casefold(): str(profile["name"]).casefold()
+    for profile in KOTONE_USERS.values()
+    if profile.get("aoty_username")
+}
+
+
 def _validate_operators(raw_operators: object) -> dict[str, dict[str, object]]:
     """Resolve short profile names from config into Discord authorization data.
 
@@ -365,6 +394,15 @@ def _runtime_float(name: str, default: float, minimum: float = 0.0) -> float:
 
 # Profil zmienia się dużo rzadziej niż ratings, więc odświeżamy go osobno.
 PROFILE_SYNC_INTERVAL = _runtime_int("profile_sync_interval", 30 * 60, 300)
+
+# Avatar AOTY is cosmetic metadata.  It is intentionally checked much more
+# rarely than the profile counters so a changed PFP never causes extra AOTY
+# pressure.  The minimum is one full week even if config contains a mistake.
+AVATAR_AOTY_SYNC_INTERVAL = _runtime_int(
+    "avatar_aoty_sync_interval",
+    7 * 24 * 60 * 60,
+    7 * 24 * 60 * 60,
+)
 
 # /artist may fetch a public Last.fm picture only when SQLite has no current
 # image. The result (including a failed lookup) is cached in SQLite.

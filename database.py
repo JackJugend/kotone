@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # One-time migration data for pages verified before the scraper stored AOTY's
 # explicit Must Hear marker.  Values are written into ``releases.must_hear``;
@@ -724,6 +724,7 @@ class Database:
                 "rating_distribution_json": "TEXT",
                 "profile_json": "TEXT",
                 "profile_synced_at": "REAL",
+                "avatar_checked_at": "REAL",
                 "ratings_synced_at": "REAL",
                 "full_ratings_synced_at": "REAL",
                 "last_success_at": "REAL",
@@ -930,6 +931,25 @@ class Database:
                     source TEXT NOT NULL,
                     fetched_at REAL NOT NULL,
                     retry_after REAL NOT NULL DEFAULT 0
+                )
+                """
+            )
+
+            # The current custom Discord emoji for each monitored AOTY
+            # profile.  It is a cache of the avatar already stored in users,
+            # never an additional source of user data.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_avatar_emojis (
+                    username TEXT PRIMARY KEY COLLATE NOCASE,
+                    emoji_id TEXT NOT NULL,
+                    avatar_url TEXT NOT NULL,
+                    synced_at REAL NOT NULL,
+                    last_error TEXT,
+                    FOREIGN KEY (username)
+                        REFERENCES users(username)
+                        ON DELETE CASCADE
+                        ON UPDATE CASCADE
                 )
                 """
             )
@@ -1164,7 +1184,13 @@ class Database:
     # Profile data
     # ------------------------------------------------------------------
 
-    def save_profile(self, username: str, profile: dict) -> None:
+    def save_profile(
+        self,
+        username: str,
+        profile: dict,
+        *,
+        avatar_checked: bool = False,
+    ) -> None:
         """Persist one profile snapshot and append meaningful profile diffs.
 
         The first successful snapshot establishes a baseline and intentionally
@@ -1186,6 +1212,7 @@ class Database:
                 "favorites",
                 "favorite_albums",
                 "favorite_artists",
+                "_avatar_checked",
             }
         }
 
@@ -1233,6 +1260,7 @@ class Database:
                     END,
                     profile_json = ?,
                     profile_synced_at = ?,
+                    avatar_checked_at = CASE WHEN ? THEN ? ELSE avatar_checked_at END,
                     last_success_at = ?,
                     last_error = NULL,
                     updated_at = ?
@@ -1253,6 +1281,8 @@ class Database:
                     _json_dump(distribution) if distribution else None,
                     _json_dump(distribution) if distribution else None,
                     _json_dump(profile_snapshot),
+                    now,
+                    _bool_int(avatar_checked),
                     now,
                     now,
                     now,
@@ -1322,6 +1352,23 @@ class Database:
                     old_value=old_value,
                     new_value=new_value,
                     source="profile_sync",
+                    detected_at=now,
+                )
+
+            # Avatar is deliberately audited separately from ordinary profile
+            # counters.  It is only compared after the seven-day AOTY avatar
+            # cooldown, so /history never becomes noisy on normal syncs.
+            new_avatar = str(profile.get("avatar") or "").strip()
+            old_avatar = str(previous["avatar_url"] or "").strip()
+            if avatar_checked and new_avatar and new_avatar != old_avatar:
+                self._record_change_locked(
+                    username,
+                    entity_type="profile",
+                    event_type="avatar_changed",
+                    field_name="avatar_url",
+                    old_value=old_avatar or None,
+                    new_value=new_avatar,
+                    source="aoty_avatar_sync",
                     detected_at=now,
                 )
 
@@ -1406,6 +1453,7 @@ class Database:
             "rating_distribution": _json_load(row["rating_distribution_json"], {}),
             "recent_ratings": self.get_recent_ratings(canonical, recent_limit),
             "profile_synced_at": row["profile_synced_at"],
+            "avatar_checked_at": row["avatar_checked_at"],
             "ratings_synced_at": row["ratings_synced_at"],
         }
 
@@ -1602,6 +1650,73 @@ class Database:
                 (canonical,),
             ).fetchone()
         return row["avatar_url"] if row else None
+
+    def avatar_check_due(self, username: str, interval_seconds: float) -> bool:
+        """Whether an AOTY avatar comparison may run for this profile."""
+
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return False
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT avatar_checked_at FROM users WHERE username = ?",
+                (canonical,),
+            ).fetchone()
+        checked_at = float(row["avatar_checked_at"] or 0) if row else 0.0
+        return _now() - checked_at >= max(0.0, float(interval_seconds))
+
+    def get_avatar_emoji_state(self, username: str) -> dict | None:
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return None
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT emoji_id, avatar_url, synced_at, last_error
+                FROM user_avatar_emojis
+                WHERE username = ?
+                """,
+                (canonical,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_avatar_emoji_state(
+        self,
+        username: str,
+        emoji_id: object,
+        avatar_url: str,
+        *,
+        error: str | None = None,
+    ) -> None:
+        canonical = self._require_monitored(username)
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO user_avatar_emojis(
+                    username, emoji_id, avatar_url, synced_at, last_error
+                ) VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    emoji_id = excluded.emoji_id,
+                    avatar_url = excluded.avatar_url,
+                    synced_at = excluded.synced_at,
+                    last_error = excluded.last_error
+                """,
+                (canonical, str(emoji_id), str(avatar_url), _now(), error),
+            )
+
+    def mark_avatar_emoji_error(self, username: str, message: str) -> None:
+        canonical = self.canonical_username(username)
+        if canonical is None:
+            return
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                UPDATE user_avatar_emojis
+                SET last_error = ?, synced_at = ?
+                WHERE username = ?
+                """,
+                (str(message)[:1000], _now(), canonical),
+            )
 
     # ------------------------------------------------------------------
     # Ratings

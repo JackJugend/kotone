@@ -172,6 +172,13 @@ async def on_ready() -> None:
         )
         background_task.add_done_callback(_log_worker_exit)
 
+    # Existing SQLite avatars can create their emoji immediately after a
+    # deploy. This does not query AOTY; future comparisons are 7-day gated.
+    try:
+        await monitor.avatar_emojis.sync_cached()
+    except Exception as exc:
+        print(f"[AVATAR EMOJI] Startowy sync pominięty: {type(exc).__name__}: {exc}")
+
     health.bind_worker_tasks(
         monitor_task=monitor_task,
         background_task=background_task,

@@ -22,6 +22,7 @@ import discord
 import requests
 
 import aoty
+from avatar_emojis import AvatarEmojiSynchronizer
 from database import DB
 from http_client import PRIORITY_BACKGROUND, PRIORITY_INTERACTIVE
 from services import DATA
@@ -44,6 +45,7 @@ class RatingMonitor:
 
     def __init__(self, client: discord.Client):
         self.client = client
+        self.avatar_emojis = AvatarEmojiSynchronizer(client)
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._stop_event = asyncio.Event()
         self.last_cycle_at: float | None = None
@@ -224,10 +226,12 @@ class RatingMonitor:
             return
 
         try:
-            await DATA.sync_profile(
+            profile = await DATA.sync_profile(
                 username,
                 priority=PRIORITY_INTERACTIVE if manual else PRIORITY_BACKGROUND,
             )
+            if profile.get("_avatar_checked"):
+                await self.avatar_emojis.sync_user(username)
             print(f"[PROFILE] {username}: profil zapisany w SQLite.")
         except Exception as exc:
             print(f"[PROFILE] {username}: {type(exc).__name__}: {exc}")

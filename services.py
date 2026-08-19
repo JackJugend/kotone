@@ -40,6 +40,7 @@ from settings import (
     LASTFM_RELEASE_SOURCE_TTL,
     ARTIST_SOURCE_TTL,
     KOTONE_USERS_BY_AOTY,
+    AVATAR_AOTY_SYNC_INTERVAL,
     PROFILE_SYNC_INTERVAL,
     PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
     PROFILE_RATING_ARCHIVE_INTERVAL,
@@ -672,6 +673,10 @@ class DataService:
             raise ValueError("sync_profile zapisuje tylko użytkowników z config")
 
         try:
+            avatar_due = DB.avatar_check_due(
+                username,
+                AVATAR_AOTY_SYNC_INTERVAL,
+            )
             profile = await _thread_call(
                 priority,
                 aoty.get_profile_summary,
@@ -693,7 +698,13 @@ class DataService:
                         cached.get("favorite_artists") or []
                     )
 
-            DB.save_profile(username, profile)
+            # The response happens to include an avatar, but only retain and
+            # compare it once per seven days. Profile counters/favorites can
+            # still be refreshed on their own normal cadence.
+            if not avatar_due:
+                profile.pop("avatar", None)
+            DB.save_profile(username, profile, avatar_checked=avatar_due)
+            profile["_avatar_checked"] = avatar_due
             return profile
         except Exception as exc:
             DB.mark_sync_error(username, f"profile: {type(exc).__name__}: {exc}")

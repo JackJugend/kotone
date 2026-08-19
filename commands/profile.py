@@ -5,6 +5,7 @@ import requests
 
 import aoty
 from services import DATA
+from settings import resolve_aoty_username
 from display_utils import display_romanized_name
 from shared import (
     build_profile_variables,
@@ -61,10 +62,17 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
     @discord.app_commands.autocomplete(username=username_autocomplete)
     async def profile_command(
         interaction: discord.Interaction,
-        username: str,
+        username: str | None = None,
     ):
         await interaction.response.defer()
-        username = username.strip()
+        username = resolve_aoty_username(interaction.user.id, username)
+        if not username:
+            await interaction.followup.send(
+                "❌ Wpisz `username` albo wywołaj tę komendę z konta "
+                "użytkownika Kotone w `config.json`.",
+                ephemeral=True,
+            )
+            return
 
         try:
             # Command rendering is always SQLite-only. AOTY updates happen

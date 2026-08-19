@@ -11,6 +11,7 @@ import discord
 from database import DB
 from formats import RATING_FORMATS
 from shared import score_color, username_autocomplete
+from settings import resolve_aoty_username
 from stats_cover_cache import load_cover_images
 from stats_engine import compare, rating_distribution, summarize, wrapped
 from stats_graphics import (
@@ -176,8 +177,16 @@ class RatingDistributionView(TimedDisableView):
 
 async def _configured_user_or_error(
     interaction: discord.Interaction,
-    username: str,
+    username: str | None,
 ) -> str | None:
+    username = resolve_aoty_username(interaction.user.id, username)
+    if not username:
+        await interaction.response.send_message(
+            "Wpisz `username` albo wywołaj tę komendę z konta użytkownika "
+            "Kotone w `config.json`.",
+            ephemeral=True,
+        )
+        return None
     canonical = DB.canonical_username(username)
     if canonical is not None:
         return canonical
@@ -207,7 +216,10 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
     )
     @discord.app_commands.describe(username="username")
     @discord.app_commands.autocomplete(username=username_autocomplete)
-    async def stats_command(interaction: discord.Interaction, username: str):
+    async def stats_command(
+        interaction: discord.Interaction,
+        username: str | None = None,
+    ):
         canonical = await _configured_user_or_error(interaction, username)
         if canonical is None:
             return
@@ -259,7 +271,7 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
     )
     async def rating_distribution_command(
         interaction: discord.Interaction,
-        username: str,
+        username: str | None = None,
         year: int | None = None,
         genre: str | None = None,
         score_min: int | None = None,
@@ -424,7 +436,7 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
     @discord.app_commands.autocomplete(username=username_autocomplete)
     async def wrapped_command(
         interaction: discord.Interaction,
-        username: str,
+        username: str | None = None,
         year: int | None = None,
     ):
         canonical = await _configured_user_or_error(interaction, username)
