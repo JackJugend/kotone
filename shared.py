@@ -137,14 +137,18 @@ def score_or_nr(score: Any) -> str:
 
 
 def dropdown_score_or_nr(score: Any) -> str:
-    """Render a score for Discord select options without escaped emoji.
+    """Render the legacy compact score in Discord select-option text.
 
-    Embeds intentionally retain the user's ``\\`` prefix before score emoji.
-    Discord select-menu descriptions render that prefix literally, so they use
-    this small presentation-only variant instead.
+    Discord does not resolve application custom emoji inside option
+    descriptions; sending ``<:score_83:…>`` there leaks the literal markup.
+    Keep the existing native dot + number exclusively in those menus.
     """
 
-    return score_or_nr(score).removeprefix("\\")
+    value = score_value_or_nr(score)
+    if value == "NR":
+        return "⚪ NR"
+    marker = _legacy_score_icon(_score_number(value) or 0).removeprefix("\\")
+    return f"{marker} {value}"
 
 
 def add_centered_inline_fields(
@@ -588,7 +592,11 @@ async def load_release_variables(
     )
 
 
-def rating_flags_text(item_or_variables: dict | ReleaseVariables | None) -> str:
+def rating_flags_text(
+    item_or_variables: dict | ReleaseVariables | None,
+    *,
+    custom_emoji: bool = True,
+) -> str:
     if item_or_variables is None:
         return ""
 
@@ -604,11 +612,11 @@ def rating_flags_text(item_or_variables: dict | ReleaseVariables | None) -> str:
     flags: list[str] = []
 
     if has_review:
-        flags.append(status_emoji("review") or "✎")
+        flags.append((status_emoji("review") if custom_emoji else None) or "✎")
     if has_track_ratings:
-        flags.append(status_emoji("tracklist") or "☰")
+        flags.append((status_emoji("tracklist") if custom_emoji else None) or "☰")
     if liked:
-        flags.append(status_emoji("like") or "❤︎⁠")
+        flags.append((status_emoji("like") if custom_emoji else None) or "❤︎⁠")
 
     return " ".join(flags)
 

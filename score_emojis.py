@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from io import BytesIO
+from pathlib import Path
 
 import discord
 from PIL import Image, ImageDraw, ImageFont
@@ -18,15 +19,15 @@ from database import DB
 from score_emoji_registry import set_score_emojis
 from status_emoji_registry import set_status_emojis
 
-SCORE_EMOJI_PREFIX = "kotone_score_v2_"
-SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v2-transparent"
+SCORE_EMOJI_PREFIX = "score_"
+SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v3"
 SCORE_EMOJI_SIZE = 96
 SCORE_EMOJI_MAX_BYTES = 256 * 1024
-STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v1-transparent"
+STATUS_EMOJI_RENDER_VERSION = "aoty-flags-v2-transparent"
 STATUS_EMOJI_NAMES = {
-    "like": "kotone_like",
-    "tracklist": "kotone_tracklist",
-    "review": "kotone_review",
+    "like": "like",
+    "tracklist": "tracklist",
+    "review": "review",
 }
 
 
@@ -63,9 +64,10 @@ def _bar_color(score: int) -> tuple[int, int, int]:
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont:
-    """Use a Unicode-capable bundled font available on Railway and Windows."""
+    """Use the bundled Noto Sans so the render is identical on Railway."""
 
     for path in (
+        Path(__file__).with_name("assets") / "NotoSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "C:/Windows/Fonts/arialbd.ttf",
     ):
@@ -84,25 +86,25 @@ def render_score_emoji(score: int | None) -> bytes:
         raise ValueError("score emoji musi mieścić się w zakresie NR albo 0–100")
 
     size = SCORE_EMOJI_SIZE
-    # Discord renders custom emoji over many themes. The canvas therefore
-    # stays transparent; only the white glyphs receive a dark outline.
+    # The emoji canvas is transparent. The compact rating card itself is the
+    # only black area, matching AOTY's original score presentation.
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
+    tile_left, tile_top, tile_right, tile_bottom = 2, 13, size - 3, 83
+    draw.rectangle((tile_left, tile_top, tile_right, tile_bottom), fill=(0, 0, 0, 255))
 
-    # Three digits need a little less space but remain more prominent than
-    # the old circular markers.
-    font = _font(46 if value is None or value < 100 else 37)
+    # Source pixels are intentionally large; Discord's own scaling then keeps
+    # the number sharp instead of the previous blurred/undersized version.
+    font = _font(53 if value is None or value < 100 else 42)
     text = "NR" if value is None else str(value)
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     width = right - left
     height = bottom - top
     draw.text(
-        ((size - width) / 2 - left, 7 + (63 - height) / 2 - top),
+        ((size - width) / 2 - left, tile_top + 1 + (50 - height) / 2 - top),
         text,
         font=font,
-        fill=(246, 247, 249, 255),
-        stroke_width=3,
-        stroke_fill=(0, 0, 0, 255),
+        fill=(255, 255, 255, 255),
     )
 
     if value is None:
@@ -110,19 +112,11 @@ def render_score_emoji(score: int | None) -> bytes:
         image.save(output, format="PNG", optimize=True)
         return output.getvalue()
 
-    bar_left, bar_top, bar_right, bar_bottom = 10, 76, size - 10, 85
-    draw.rounded_rectangle(
-        (bar_left, bar_top, bar_right, bar_bottom),
-        radius=4,
-        fill=(0, 0, 0, 230),
-    )
+    bar_left, bar_top, bar_right, bar_bottom = 13, 67, size - 13, 75
+    draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), fill=(111, 117, 124, 255))
     filled_right = bar_left + round((bar_right - bar_left) * value / 100)
     if value > 0:
-        draw.rounded_rectangle(
-            (bar_left + 2, bar_top + 2, max(bar_left + 3, filled_right - 2), bar_bottom - 2),
-            radius=4,
-            fill=(*_bar_color(value), 255),
-        )
+        draw.rectangle((bar_left, bar_top, max(bar_left, filled_right), bar_bottom), fill=(*_bar_color(value), 255))
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)
@@ -136,11 +130,11 @@ def _outlined_line(
     draw: ImageDraw.ImageDraw,
     points: list[tuple[int, int]],
     *,
-    width: int = 6,
+    width: int = 7,
 ) -> None:
     """Draw one consistently centred grey AOTY-like stroke with black edge."""
 
-    draw.line(points, fill=(0, 0, 0, 255), width=width + 4, joint="curve")
+    draw.line(points, fill=(0, 0, 0, 255), width=width + 2, joint="curve")
     draw.line(points, fill=(150, 154, 160, 255), width=width, joint="curve")
 
 
@@ -157,38 +151,38 @@ def render_status_emoji(key: str) -> bytes:
     color = (150, 154, 160, 255)
 
     if name == "like":
-        font = _font(64)
+        font = _font(68)
         text = "♥"
-        left, top, right, bottom = draw.textbbox((0, 0), text, font=font, stroke_width=3)
+        left, top, right, bottom = draw.textbbox((0, 0), text, font=font, stroke_width=1)
         draw.text(
             ((size - (right - left)) / 2 - left, (size - (bottom - top)) / 2 - top - 2),
             text,
             font=font,
             fill=color,
-            stroke_width=3,
+            stroke_width=1,
             stroke_fill=(0, 0, 0, 255),
         )
     elif name == "tracklist":
-        # 1/2/3 and their three lines are deliberately centred as one group.
-        font = _font(25)
-        for index, y in enumerate((27, 48, 69), start=1):
+        # AOTY's icon uses two compact numbered rows, optically centred.
+        font = _font(29)
+        for index, y in enumerate((35, 61), start=1):
             label = str(index)
             left, top, right, bottom = draw.textbbox((0, 0), label, font=font, stroke_width=2)
             draw.text(
-                (20 - (right - left) / 2 - left, y - (bottom - top) / 2 - top),
+                (22 - (right - left) / 2 - left, y - (bottom - top) / 2 - top),
                 label,
                 font=font,
                 fill=color,
-                stroke_width=2,
+                stroke_width=1,
                 stroke_fill=(0, 0, 0, 255),
             )
-            _outlined_line(draw, [(36, y), (76, y)], width=5)
+            _outlined_line(draw, [(39, y), (77, y)], width=6)
     else:
-        # Paper with three text lines: clearer at emoji scale than a font glyph.
-        draw.rounded_rectangle((25, 17, 70, 79), radius=5, fill=(0, 0, 0, 255))
-        draw.rounded_rectangle((28, 20, 67, 76), radius=3, outline=color, width=4)
-        for y, end in ((36, 58), (48, 61), (60, 54)):
-            _outlined_line(draw, [(36, y), (end, y)], width=4)
+        # A clean paper outline with a folded top-right corner.
+        _outlined_line(draw, [(27, 16), (62, 16), (72, 26), (72, 80), (27, 80), (27, 16)], width=6)
+        _outlined_line(draw, [(62, 16), (62, 27), (72, 27)], width=6)
+        _outlined_line(draw, [(38, 48), (61, 48)], width=5)
+        _outlined_line(draw, [(38, 62), (61, 62)], width=5)
 
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)

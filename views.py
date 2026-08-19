@@ -690,7 +690,7 @@ class RatingSelect(discord.ui.Select):
             artist = display_romanized_name(item.get("artist") or "—")
             album = display_romanized_name(item.get("album") or item.get("title") or "—")
             score = dropdown_score_or_nr(item.get("score"))
-            flags = rating_flags_text(item)
+            flags = rating_flags_text(item, custom_emoji=False)
             description = f"{score} {flags}".strip()
             options.append(
                 discord.SelectOption(
@@ -883,7 +883,7 @@ class UserRatingSelect(discord.ui.Select):
         for username in usernames[:25]:
             info = rating_infos.get(username, {})
             score = dropdown_score_or_nr(info.get("score"))
-            flags = rating_flags_text(info)
+            flags = rating_flags_text(info, custom_emoji=False)
             options.append(
                 discord.SelectOption(
                     label=username[:100],
