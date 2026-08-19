@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import traceback
 
 from runtime_guard import is_railway_runtime, validate_persistent_runtime
 
@@ -85,6 +86,34 @@ setup_dbstats_command(tree)
 setup_history_command(tree)
 setup_manual_command(tree)
 setup_analytics_commands(tree)
+
+
+@tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: discord.app_commands.AppCommandError,
+) -> None:
+    """Log every slash-command failure and give the invoker a safe answer.
+
+    Without a tree-level handler discord.py can leave an interaction looking
+    like it simply timed out while the useful traceback is easy to miss in
+    Railway's stream.  The full cause stays only in the private service log.
+    """
+
+    original = getattr(error, "original", error)
+    command = getattr(getattr(interaction, "command", None), "qualified_name", "?")
+    print(f"[COMMAND] /{command}: {type(original).__name__}: {original}")
+    traceback.print_exception(type(original), original, original.__traceback__)
+
+    message = "❌ Wystąpił błąd komendy. Został zapisany w logach Kotone."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        # The traceback above is still enough to diagnose a failed response.
+        pass
 
 
 @client.event
