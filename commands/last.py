@@ -213,12 +213,14 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         if variables.vibes:
             description_lines.append(f"-# {variables.vibes_text}")
 
+        album_base = f"[{variables.display_album}]({album_url})"
+
         # Wygląd zachowany z obecnej wersji /last.
         embed = discord.Embed(
             title=(
                 f"{score_icon(variables.score)} "
                 f"{variables.display_artist} — {must_hear_title_marker(variables)} "
-                f"**{variables.display_album}**"
+                f"**{album_base}**"
                 f"{release_year_suffix(variables.year)}"
             ),
             url=variables.url,
