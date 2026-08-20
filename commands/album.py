@@ -390,7 +390,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             variables.ratings_count,
         )
 
-        rating_fields = [("AOTY", f"**{aoty_score}**")]
+        rating_fields = [("<:aoty:1539095897084924004>", f"**{aoty_score}**")]
 
         # Pełny zapis SQLite jest źródłem domyślnym. AOTY jest używane tylko,
         # gdy danego usera/wydania nie ma jeszcze w trwałym cache.
