@@ -169,8 +169,6 @@ async def build_combined_tracklist_embeds(
             personal_score = (row or {}).get("score")
             scores.append(
                 f"{configured_username} {score_or_nr(personal_score)}"
-                if str(personal_score or "").strip()
-                else f"{configured_username} **NR**"
             )
         lines.append(f"**{display_number}.** {title_text}{duration}\n" + " • ".join(scores))
 
