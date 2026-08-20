@@ -217,7 +217,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         embed = discord.Embed(
             title=(
                 f"{variables.display_artist} — {must_hear_title_marker(variables)} "
-                f"**{variables.album_title}**"
+                f"**{variables.display_album}**"
                 f"{release_year_suffix(variables.year)}"
             ),
             url=variables.url,
@@ -289,7 +289,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
 
         tracklist_embed = discord.Embed(
             title=(
-                f"≡ {variables.display_artist} — "
+                f"<:tracklist:1539780590751187014> {variables.display_artist} — "
                 f"{variables.display_album}"
             ),
             url=variables.url,
