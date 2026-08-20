@@ -100,7 +100,7 @@ def _build_last_embed(username: str, variables, item: dict, avatar: str | None) 
     """Zbuduj kartę Home; cała prezentacja pozostaje w jednym helperze."""
 
     flags = rating_flags_text(item)
-    last_flags = f"  •  {flags}" if flags else ""
+    last_flags = f" {flags}" if flags else ""
     description_lines = [
         f"## {_release_header_links(variables)}",
         f"# {score_or_nr(variables.score)} {last_flags}",
