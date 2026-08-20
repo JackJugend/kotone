@@ -59,7 +59,7 @@ def _build_tracklist_embed(
 
     title = release_tab_title(TRACKLIST_BUTTON, variables)
     if page_count and page_count > 1 and page_number:
-        title = f"{title}  •  {page_number}/{page_count}"
+        title = f"{title}  •  [{page_number}/{page_count}]"
     embed = discord.Embed(
         title=title,
         url=variables.url or None,
@@ -150,7 +150,7 @@ async def build_combined_tracklist_embeds(
                 seen_titles.add(title_key)
 
     configured_users = list(USERS[:25])
-    score_header = "  •  ".join(
+    score_header = "  │  ".join(
         [
             AOTY_SOURCE_EMOJI,
             *[
@@ -181,7 +181,7 @@ async def build_combined_tracklist_embeds(
             scores.append(score_or_nr(personal_score))
         lines.append(
             f"**{display_number}.** {title_text}{duration}\n"
-            + "  •  ".join(scores)
+            + "  │  ".join(scores)
         )
 
     descriptions = paginate_description_lines(lines, limit=3200) if lines else ["Brak tracklisty w kotone."]
