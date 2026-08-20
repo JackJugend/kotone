@@ -41,32 +41,41 @@ async def build_release_details_embed(
 
     variables = await load_release_variables(item, username=username, missing="—")
     lines = [
+
         f"{_source_prefix(variables, 'score', variables.aoty_user_score)}"
-        f"**AOTY User Score:** "
+        f"**User score:** "
         f"{aoty_score_value(variables.aoty_user_score, variables.ratings_count)}",
+        
         f"{_source_prefix(variables, 'score', variables.ratings_count)}"
-        f"**Ratings:** {variables.ratings_count}",
-        f"{_source_prefix(variables, 'release_date', variables.release_date)}"
-        f"**Release date:** {variables.release_date}",
-        f"{_source_prefix(variables, 'tracklist', variables.duration)}"
-        f"**Duration:** {variables.duration}",
-        f"{_source_prefix(variables, 'format', variables.album_format)}"
-        f"**Format:** {variables.album_format}",
-        f"{_source_prefix(variables, 'labels', variables.labels_text)}"
-        f"**Label:** {variables.labels_text}",
+        f"**Ratings:** {variables.ratings_count}\n",
+
         f"{_source_prefix(variables, 'genres', variables.genres_text)}"
         f"**Genre:** {_details_value(variables.genres_text)}",
+        
         f"{_source_prefix(variables, 'genres', variables.secondary_genres_text)}"
         f"**Secondary genres:** {_details_value(variables.secondary_genres_text)}",
+        
         f"{_source_prefix(variables, 'vibes', variables.vibes_text)}"
-        f"**Vibes:** {_details_value(variables.vibes_text)}",
+        f"**Vibes:** {_details_value(variables.vibes_text)}\n",
+
+        f"{_source_prefix(variables, 'release_date', variables.release_date)}"
+        f"**Release date:** {variables.release_date}",
+
+        f"{_source_prefix(variables, 'tracklist', variables.duration)}"
+        f"**Duration:** {variables.duration}",
+
+        f"{_source_prefix(variables, 'format', variables.album_format)}"
+        f"**Format:** {variables.album_format}",
+
+        f"{_source_prefix(variables, 'labels', variables.labels_text)}"
+        f"**Label:** {variables.labels_text}",
     ]
     ranking_year = _details_value(variables.ranking_year)
     if ranking_year == "—":
         ranking_year = _details_value(variables.year)
     lines.append(
         f"{_source_prefix(variables, 'ranking', variables.year_ranking_text)}"
-        f"**{ranking_year if ranking_year != '—' else 'Year'} Ratings:** "
+        f"**{ranking_year if ranking_year != '—' else 'Year'} ratings:** "
         f"{_details_value(variables.year_ranking_text)}"
     )
 
@@ -85,7 +94,7 @@ async def build_release_details_embed(
 
     lastfm_data = variables.source_data.get("lastfm") or {}
     if lastfm_data:
-        for key, label in (("listeners_count", "Last.fm listeners"), ("playcount", "Last.fm scrobbles")):
+        for key, label in (("listeners_count", "Listeners"), ("playcount", "Scrobbles")):
             value = _details_value(lastfm_data.get(key))
             if value != "-":
                 lines.append(f"{source_emoji('lastfm')} **{label}:** {value}")
