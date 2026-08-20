@@ -84,7 +84,7 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
         _detail_line(
             variables,
             section="score",
-            label="Based on "[:1],
+            label="Based on ",
             value=f"{variables.ratings_count} ratings.",
         ),
     ]
@@ -125,7 +125,7 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="duration",
             label="Duration",
-            value=variables.duration,
+            value=f"`{variables.duration}`",
         ),
         _detail_line(
             variables,
