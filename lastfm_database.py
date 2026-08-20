@@ -281,7 +281,7 @@ class LastFMDatabase:
         return inserted
 
     def _insert_track_locked(self, profile_key: str, track: dict) -> int:
-        """Insert one scrobble, preferring durable MBIDs over display names."""
+        """Add one scrobble without replacing an existing record."""
 
         played_at = int(track["played_at"])
         track_mbid = str(track.get("track_mbid") or "").strip() or None
@@ -349,6 +349,46 @@ class LastFMDatabase:
             for track in tracks:
                 inserted += self._insert_track_locked(key, track)
         return inserted
+
+    def mark_imported_complete(self, profile_key: object) -> None:
+        """Mark an offline CSV archive as complete without annotating rows.
+
+        A user-provided export is already a complete history snapshot for the
+        purpose of the background worker.  We therefore avoid immediately
+        crawling the same history through Last.fm again.  The worker still
+        refreshes page one at its normal, deliberately infrequent interval.
+        """
+
+        key = self._key(profile_key)
+        if not key:
+            return
+        archived = self.archive_statistics(key)
+        now = time.time()
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO import_state(
+                    profile_key, next_page, total_pages, total_scrobbles,
+                    complete, last_page_at, last_newest_at, last_error
+                ) VALUES (?, 1, 1, ?, 1, ?, ?, NULL)
+                ON CONFLICT(profile_key) DO UPDATE SET
+                    next_page = 1,
+                    total_pages = CASE
+                        WHEN import_state.total_pages IS NULL THEN 1
+                        ELSE import_state.total_pages
+                    END,
+                    total_scrobbles = CASE
+                        WHEN import_state.total_scrobbles IS NULL THEN
+                            excluded.total_scrobbles
+                        ELSE import_state.total_scrobbles
+                    END,
+                    complete = 1,
+                    last_page_at = excluded.last_page_at,
+                    last_newest_at = excluded.last_newest_at,
+                    last_error = NULL
+                """,
+                (key, int(archived["scrobbles"]), now, now),
+            )
 
     def mark_error(self, profile_key: object, error: object) -> None:
         key = self._key(profile_key)

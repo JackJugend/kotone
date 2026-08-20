@@ -307,6 +307,10 @@ class ReleaseVariables:
     ranking_year: Any = None
     year_ranking: Any = None
     year_ranking_text: Any = None
+    all_time_ranking: Any = None
+
+    # Ręcznie podany typ Must Hear ma pierwszeństwo nad heurystyką score.
+    must_hear_kind: str | None = None
 
     # Tracklista AOTY.
     tracklist: list[dict] = field(default_factory=list)
@@ -508,8 +512,19 @@ def build_release_variables(
         album_id=album_id,
         official=details.get("must_hear"),
     )
+    stored_must_hear_kind = str(details.get("must_hear_kind") or "").casefold()
+    display_must_hear_kind = (
+        stored_must_hear_kind
+        if stored_must_hear_kind in MUST_HEAR_EMOJIS
+        else must_hear_kind(
+            user_score,
+            ratings_count,
+            critic_score,
+            critic_reviews_count,
+        )
+    )
     display_cover = (
-        marked_cover_url(album_id, raw_cover)
+        marked_cover_url(album_id, raw_cover, kind=display_must_hear_kind)
         if must_hear
         else None
     ) or raw_cover
@@ -597,6 +612,8 @@ def build_release_variables(
         ranking_year=value("ranking_year", missing),
         year_ranking=value("year_ranking", missing),
         year_ranking_text=value("year_ranking_text", missing),
+        all_time_ranking=value("all_time_ranking", missing),
+        must_hear_kind=str(details.get("must_hear_kind") or "").casefold() or None,
         tracklist=tracklist,
         tracklist_text=details.get("tracklist_text") or missing,
         metadata_source=details.get("metadata_source"),
@@ -616,12 +633,14 @@ def must_hear_title_marker(variables: ReleaseVariables) -> str:
 
     if not variables.must_hear:
         return ""
-    kind = must_hear_kind(
-        variables.aoty_user_score,
-        variables.ratings_count,
-        variables.critic_score,
-        variables.critic_reviews_count,
-    )
+    kind = variables.must_hear_kind
+    if kind not in MUST_HEAR_EMOJIS:
+        kind = must_hear_kind(
+            variables.aoty_user_score,
+            variables.ratings_count,
+            variables.critic_score,
+            variables.critic_reviews_count,
+        )
     return MUST_HEAR_EMOJIS[kind]
 
 

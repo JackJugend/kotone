@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 # One-time migration data for pages verified before the scraper stored AOTY's
 # explicit Must Hear marker.  Values are written into ``releases.must_hear``;
@@ -875,6 +875,7 @@ class Database:
                     critic_score TEXT,
                     critic_reviews_count TEXT,
                     must_hear INTEGER,
+                    must_hear_kind TEXT,
                     release_date TEXT,
                     year TEXT,
                     album_format TEXT,
@@ -886,6 +887,7 @@ class Database:
                     ranking_year TEXT,
                     year_ranking TEXT,
                     year_ranking_text TEXT,
+                    all_time_ranking TEXT,
                     metadata_source TEXT,
                     metadata_sources_json TEXT,
                     fetched_at REAL NOT NULL
@@ -900,6 +902,8 @@ class Database:
             self._ensure_column("releases", "critic_score", "TEXT")
             self._ensure_column("releases", "critic_reviews_count", "TEXT")
             self._ensure_column("releases", "must_hear", "INTEGER")
+            self._ensure_column("releases", "must_hear_kind", "TEXT")
+            self._ensure_column("releases", "all_time_ranking", "TEXT")
 
             self.connection.execute(
                 """
@@ -3745,6 +3749,32 @@ class Database:
         if not album_id:
             raise ValueError("album_id nie moze byc puste.")
         payload = dict(details or {})
+
+        # A first manual edit may have created a deliberately small
+        # ``Album #id`` placeholder. Never let a later partial edit keep that
+        # placeholder when a configured user's rating card already has the
+        # real release identity.
+        with self._lock:
+            identity = self.connection.execute(
+                """
+                SELECT artist, album, album_url, cover_url
+                FROM ratings
+                WHERE album_id = ?
+                ORDER BY last_seen_at DESC
+                LIMIT 1
+                """,
+                (album_id,),
+            ).fetchone()
+        if identity is not None:
+            existing_artist = str(payload.get("artist") or "").strip()
+            existing_album = str(payload.get("album") or "").strip()
+            if not existing_artist or existing_artist == "Nieznany artysta":
+                payload["artist"] = identity["artist"] or payload.get("artist")
+            if not existing_album or existing_album == f"Album #{album_id}":
+                payload["album"] = identity["album"] or payload.get("album")
+            payload.setdefault("url", identity["album_url"])
+            payload.setdefault("cover", identity["cover_url"])
+
         payload["source"] = "manual"
         section_complete = dict(payload.get("_section_complete") or {})
         payload["_section_complete"] = section_complete
@@ -4275,10 +4305,21 @@ class Database:
         source = str(details.get("source") or "").strip().casefold()
         source = source if source in {"aoty", "musicbrainz", "lastfm", "manual"} else ""
         official_must_hear = details.get("must_hear")
-        must_hear_complete = source in {"aoty", "manual"} and isinstance(
-            official_must_hear,
-            bool,
-        )
+        raw_must_hear_kind = str(details.get("must_hear_kind") or "").strip().casefold()
+        if raw_must_hear_kind in {"users", "critics", "both"}:
+            official_must_hear = True
+            must_hear_kind_value = raw_must_hear_kind
+            must_hear_complete = source == "manual"
+        elif raw_must_hear_kind == "none":
+            official_must_hear = False
+            must_hear_kind_value = None
+            must_hear_complete = source == "manual"
+        else:
+            must_hear_kind_value = None
+            must_hear_complete = source in {"aoty", "manual"} and isinstance(
+                official_must_hear,
+                bool,
+            )
 
         def section_complete(name: str) -> bool:
             # Older callers and test fixtures predate the parser contract and
@@ -4342,6 +4383,7 @@ class Database:
                     "ranking_year",
                     "year_ranking",
                     "year_ranking_text",
+                    "all_time_ranking",
                 ):
                     metadata_sources.setdefault("ranking", "aoty")
                 if self.connection.execute(
@@ -4365,6 +4407,7 @@ class Database:
                     "ranking_year",
                     "year_ranking",
                     "year_ranking_text",
+                    "all_time_ranking",
                 ),
                 "tracklist": ("tracklist",),
             }
@@ -4384,9 +4427,10 @@ class Database:
                     critic_reviews_count, release_date, year,
                     album_format, label, labels_json, genres_json,
                     secondary_genres_json, vibes_json, ranking_year,
-                    year_ranking, year_ranking_text, must_hear, metadata_source,
+                    year_ranking, year_ranking_text, all_time_ranking,
+                    must_hear, must_hear_kind, metadata_source,
                     metadata_sources_json, fetched_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(album_id) DO UPDATE SET
                     artist = COALESCE(excluded.artist, releases.artist),
                     artist_url = COALESCE(excluded.artist_url, releases.artist_url),
@@ -4433,8 +4477,13 @@ class Database:
                     year_ranking_text = CASE WHEN ? THEN
                         excluded.year_ranking_text
                         ELSE releases.year_ranking_text END,
+                    all_time_ranking = CASE WHEN ? THEN
+                        excluded.all_time_ranking
+                        ELSE releases.all_time_ranking END,
                     must_hear = CASE WHEN ? THEN
                         excluded.must_hear ELSE releases.must_hear END,
+                    must_hear_kind = CASE WHEN ? THEN
+                        excluded.must_hear_kind ELSE releases.must_hear_kind END,
                     metadata_source = COALESCE(
                         excluded.metadata_source,
                         releases.metadata_source
@@ -4464,7 +4513,9 @@ class Database:
                     details.get("ranking_year"),
                     details.get("year_ranking"),
                     details.get("year_ranking_text"),
+                    details.get("all_time_ranking"),
                     int(official_must_hear) if must_hear_complete else None,
+                    must_hear_kind_value,
                     source or None,
                     _json_dump(metadata_sources),
                     now,
@@ -4483,6 +4534,8 @@ class Database:
                     section_complete("ranking"),
                     section_complete("ranking"),
                     section_complete("ranking"),
+                    section_complete("ranking"),
+                    must_hear_complete,
                     must_hear_complete,
                 ),
             )
@@ -4551,6 +4604,7 @@ class Database:
                     "ranking_year",
                     "year_ranking",
                     "year_ranking_text",
+                    "all_time_ranking",
                 ),
                 "tracklist": ("tracklist",),
             }
@@ -4802,7 +4856,7 @@ class Database:
             metadata_sources.setdefault("genres", inferred_source)
         if vibes:
             metadata_sources.setdefault("vibes", "aoty")
-        if row["year_ranking"] or row["year_ranking_text"]:
+        if row["year_ranking"] or row["year_ranking_text"] or row["all_time_ranking"]:
             metadata_sources.setdefault("ranking", "aoty")
         if tracks:
             metadata_sources.setdefault("tracklist", inferred_source)
@@ -4834,9 +4888,11 @@ class Database:
             "ranking_year": row["ranking_year"],
             "year_ranking": row["year_ranking"],
             "year_ranking_text": row["year_ranking_text"],
+            "all_time_ranking": row["all_time_ranking"],
             "must_hear": (
                 None if row["must_hear"] is None else bool(row["must_hear"])
             ),
+            "must_hear_kind": row["must_hear_kind"],
             "metadata_source": row["metadata_source"],
             "metadata_sources": metadata_sources,
             "source_data": source_data,

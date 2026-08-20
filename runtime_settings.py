@@ -254,8 +254,8 @@ LASTFM_HISTORY_PAGE_INTERVAL = _runtime_int(
 )
 LASTFM_NEWEST_SCROBBLE_INTERVAL = _runtime_int(
     "lastfm_newest_scrobble_interval",
-    10 * 60,
-    5 * 60,
+    6 * 60 * 60,
+    30 * 60,
 )
 
 

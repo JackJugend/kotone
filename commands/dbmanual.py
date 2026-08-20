@@ -22,7 +22,12 @@ def _split_values(value: str | None) -> list[str]:
 
 
 def _parse_tracklist(value: str | None) -> list[dict]:
-    """Parse compact operator input into release_tracks rows."""
+    """Parse compact or copied AOTY rows into release-track rows.
+
+    Accepted copied form: ``1 [Title](https://...)3:12 96``. The final
+    score is optional, therefore a public tracklist may be saved without
+    any AOTY per-track ratings.
+    """
 
     text = str(value or "").strip()
     if not text:
@@ -30,6 +35,29 @@ def _parse_tracklist(value: str | None) -> list[dict]:
     rows = [row.strip() for row in re.split(r"\n|;", text) if row.strip()]
     tracks: list[dict] = []
     for index, row in enumerate(rows, start=1):
+        copied = re.match(
+            r"^\s*(?P<number>\d+)\s*[.)]?\s*"
+            r"\[(?P<title>.+?)\]\((?P<url>https?://[^)]+)\)\s*"
+            r"(?P<duration>\d{1,2}:\d{2})?\s*"
+            r"(?P<user_score>\d{1,3})?\s*$",
+            row,
+        )
+        if copied:
+            user_score = copied.group("user_score")
+            if user_score is not None and not 0 <= int(user_score) <= 100:
+                raise ValueError(f"Nieprawidlowa ocena utworu: {user_score}.")
+            tracks.append(
+                {
+                    "number": int(copied.group("number")),
+                    "title": copied.group("title").strip(),
+                    "url": copied.group("url").strip(),
+                    "duration": copied.group("duration") or None,
+                    "user_score": user_score,
+                    "disc": None,
+                }
+            )
+            continue
+
         parts = [part.strip() for part in row.split("|")]
         head = parts[0] if parts else ""
         number = index
@@ -40,6 +68,12 @@ def _parse_tracklist(value: str | None) -> list[dict]:
             title = match.group("title").strip()
         duration = parts[1] if len(parts) >= 2 and parts[1] else None
         user_score = parts[2] if len(parts) >= 3 and parts[2] else None
+        if user_score is not None:
+            try:
+                if not 0 <= int(user_score) <= 100:
+                    raise ValueError
+            except ValueError as exc:
+                raise ValueError(f"Nieprawidlowa ocena utworu: {user_score}.") from exc
         disc = parts[3] if len(parts) >= 4 and parts[3] else None
         if title:
             tracks.append(
@@ -73,7 +107,10 @@ def _section_complete(payload: dict) -> dict[str, bool]:
             for key in ("genres", "secondary_genres")
         ),
         "vibes": payload.get("vibes") not in (None, "", [], {}),
-        "ranking": payload.get("year_ranking_text") not in (None, ""),
+        "ranking": any(
+            payload.get(key) not in (None, "")
+            for key in ("year_ranking_text", "all_time_ranking")
+        ),
         "tracklist": payload.get("tracklist") not in (None, "", [], {}),
     }
 
@@ -169,8 +206,11 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         critic_score="Critic Score",
         critic_reviews_count="Liczba recenzji krytykow",
         year_ranking="Ranking roczny, np. #12",
-        must_hear="Reczny status Must Hear",
-        tracklist="Tracki: 1. Title | 3:12 | 96 | disc; 2. Title...",
+        all_time_ranking="Ranking all-time, np. #48",
+        must_hear="Status Must Hear",
+        tracklist=(
+            "Wklej: 1 [Title](https://aoty.org/song/...)3:12 96; score opcjonalny"
+        ),
     )
     @discord.app_commands.autocomplete(
         album_id=dbmanual_album_autocomplete,
@@ -180,7 +220,13 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         format=[
             discord.app_commands.Choice(name=info["label"], value=key)
             for key, info in RATING_FORMATS.items()
-        ]
+        ],
+        must_hear=[
+            discord.app_commands.Choice(name="Must Hear users", value="users"),
+            discord.app_commands.Choice(name="Must Hear critics", value="critics"),
+            discord.app_commands.Choice(name="Must Hear both", value="both"),
+            discord.app_commands.Choice(name="Brak Must Hear", value="none"),
+        ],
     )
     async def dbmanual_command(
         interaction: discord.Interaction,
@@ -205,7 +251,8 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         critic_score: str | None = None,
         critic_reviews_count: str | None = None,
         year_ranking: str | None = None,
-        must_hear: bool | None = None,
+        all_time_ranking: str | None = None,
+        must_hear: str | None = None,
         tracklist: str | None = None,
     ) -> None:
         if interaction.guild_id != GUILD_ID:
@@ -284,7 +331,8 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                 "critic_score": critic_score,
                 "critic_reviews_count": critic_reviews_count,
                 "year_ranking_text": year_ranking,
-                "must_hear": must_hear,
+                "all_time_ranking": all_time_ranking,
+                "must_hear_kind": must_hear,
                 "tracklist": _parse_tracklist(tracklist),
             }
             release_payload = {

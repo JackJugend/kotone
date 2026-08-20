@@ -136,3 +136,28 @@ class LastFMArchiveDatabaseTests(unittest.TestCase):
             ),
             3,
         )
+
+    def test_offline_csv_marks_history_complete_without_a_row_source_column(self):
+        self.db.import_tracks(
+            "enso",
+            [
+                {
+                    "played_at": 100,
+                    "artist": "Offline Artist",
+                    "album": "Offline Album",
+                    "track": "Offline Track",
+                }
+            ],
+        )
+        self.db.mark_imported_complete("enso")
+
+        state = self.db.state("enso")
+        self.assertTrue(state["complete"])
+        self.assertEqual(state["next_page"], 1)
+        self.assertEqual(state["total_scrobbles"], 1)
+        self.assertFalse(self.db.newest_due("enso", 60 * 60))
+        columns = {
+            row["name"]
+            for row in self.db.connection.execute("PRAGMA table_info(scrobbles)")
+        }
+        self.assertNotIn("source", columns)

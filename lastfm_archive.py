@@ -80,15 +80,19 @@ class LastFMArchive:
             newest_due = LASTFM_DB.newest_due(
                 key, LASTFM_NEWEST_SCROBBLE_INTERVAL
             )
+            # A CSV import marks its archive as complete.  Do not make an
+            # expensive API crawl right afterwards: only a rare page-one
+            # refresh is useful then.  This state is separate from scrobble
+            # rows, so no per-row source column is required.
+            if state.get("complete") and not newest_due:
+                self.last_success_at = now
+                self.last_error = None
+                return {"attempted": True, "profile": refreshed_profile, "complete": True}
             if not has_archive_cursor or newest_due:
                 # First request after startup always persists the latest page.
                 # Later refreshes do not reset the historical cursor.
                 page_number = 1
                 refresh_only = has_archive_cursor
-            elif state.get("complete"):
-                self.last_success_at = now
-                self.last_error = None
-                return {"attempted": True, "profile": refreshed_profile, "complete": True}
             else:
                 page_number = max(1, int(state.get("next_page") or 1))
                 refresh_only = False

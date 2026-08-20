@@ -146,7 +146,7 @@ def _ranking_section(variables: ReleaseVariables) -> list[str]:
     if ranking_year == MISSING_VALUE:
         ranking_year = display_value(variables.year)
     label = f"{ranking_year} ratings" if ranking_year != MISSING_VALUE else "Year ratings"
-    return [
+    lines = [
         _detail_line(
             variables,
             section="ranking",
@@ -154,6 +154,16 @@ def _ranking_section(variables: ReleaseVariables) -> list[str]:
             value=variables.year_ranking_text,
         )
     ]
+    if display_value(variables.all_time_ranking) != MISSING_VALUE:
+        lines.append(
+            _detail_line(
+                variables,
+                section="ranking",
+                label="All-time ratings",
+                value=variables.all_time_ranking,
+            )
+        )
+    return lines
 
 
 def _musicbrainz_section(source_data: Mapping[str, object]) -> list[str]:

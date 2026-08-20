@@ -20,6 +20,7 @@ from must_hear import (
     cover_token,
     marked_cover_endpoint_enabled,
     must_hear_album,
+    must_hear_kind,
 )
 from services import DATA
 from settings import PORT
@@ -153,7 +154,18 @@ class HealthServer:
                 raise web.HTTPFound(location=cover_url)
             raise web.HTTPNotFound()
 
-        if token != cover_token(album_id, cover_url):
+        stored_kind = str(details.get("must_hear_kind") or "").casefold()
+        kind = (
+            stored_kind
+            if stored_kind in {"users", "critics", "both"}
+            else must_hear_kind(
+                details.get("user_score"),
+                details.get("ratings_count"),
+                details.get("critic_score"),
+                details.get("critic_reviews_count"),
+            )
+        )
+        if token != cover_token(album_id, cover_url, kind=kind):
             original_cover("cover_token_mismatch")
         if not must_hear_album(
             details.get("user_score"),
@@ -168,7 +180,7 @@ class HealthServer:
         if not content:
             original_cover("cover_unavailable")
         try:
-            marked = await asyncio.to_thread(render_must_hear_png, content)
+            marked = await asyncio.to_thread(render_must_hear_png, content, kind=kind)
         except Exception:
             original_cover("cover_render_failed")
         self.must_hear_cover_served += 1

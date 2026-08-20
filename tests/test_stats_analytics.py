@@ -307,10 +307,15 @@ class CoverCacheTests(unittest.TestCase):
         self.assertIsNone(_safe_cover_url("http://cdn.albumoftheyear.org/x.jpg"))
         self.assertIsNone(_safe_cover_url("https://example.com/x.jpg"))
 
-    def test_marked_cover_url_is_stable_and_badge_is_orange(self):
+    def test_marked_cover_url_is_stable_and_badges_use_their_three_colours(self):
         try:
             from PIL import Image
-            from cover_badges import MUST_HEAR_ORANGE, add_must_hear_badge
+            from cover_badges import (
+                MUST_HEAR_BLUE,
+                MUST_HEAR_ORANGE,
+                MUST_HEAR_PURPLE,
+                add_must_hear_badge,
+            )
             from must_hear import marked_cover_url
         except ModuleNotFoundError as exc:
             self.skipTest(str(exc))
@@ -323,6 +328,14 @@ class CoverCacheTests(unittest.TestCase):
         self.assertTrue(url.startswith("https://kotone.example/must-hear-cover/42/"))
         image = add_must_hear_badge(Image.new("RGB", (200, 200), "white"))
         self.assertEqual(image.getpixel((198, 1)), MUST_HEAR_ORANGE)
+        critics = add_must_hear_badge(
+            Image.new("RGB", (200, 200), "white"), kind="critics"
+        )
+        both = add_must_hear_badge(
+            Image.new("RGB", (200, 200), "white"), kind="both"
+        )
+        self.assertEqual(critics.getpixel((198, 1)), MUST_HEAR_BLUE)
+        self.assertEqual(both.getpixel((198, 1)), MUST_HEAR_PURPLE)
 
 
 @unittest.skipIf(DISCORD_IMPORT_ERROR is not None, str(DISCORD_IMPORT_ERROR))

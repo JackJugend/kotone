@@ -11,7 +11,7 @@ from urllib.parse import quote
 # Discord caches generated thumbnail URLs very aggressively. Bump this when
 # the deterministic badge artwork changes so a freshly invoked command shows
 # the new rendering instead of a previously cached PNG.
-MUST_HEAR_BADGE_RENDER_VERSION = "2"
+MUST_HEAR_BADGE_RENDER_VERSION = "3"
 
 
 def numeric_count(value) -> float | None:
@@ -87,7 +87,7 @@ def must_hear_kind(
     return "users"
 
 
-def cover_token(album_id: str, cover_url: str) -> str:
+def cover_token(album_id: str, cover_url: str, *, kind: str = "users") -> str:
     """Return an endpoint token which stays valid when a provider changes art.
 
     The generated image is looked up only from the bot's own in-scope release
@@ -98,12 +98,18 @@ def cover_token(album_id: str, cover_url: str) -> str:
 
     del cover_url  # Kept in the signature for existing callers/tests.
     payload = (
-        f"{MUST_HEAR_BADGE_RENDER_VERSION}|{str(album_id or '').strip()}"
+        f"{MUST_HEAR_BADGE_RENDER_VERSION}|{str(album_id or '').strip()}|"
+        f"{str(kind or 'users').strip().casefold()}"
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:20]
 
 
-def marked_cover_url(album_id: str, cover_url: str) -> str | None:
+def marked_cover_url(
+    album_id: str,
+    cover_url: str,
+    *,
+    kind: str = "users",
+) -> str | None:
     """Return Kotone's public marked-cover endpoint when Railway exposes one."""
 
     album_id = str(album_id or "").strip()
@@ -111,11 +117,11 @@ def marked_cover_url(album_id: str, cover_url: str) -> str | None:
     domain = str(os.getenv("RAILWAY_PUBLIC_DOMAIN") or "").strip()
     if not album_id or not cover_url or not domain:
         return None
-    token = cover_token(album_id, cover_url)
+    token = cover_token(album_id, cover_url, kind=kind)
     return (
         f"https://{domain}/must-hear-cover/"
         f"{quote(album_id, safe='')}/{token}.png"
-        f"?cover={quote(cover_url, safe='')}"
+        f"?cover={quote(cover_url, safe='')}&kind={quote(str(kind or 'users'), safe='')}"
     )
 
 

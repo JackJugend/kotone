@@ -12,11 +12,13 @@ from PIL import Image, ImageDraw
 # Discord cover cannot keep the source image's alpha compositing reliably, so
 # use its opaque base colour for the same orange badge.
 MUST_HEAR_ORANGE = (233, 116, 81)
+MUST_HEAR_BLUE = (98, 188, 250)
+MUST_HEAR_PURPLE = (191, 64, 191)
 BADGE_INK = (45, 47, 54)
 
 
-def add_must_hear_badge(cover: Image.Image) -> Image.Image:
-    """Add the orange AOTY-style corner and a dark five-point star."""
+def add_must_hear_badge(cover: Image.Image, *, kind: str = "users") -> Image.Image:
+    """Add an AOTY-style Must Hear corner for users, critics or both."""
 
     cover = cover.copy().convert("RGB")
     draw = ImageDraw.Draw(cover)
@@ -25,9 +27,14 @@ def add_must_hear_badge(cover: Image.Image) -> Image.Image:
     # thumbnails, without covering a third of a small cover.
     corner = max(24, int(size * 0.26))
     width = cover.width
+    color = {
+        "users": MUST_HEAR_ORANGE,
+        "critics": MUST_HEAR_BLUE,
+        "both": MUST_HEAR_PURPLE,
+    }.get(str(kind or "").casefold(), MUST_HEAR_ORANGE)
     draw.polygon(
         ((width - corner, 0), (width, 0), (width, corner)),
-        fill=MUST_HEAR_ORANGE,
+        fill=color,
     )
 
     center_x = width - corner * 0.30
@@ -48,9 +55,9 @@ def add_must_hear_badge(cover: Image.Image) -> Image.Image:
     return cover
 
 
-def render_must_hear_png(content: bytes) -> bytes:
+def render_must_hear_png(content: bytes, *, kind: str = "users") -> bytes:
     image = Image.open(io.BytesIO(content)).convert("RGB")
-    image = add_must_hear_badge(image)
+    image = add_must_hear_badge(image, kind=kind)
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()

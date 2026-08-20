@@ -363,6 +363,56 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_manual_metadata_keeps_known_identity_and_supports_all_badges(self):
+        """Partial /dbmanual edits must not leave an Album #id title behind."""
+
+        db = self.make_db()
+        try:
+            db.upsert_rating(
+                "enso",
+                {
+                    "album_id": "manual-known",
+                    "score": "80",
+                    "artist": "Known Artist",
+                    "album": "Known Album",
+                    "url": "https://example.test/release",
+                    "cover": "https://example.test/cover.jpg",
+                },
+            )
+            self.assertTrue(
+                db.manual_update_release_details(
+                    "manual-known",
+                    {
+                        "artist": "Nieznany artysta",
+                        "album": "Album #manual-known",
+                        "all_time_ranking": "#48",
+                        "must_hear_kind": "both",
+                        "tracklist": [
+                            {
+                                "number": 1,
+                                "title": "Track without AOTY score",
+                                "duration": "3:13",
+                                "url": "https://example.test/song",
+                            }
+                        ],
+                        "_section_complete": {
+                            "ranking": True,
+                            "tracklist": True,
+                        },
+                    },
+                )
+            )
+            details = db.get_release_details("manual-known")
+            self.assertEqual(details["artist"], "Known Artist")
+            self.assertEqual(details["album"], "Known Album")
+            self.assertEqual(details["all_time_ranking"], "#48")
+            self.assertTrue(details["must_hear"])
+            self.assertEqual(details["must_hear_kind"], "both")
+            self.assertEqual(details["tracklist"][0]["title"], "Track without AOTY score")
+            self.assertIsNone(details["tracklist"][0]["user_score"])
+        finally:
+            db.close()
+
     def test_config_allow_list_change_snapshots_before_prune_once(self):
         db = self.make_db(users=("enso",))
         db.upsert_rating(

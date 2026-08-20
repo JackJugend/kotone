@@ -166,6 +166,13 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                     str(kotone_profile.get("name") or ""),
                     tracks,
                 )
+                # The attachment is an offline history import.  Record only
+                # its cursor state, not a source field on every scrobble, so
+                # the background worker does not re-download the same past.
+                await asyncio.to_thread(
+                    LASTFM_DB.mark_imported_complete,
+                    str(kotone_profile.get("name") or ""),
+                )
                 stats = await asyncio.to_thread(
                     LASTFM_DB.archive_statistics,
                     str(kotone_profile.get("name") or ""),
