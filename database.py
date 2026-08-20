@@ -28,6 +28,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Iterable
 
+from display_utils import normalize_genres
 from settings import (
     DATABASE_BACKUP_FILE,
     DATABASE_FILE,
@@ -154,6 +155,7 @@ class Database:
                 )
 
             self._create_or_upgrade_schema()
+            self._normalize_stored_genres()
 
             # Create the configured user rows before importing legacy ratings so
             # the ratings foreign key always has a valid parent.
@@ -1167,6 +1169,40 @@ class Database:
                 """,
                 (album_id, now, album_id),
             )
+
+    def _normalize_stored_genres(self) -> None:
+        """Jednorazowo ujednolić stare wpisy gatunków zapisane w SQLite.
+
+        Wcześniejsze wersje przechowywały nazwy bez normalizacji, więc te
+        same gatunki różniące się wyłącznie wielkością liter trafiały do
+        dropdownów jako osobne opcje. Aktualizacja jest idempotentna i nie
+        zmienia podziału na gatunki główne oraz drugorzędne.
+        """
+
+        with self._lock, self.connection:
+            rows = self.connection.execute(
+                "SELECT album_id, genres_json, secondary_genres_json FROM releases"
+            ).fetchall()
+            for row in rows:
+                genres = normalize_genres(_json_load(row["genres_json"], []))
+                secondary = normalize_genres(
+                    _json_load(row["secondary_genres_json"], [])
+                )
+                genres_json = _json_dump(genres)
+                secondary_json = _json_dump(secondary)
+                if (
+                    genres_json == str(row["genres_json"] or "")
+                    and secondary_json == str(row["secondary_genres_json"] or "")
+                ):
+                    continue
+                self.connection.execute(
+                    """
+                    UPDATE releases
+                    SET genres_json = ?, secondary_genres_json = ?
+                    WHERE album_id = ?
+                    """,
+                    (genres_json, secondary_json, row["album_id"]),
+                )
 
     # ------------------------------------------------------------------
     # Scope: only config users are persistent
@@ -2383,13 +2419,10 @@ class Database:
         with self._lock:
             rows = self.connection.execute(sql, params).fetchall()
 
-        genres: set[str] = set()
+        raw_genres: list[str] = []
         for row in rows:
-            for value in _json_load(row["genres_json"], []):
-                value = str(value or "").strip()
-                if value:
-                    genres.add(value)
-        return sorted(genres, key=str.casefold)
+            raw_genres.extend(_json_load(row["genres_json"], []))
+        return sorted(normalize_genres(raw_genres), key=str.casefold)
 
     def cached_artists(self) -> list[dict]:
         """Artists already present in configured users' durable ratings.
@@ -4466,6 +4499,10 @@ class Database:
             return False
 
         details = dict(details or {})
+        details["genres"] = normalize_genres(details.get("genres") or [])
+        details["secondary_genres"] = normalize_genres(
+            details.get("secondary_genres") or []
+        )
         now = _now()
 
         raw_section_complete = details.get("_section_complete")
@@ -5059,8 +5096,8 @@ class Database:
             ).fetchall()
 
         labels = _json_load(row["labels_json"], [])
-        genres = _json_load(row["genres_json"], [])
-        secondary = _json_load(row["secondary_genres_json"], [])
+        genres = normalize_genres(_json_load(row["genres_json"], []))
+        secondary = normalize_genres(_json_load(row["secondary_genres_json"], []))
         vibes = _json_load(row["vibes_json"], [])
         metadata_sources = _json_load(row["metadata_sources_json"], {})
         if not isinstance(metadata_sources, dict):

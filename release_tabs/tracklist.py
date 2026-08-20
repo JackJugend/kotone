@@ -17,6 +17,7 @@ from shared import (
     score_color,
     score_or_nr,
     set_aoty_footer,
+    user_avatar_emoji,
 )
 from ui_constants import TRACKLIST_BUTTON
 
@@ -168,7 +169,7 @@ async def build_combined_tracklist_embeds(
             row = (by_number.get(number) if number is not None else None) or by_title.get(title_key)
             personal_score = (row or {}).get("score")
             scores.append(
-                f"{configured_username} {score_or_nr(personal_score)}"
+                f"{user_avatar_emoji(username: str)} {score_or_nr(personal_score)}"
             )
         lines.append(f"**{display_number}.** {title_text}{duration}\n" + " • ".join(scores))
 

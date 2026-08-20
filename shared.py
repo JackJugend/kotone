@@ -154,7 +154,7 @@ def score_or_nr(score: Any) -> str:
     # A custom tile already contains its number (or the letters NR), therefore
     # duplicating text next to it would make every field less readable.
     if value == "NR":
-        return score_emoji(None) or "\\⚪ NR"
+        return score_emoji(None) or "⚪ NR"
     number = _score_number(value)
     custom = score_emoji(number) if number is not None else None
     if custom:

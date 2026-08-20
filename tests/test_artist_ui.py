@@ -41,8 +41,20 @@ except Exception as exc:  # pragma: no cover - dependency-limited local runs
 class DisplayNormalizationTests(unittest.TestCase):
     def test_genres_are_case_insensitive_unique_and_display_capitalised(self):
         self.assertEqual(
-            display_genres(["Jazz Pop", "jazz pop", "R&B", "r&b", "EDM"]),
-            ["Jazz Pop", "R&B", "EDM"],
+            display_genres(
+                [
+                    "Jazz Pop",
+                    "jazz pop",
+                    "R&B",
+                    "r&b",
+                    "alternative rock",
+                    "Alternative Rock",
+                    "Ambient—Pop",
+                    "ambient-pop",
+                    "EDM",
+                ]
+            ),
+            ["Jazz Pop", "R&B", "Alternative Rock", "Ambient-Pop", "EDM"],
         )
 
     def test_release_dates_use_one_polish_format(self):
@@ -161,6 +173,33 @@ class ArtistImageDatabaseTests(unittest.TestCase):
         )
         self.assertFalse(
             self.db.save_artist_image("Outsider", "https://lastfm.example/no.jpg")
+        )
+
+    def test_release_genres_are_merged_before_storage_and_autocomplete(self):
+        self.db.upsert_rating(
+            "enso",
+            {"album_id": "genre-1", "artist": "Artist", "album": "Album"},
+        )
+        self.assertTrue(
+            self.db.save_release_details(
+                "genre-1",
+                {
+                    "genres": [
+                        "alternative rock",
+                        "Alternative Rock",
+                        "AMBIENT",
+                        "ambient",
+                    ],
+                },
+            )
+        )
+        self.assertEqual(
+            self.db.get_release_details("genre-1")["genres"],
+            ["Alternative Rock", "Ambient"],
+        )
+        self.assertEqual(
+            self.db.available_genres("enso"),
+            ["Alternative Rock", "Ambient"],
         )
 
 

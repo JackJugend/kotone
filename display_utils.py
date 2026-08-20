@@ -40,36 +40,53 @@ _GENRE_WORD_FORMS = {
 }
 
 
-def display_genres(values) -> list[str]:
-    """Return unique, consistently capitalised genre labels for Discord."""
+def normalize_genres(values) -> list[str]:
+    """Zwróć kanoniczne, unikalne nazwy gatunków.
+
+    To jest jeden punkt normalizacji dla całego bota: ``ambient``,
+    ``Ambient`` i ``AMBIENT`` stają się jedną pozycją ``Ambient``.  Funkcja
+    nie próbuje łączyć różnych gatunków znaczeniowo — porządkuje wyłącznie
+    wielkość liter, spacje oraz równoważne znaki łącznika.
+    """
 
     result: list[str] = []
     seen: set[str] = set()
     for raw in values or []:
-        text = re.sub(r"\s+", " ", str(raw or "")).strip()
+        text = re.sub(r"[‐‑‒–—−]", "-", str(raw or ""))
+        text = re.sub(r"\s+", " ", text).strip()
         if not text:
             continue
-        key = text.casefold()
+        label = _display_genre_label(text)
+        key = label.casefold()
         if key in seen:
             continue
         seen.add(key)
-        result.append(_display_genre_label(text))
+        result.append(label)
     return result
+
+
+def display_genres(values) -> list[str]:
+    """Zwróć kanoniczne gatunki gotowe do wyświetlenia w Discordzie."""
+
+    return normalize_genres(values)
 
 
 def _display_genre_label(text: str) -> str:
     known = _GENRE_WORD_FORMS.get(text.casefold())
     if known:
         return known
+
+    def format_part(part: str) -> str:
+        folded = part.casefold()
+        if folded in _GENRE_WORD_FORMS:
+            return _GENRE_WORD_FORMS[folded]
+        if part.isupper() and len(part) <= 4:
+            return part
+        return part[:1].upper() + part[1:].lower()
+
     words = []
     for word in text.split(" "):
-        folded = word.casefold()
-        if folded in _GENRE_WORD_FORMS:
-            words.append(_GENRE_WORD_FORMS[folded])
-        elif word.isupper() and len(word) <= 4:
-            words.append(word)
-        else:
-            words.append(word[:1].upper() + word[1:].lower())
+        words.append("-".join(format_part(part) for part in word.split("-")))
     return " ".join(words)
 
 
