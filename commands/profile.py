@@ -104,8 +104,8 @@ def _lastfm_archive_progress(profile_key: object, archive: dict | None = None) -
     return f"{base} • oczekuje na pierwszy import"
 
 
-def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord.Embed]:
-    """Build Gan's regular profile card plus its Last.fm details card."""
+def _build_lastfm_only_embed(kotone_profile: dict[str, object]) -> discord.Embed:
+    """Build the sole profile card for a Kotone user without AOTY."""
 
     profile_key = str(kotone_profile.get("name") or "").strip()
     lastfm_username = str(kotone_profile.get("lastfm_username") or "").strip()
@@ -118,31 +118,12 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
     )
     avatar = str(lastfm_profile.get("avatar_url") or "").strip() or None
     display_name = str(kotone_profile.get("name") or profile_key)
-    header = discord.Embed(
-        title=display_name,
-        url=profile_url,
-        description="**—** ocen  •  x̄ **—**",
-        color=discord.Color.green(),
-    )
-    header.add_field(
-        name=" ",
-        value="Reviews **—**  •  Lists **—**\nFollowing **—**  •  Followers **—**",
-        inline=False,
-    )
-    header.add_field(name="Favorites", value="—", inline=False)
-    header.add_field(name="Ostatnie 5 ocen [1/1]", value="—", inline=False)
-    if avatar:
-        header.set_author(name=display_name, url=profile_url, icon_url=avatar)
-        header.set_thumbnail(url=avatar)
-    else:
-        header.set_author(name=display_name, url=profile_url)
-
-    details = discord.Embed(
+    embed = discord.Embed(
         title=f"{SOURCE_EMOJIS['lastfm']} Last.fm — @{lastfm_username}",
         url=profile_url,
         color=discord.Color.from_rgb(206, 69, 69),
     )
-    details.add_field(
+    embed.add_field(
         name="Konto Last.fm",
         value=(
             f"**{_lastfm_count(lastfm_profile.get('total_scrobbles'))}** scrobbli  •  "
@@ -152,7 +133,7 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
         ),
         inline=False,
     )
-    details.add_field(
+    embed.add_field(
         name="Historia odsłuchów w Kotone",
         value=(
             f"{_lastfm_archive_progress(profile_key, archive)}\n"
@@ -164,7 +145,7 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
     )
     if latest:
         album = f" — {latest['album']}" if latest.get("album") else ""
-        details.add_field(
+        embed.add_field(
             name="Ostatni scrobble",
             value=(
                 f"**{latest.get('artist') or '—'} — "
@@ -173,13 +154,12 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
             inline=False,
         )
     if avatar:
-        # Keep the source card's top author identical to the primary profile.
-        details.set_author(name=display_name, url=profile_url, icon_url=avatar)
-        details.set_thumbnail(url=avatar)
+        embed.set_author(name=display_name, url=profile_url, icon_url=avatar)
+        embed.set_thumbnail(url=avatar)
     else:
-        details.set_author(name=display_name, url=profile_url)
-    _set_lastfm_footer(details)
-    return [header, details]
+        embed.set_author(name=display_name, url=profile_url)
+    _set_lastfm_footer(embed)
+    return embed
 
 
 async def profile_autocomplete(
@@ -230,7 +210,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         kotone_profile = resolve_kotone_profile(interaction.user.id, username)
         if kotone_profile and not kotone_profile.get("aoty_username"):
             await interaction.followup.send(
-                embeds=_build_lastfm_only_embeds(kotone_profile),
+                embed=_build_lastfm_only_embed(kotone_profile),
                 file=_lastfm_footer_file(),
             )
             return
