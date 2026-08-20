@@ -418,6 +418,34 @@ class RatingImportDatabaseTests(unittest.TestCase):
         self.assertEqual(len(result["unmatched"]), 1)
         self.assertEqual(self.db.summary()["ratings"], 1)
 
+    def test_explicit_manual_release_is_a_safe_csv_import_candidate(self):
+        """An operator-provided AOTY ID may resolve one previously unknown row."""
+
+        self.db.manual_update_release_details(
+            "manual-spinning-plums",
+            {
+                "artist": "Spinning Plums",
+                "album": "Spinning Plums",
+                "album_format": "EP",
+                "year": "2024",
+                "_section_complete": {"format": True, "release_date": True},
+            },
+        )
+        record = {
+            **self._record(artist="Spinning Plums", album="Spinning Plums", score="57"),
+            "year": 2024,
+            "release_format": "EP",
+        }
+
+        result = self.db.import_official_ratings("enso", [record])
+
+        self.assertEqual(result["unmatched"], [])
+        self.assertEqual(result["added"], 1)
+        self.assertEqual(
+            self.db.get_rating("enso", "manual-spinning-plums")["score"],
+            "57",
+        )
+
     def test_probably_swapped_export_is_rejected_before_changes(self):
         for index in range(10):
             self.db.upsert_rating(

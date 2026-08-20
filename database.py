@@ -3294,6 +3294,11 @@ class Database:
                     SELECT 1 FROM ratings scoped
                     WHERE scoped.album_id = rel.album_id
                 )
+                   -- An operator may explicitly seed a missing AOTY ID via
+                   -- /dbmanual before importing the official CSV. Such rows
+                   -- are safe candidates because they are never discovered
+                   -- automatically and their identity was user-entered.
+                   OR rel.metadata_source = 'manual'
                 """
             ).fetchall()
 
