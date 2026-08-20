@@ -3744,9 +3744,13 @@ class Database:
         section_complete = dict(payload.get("_section_complete") or {})
         payload["_section_complete"] = section_complete
 
-        saved = self.save_release_details(album_id, payload)
+        saved = self.save_release_details(
+            album_id,
+            payload,
+            allow_unscoped_manual=True,
+        )
         if not saved:
-            raise ValueError("Album nie jest w zakresie bazy Kotone.")
+            raise ValueError("Nie udało się zapisać ręcznie dodanego wydania.")
 
         with self._lock, self.connection:
             rows = self.connection.execute(
@@ -4237,7 +4241,7 @@ class Database:
         ]
 
     # ------------------------------------------------------------------
-    # Release cache (only releases belonging to monitored-user ratings)
+    # Release cache (configured-user ratings plus explicit operator entries)
     # ------------------------------------------------------------------
 
     def _release_is_in_scope_locked(self, album_id: str) -> bool:
@@ -4247,7 +4251,13 @@ class Database:
         ).fetchone()
         return row is not None
 
-    def save_release_details(self, album_id: str, details: dict) -> bool:
+    def save_release_details(
+        self,
+        album_id: str,
+        details: dict,
+        *,
+        allow_unscoped_manual: bool = False,
+    ) -> bool:
         album_id = str(album_id or "").strip()
         if not album_id:
             return False
@@ -4272,7 +4282,13 @@ class Database:
             return legacy_authoritative or bool(raw_section_complete.get(name))
 
         with self._lock, self.connection:
-            if not self._release_is_in_scope_locked(album_id):
+            # Scrapers still write only data connected to a configured Kotone
+            # user. /dbmanual is the deliberate exception: an operator may
+            # prepare one release before anyone rates it.
+            can_save_unscoped_manual = (
+                allow_unscoped_manual and source == "manual"
+            )
+            if not self._release_is_in_scope_locked(album_id) and not can_save_unscoped_manual:
                 return False
 
             existing = self.connection.execute(
@@ -4840,6 +4856,7 @@ class Database:
             WHERE album_id NOT IN (
                 SELECT DISTINCT album_id FROM ratings
             )
+              AND COALESCE(metadata_source, '') != 'manual'
             """
         )
         self.connection.execute(

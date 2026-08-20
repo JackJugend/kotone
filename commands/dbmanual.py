@@ -8,6 +8,7 @@ import re
 import discord
 
 from database import DB
+from formats import RATING_FORMATS
 from rating_import import normalized_text
 from settings import GUILD_ID, USERS, is_operator_discord_id
 
@@ -77,6 +78,19 @@ def _section_complete(payload: dict) -> dict[str, bool]:
     }
 
 
+def _format_label(value: str | None) -> str | None:
+    """Normalize the slash-command choice to Kotone's display label."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for key, info in RATING_FORMATS.items():
+        candidates = {key.casefold(), info["slug"].casefold(), info["label"].casefold()}
+        if raw.casefold() in candidates:
+            return info["label"]
+    return raw
+
+
 async def dbmanual_album_autocomplete(
     interaction: discord.Interaction,
     current: str,
@@ -134,7 +148,7 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         description="Operatorsko dodaje lub zmienia dane zapisane w SQLite.",
     )
     @discord.app_commands.describe(
-        album_id="AOTY album_id istniejacej pozycji w bazie Kotone",
+        album_id="AOTY album_id; nowy identyfikator utworzy pozycję ręczną",
         username="User z configu; wymagany tylko dla oceny/review/like",
         rating_score="Ocena usera z configu 0-100",
         rating_date="Data oceny usera, np. 20.08.2026",
@@ -145,7 +159,7 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         cover="URL okladki",
         release_date="Data wydania, np. 31.01.2021",
         year="Rok wydania",
-        format="Format, np. LP / EP / Single",
+        format="Format wydania",
         label="Glowna wytwornia",
         genres="Gatunki po przecinku",
         secondary_genres="Drugorzedne gatunki po przecinku",
@@ -161,6 +175,12 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
     @discord.app_commands.autocomplete(
         album_id=dbmanual_album_autocomplete,
         username=dbmanual_user_autocomplete,
+    )
+    @discord.app_commands.choices(
+        format=[
+            discord.app_commands.Choice(name=info["label"], value=key)
+            for key, info in RATING_FORMATS.items()
+        ]
     )
     async def dbmanual_command(
         interaction: discord.Interaction,
@@ -205,6 +225,9 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         changed_parts: list[str] = []
         try:
             await asyncio.to_thread(DB.backup_if_due, force=True)
+            album_id = str(album_id or "").strip()
+            if not album_id:
+                raise ValueError("Podaj album_id.")
 
             if rating_score is not None or rating_date:
                 if not username:
@@ -250,7 +273,7 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                 "cover": cover,
                 "release_date": release_date,
                 "year": year,
-                "album_format": format,
+                "album_format": _format_label(format),
                 "label": label,
                 "labels": _split_values(label),
                 "genres": _split_values(genres),
@@ -269,7 +292,13 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                 for key, value in release_payload.items()
                 if value not in (None, "", [], {})
             }
-            if release_payload:
+            existing_release = await asyncio.to_thread(DB.get_release_details, album_id)
+            if release_payload or existing_release is None:
+                # Bare album_id creates a small manual placeholder. The
+                # operator can fill the remaining fields in another call.
+                if existing_release is None:
+                    release_payload.setdefault("artist", "Nieznany artysta")
+                    release_payload.setdefault("album", f"Album #{album_id}")
                 release_payload["_section_complete"] = _section_complete(release_payload)
                 await asyncio.to_thread(
                     DB.manual_update_release_details,
@@ -277,7 +306,9 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                     release_payload,
                     actor=str(interaction.user.id),
                 )
-                changed_parts.append("release metadata")
+                changed_parts.append(
+                    "nowa pozycja" if existing_release is None else "release metadata"
+                )
 
         except Exception as exc:
             await interaction.followup.send(

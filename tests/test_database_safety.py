@@ -330,6 +330,39 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             migrated.close()
 
+    def test_operator_manual_release_can_be_created_without_a_rating(self):
+        """/dbmanual may seed a public release before a Kotone user rates it."""
+
+        db = self.make_db()
+        try:
+            self.assertFalse(
+                db.save_release_details(
+                    "outside-scope",
+                    {"artist": "A", "album": "Outside"},
+                )
+            )
+            self.assertTrue(
+                db.manual_update_release_details(
+                    "manual-release",
+                    {
+                        "artist": "Manual Artist",
+                        "album": "Manual Album",
+                        "album_format": "EP",
+                        "_section_complete": {"format": True},
+                    },
+                )
+            )
+            details = db.get_release_details("manual-release")
+            self.assertEqual(details["artist"], "Manual Artist")
+            self.assertEqual(details["album"], "Manual Album")
+            self.assertEqual(details["album_format"], "EP")
+
+            with db._lock, db.connection:
+                db._cleanup_orphan_release_cache_locked()
+            self.assertIsNotNone(db.get_release_details("manual-release"))
+        finally:
+            db.close()
+
     def test_config_allow_list_change_snapshots_before_prune_once(self):
         db = self.make_db(users=("enso",))
         db.upsert_rating(
