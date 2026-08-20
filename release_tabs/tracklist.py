@@ -19,7 +19,7 @@ from shared import (
     set_aoty_footer,
     user_avatar_emoji,
 )
-from ui_constants import TRACKLIST_BUTTON
+from ui_constants import AOTY_SOURCE_EMOJI, TRACKLIST_BUTTON
 
 
 def _track_key(value: object) -> str:
@@ -149,6 +149,16 @@ async def build_combined_tracklist_embeds(
             if title_key:
                 seen_titles.add(title_key)
 
+    configured_users = list(USERS[:25])
+    score_header = "  •  ".join(
+        [
+            AOTY_SOURCE_EMOJI,
+            *[
+                user_avatar_emoji(configured_username) or "👤"
+                for configured_username in configured_users
+            ],
+        ]
+    )
     lines: list[str] = []
     for track in merged:
         number = _track_number(track.get("number"))
@@ -160,26 +170,23 @@ async def build_combined_tracklist_embeds(
         title_text = f"[{title}]({url})" if url else title
         public_score = track.get("user_score")
         scores = [
-            f"<:aoty:1539095897084924004> {score_or_nr(public_score)}"
+            score_or_nr(public_score)
             if str(public_score or "").strip()
-            else "<:aoty:1539095897084924004> **—**"
+            else "**—**"
         ]
-        for configured_username in USERS[:25]:
+        for configured_username in configured_users:
             by_number, by_title = personal_maps.get(configured_username, ({}, {}))
             row = (by_number.get(number) if number is not None else None) or by_title.get(title_key)
             personal_score = (row or {}).get("score")
-            avatar = user_avatar_emoji(configured_username)
-            user_label = " ".join(
-                value for value in (avatar, configured_username) if value
-            )
-            scores.append(
-                f"{user_label} {score_or_nr(personal_score)}"
-            )
-        lines.append(f"**{display_number}.** {title_text}{duration}\n" + " • ".join(scores))
+            scores.append(score_or_nr(personal_score))
+        lines.append(
+            f"**{display_number}.** {title_text}{duration}\n"
+            + "  •  ".join(scores)
+        )
 
-    descriptions = paginate_description_lines(
-        lines or ["Brak tracklisty w kotone."]
-    )
+    descriptions = paginate_description_lines(lines, limit=3200) if lines else ["Brak tracklisty w kotone."]
+    if lines:
+        descriptions = [f"{score_header}\n{description}" for description in descriptions]
     return [
         _build_tracklist_embed(
             variables,

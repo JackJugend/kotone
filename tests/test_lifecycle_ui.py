@@ -42,6 +42,7 @@ try:
     import background as background_module  # noqa: E402
     import bot as bot_module  # noqa: E402
     import health as health_module  # noqa: E402
+    import release_tabs.tracklist as tracklist_module  # noqa: E402
     import shared as shared_module  # noqa: E402
     import views as views_module  # noqa: E402
 except ModuleNotFoundError as exc:  # pragma: no cover - exercised in minimal local runtime
@@ -794,7 +795,12 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         with (
-            patch.object(views_module, "USERS", ["enso", "kulkien"]),
+            patch.object(tracklist_module, "USERS", ["enso", "kulkien"]),
+            patch.object(
+                tracklist_module,
+                "user_avatar_emoji",
+                side_effect=lambda username: f"<:{username}:123>",
+            ),
             patch.object(
                 views_module.DATA,
                 "get_release_details",
@@ -814,11 +820,14 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             embed = await views_module.build_combined_tracklist_embed(item)
 
         self.assertIn("**1.** Opening Track `3:45`", embed.description)
-        self.assertIn("<:aoty:", embed.description)
+        self.assertIn(
+            "<:aoty:1539095897084924004>  •  <:enso:123>  •  <:kulkien:123>",
+            embed.description,
+        )
         self.assertIn("**82**", embed.description)
-        self.assertIn("enso", embed.description)
+        self.assertNotIn(" enso ", embed.description)
         self.assertIn("**90**", embed.description)
-        self.assertIn("kulkien", embed.description)
+        self.assertNotIn(" kulkien ", embed.description)
         self.assertIn("**75**", embed.description)
         self.assertNotIn("<function user_avatar_emoji", embed.description)
         live_detail.assert_not_awaited()
