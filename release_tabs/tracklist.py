@@ -181,7 +181,7 @@ async def build_combined_tracklist_embeds(
             scores.append(score_or_nr(personal_score))
         lines.append(
             f"**{display_number}.** {title_text}{duration}\n"
-            + "  │  ".join(scores)
+            + "  •  ".join(scores)
         )
 
     descriptions = paginate_description_lines(lines, limit=3200) if lines else ["Brak tracklisty w kotone."]
