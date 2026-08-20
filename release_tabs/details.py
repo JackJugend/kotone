@@ -22,6 +22,9 @@ from shared import (
     score_or_nr,
     set_aoty_footer,
     source_emoji,
+    critic_score
+    critic_reviews_count
+    must_hear_kind
 )
 from ui_constants import DETAILS_BUTTON
 
@@ -73,6 +76,9 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
     score = aoty_score_value(
         variables.aoty_user_score,
         variables.ratings_count,
+        variables.critic_score,
+        variables.critic_reviews_count,
+        variables.must_hear_kind,
     )
     return [
         _detail_line(
@@ -84,8 +90,27 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
         _detail_line(
             variables,
             section="score",
-            label="Based on",
-            value=f"{variables.ratings_count} **ratings**",
+            label="Ratings",
+            value=variables.ratings_count,
+        ),
+
+        _detail_line(
+            variables,
+            section="score",
+            label="Critic score",
+            value=variables.critic_score,
+        ),
+        _detail_line(
+            variables,
+            section="score",
+            label="Critic reviews",
+            value=variables.critic_reviews_count,
+        ),
+        _detail_line(
+            variables,
+            section="score",
+            label="Must hear",
+            value=variables.must_hear_kind,
         ),
     ]
 
