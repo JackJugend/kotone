@@ -22,9 +22,11 @@ from settings import (
     AOTY_ICON_ATTACHMENT,
     EMBED_SCORE_EMOJIS,
     EMBED_STATUS_EMOJIS,
+    KOTONE_BOT_AVATAR_EMOJI_KEY,
     MENU_SCORE_EMOJIS,
     MENU_STATUS_EMOJIS,
     MUST_HEAR_EMOJIS,
+    SOURCE_EMOJIS,
     USERS,
 )
 
@@ -291,6 +293,7 @@ class ReleaseVariables:
     # Tracklista AOTY.
     tracklist: list[dict] = field(default_factory=list)
     tracklist_text: Any = None
+    metadata_source: str | None = None
     metadata_sources: dict[str, str] = field(default_factory=dict)
     # Provider-specific IDs/counts remain separate from the shared fields
     # above.  They are used only by the details tab, never to replace AOTY.
@@ -382,6 +385,29 @@ def user_avatar_emoji(username: str) -> str:
         return f"<:{name}:{emoji_id}>" if name and emoji_id else ""
     except Exception:
         return ""
+
+
+def application_avatar_emoji(key: str = KOTONE_BOT_AVATAR_EMOJI_KEY) -> str:
+    """Return a cached application-avatar emoji such as ``:kotone:``."""
+
+    try:
+        from database import DB
+
+        state = DB.get_application_avatar_emoji_state(key) or {}
+        emoji_id = str(state.get("emoji_id") or "").strip()
+        name = str(state.get("emoji_name") or key or "").strip().casefold()
+        return f"<:{name}:{emoji_id}>" if name and emoji_id else ""
+    except Exception:
+        return ""
+
+
+def source_emoji(source: str) -> str:
+    """Return the display emoji for one metadata source."""
+
+    key = str(source or "").strip().casefold()
+    if key == "manual":
+        return application_avatar_emoji() or SOURCE_EMOJIS.get("manual", "")
+    return SOURCE_EMOJIS.get(key, "")
 
 
 def build_release_variables(
@@ -543,6 +569,7 @@ def build_release_variables(
         year_ranking_text=value("year_ranking_text", missing),
         tracklist=tracklist,
         tracklist_text=details.get("tracklist_text") or missing,
+        metadata_source=details.get("metadata_source"),
         metadata_sources=dict(details.get("metadata_sources") or {}),
         source_data=dict(details.get("source_data") or {}),
         has_review=bool(item.get("has_review")),

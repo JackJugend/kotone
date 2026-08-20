@@ -22,7 +22,11 @@ import requests
 from PIL import Image, ImageDraw, ImageOps
 
 from database import DB
-from settings import KOTONE_AVATAR_EMOJI_NAMES
+from settings import (
+    KOTONE_AVATAR_EMOJI_NAMES,
+    KOTONE_BOT_AVATAR_EMOJI_KEY,
+    KOTONE_BOT_AVATAR_EMOJI_NAME,
+)
 
 MAX_EMOJI_BYTES = 256 * 1024
 MAX_SOURCE_AVATAR_BYTES = 4 * 1024 * 1024
@@ -127,6 +131,48 @@ class AvatarEmojiSynchronizer:
 
         for username in KOTONE_AVATAR_EMOJI_NAMES:
             await self.sync_user(username)
+        await self.sync_bot_avatar()
+
+    async def sync_bot_avatar(self) -> bool:
+        """Synchronize the application emoji from Kotone's current avatar."""
+
+        user = getattr(self.client, "user", None)
+        avatar = getattr(user, "display_avatar", None)
+        if avatar is None:
+            return False
+        try:
+            avatar_url = str(avatar.replace(size=128, format="png").url)
+        except TypeError:
+            avatar_url = str(avatar.replace(size=128, static_format="png").url)
+        if not avatar_url:
+            return False
+
+        async with self._lock:
+            try:
+                image = DB.get_application_avatar_image(
+                    KOTONE_BOT_AVATAR_EMOJI_KEY,
+                    avatar_url,
+                )
+                if image is None:
+                    image = await asyncio.to_thread(_safe_avatar_bytes, avatar_url)
+                    DB.save_application_avatar_image(
+                        KOTONE_BOT_AVATAR_EMOJI_KEY,
+                        avatar_url,
+                        image,
+                    )
+                return await self._sync_application_avatar_locked(
+                    KOTONE_BOT_AVATAR_EMOJI_KEY,
+                    KOTONE_BOT_AVATAR_EMOJI_NAME,
+                    avatar_url,
+                    image,
+                )
+            except Exception as exc:
+                DB.mark_application_avatar_emoji_error(
+                    KOTONE_BOT_AVATAR_EMOJI_KEY,
+                    f"{type(exc).__name__}: {exc}",
+                )
+                print(f"[AVATAR EMOJI] kotone: {type(exc).__name__}: {exc}")
+                return False
 
     async def sync_user(self, username: str) -> bool:
         """Synchronize one configured user's avatar using its SQLite cache."""
@@ -238,4 +284,79 @@ class AvatarEmojiSynchronizer:
 
         DB.save_avatar_emoji_state(username, created["id"], avatar_url)
         print(f"[AVATAR EMOJI] {username}: zapisano :{emoji_name}:")
+        return True
+
+    async def _sync_application_avatar_locked(
+        self,
+        key: str,
+        emoji_name: str,
+        avatar_url: str,
+        image: bytes,
+    ) -> bool:
+        state = DB.get_application_avatar_emoji_state(key) or {}
+        emoji_id = str(state.get("emoji_id") or "")
+        application_emojis = await self._list_application_emojis()
+        existing = next(
+            (emoji for emoji in application_emojis if str(emoji.get("id")) == emoji_id),
+            None,
+        )
+        name_owner = next(
+            (emoji for emoji in application_emojis if emoji.get("name") == emoji_name),
+            None,
+        )
+        if existing is None and name_owner is not None:
+            existing = name_owner
+        if existing is not None and state.get("avatar_url") == avatar_url:
+            DB.save_application_avatar_emoji_state(
+                key,
+                existing["id"],
+                emoji_name,
+                avatar_url,
+            )
+            return False
+
+        create_route = await self._application_route(
+            "POST",
+            "/applications/{application_id}/emojis",
+        )
+        if existing is None:
+            created = await self.client.http.request(
+                create_route,
+                json={
+                    "name": emoji_name,
+                    "image": self._image_data_uri(image),
+                },
+            )
+        else:
+            temporary_name = f"k_{emoji_name}_{int(time.time()) % 1000000}"
+            created = await self.client.http.request(
+                create_route,
+                json={
+                    "name": temporary_name[:32],
+                    "image": self._image_data_uri(image),
+                },
+            )
+            delete_route = await self._application_route(
+                "DELETE",
+                "/applications/{application_id}/emojis/{emoji_id}",
+                emoji_id=existing["id"],
+            )
+            await self.client.http.request(delete_route)
+            rename_route = await self._application_route(
+                "PATCH",
+                "/applications/{application_id}/emojis/{emoji_id}",
+                emoji_id=created["id"],
+            )
+            created = await self.client.http.request(
+                rename_route,
+                json={"name": emoji_name},
+            )
+
+        DB.save_application_avatar_emoji_state(
+            key,
+            created["id"],
+            emoji_name,
+            avatar_url,
+        )
+        print(f"[AVATAR EMOJI] kotone: zapisano :{emoji_name}:")
         return True

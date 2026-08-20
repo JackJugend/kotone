@@ -37,6 +37,7 @@ AOTY_ICON_ATTACHMENT = AOTY_ICON_URL
 AOTY_SOURCE_EMOJI = "<:aoty:1539095897084924004>"
 MUSICBRAINZ_SOURCE_EMOJI = "<:music_brainz:1539096206083629186>"
 LASTFM_SOURCE_EMOJI = "<:lastfm:1539689853506293760>"
+MANUAL_SOURCE_EMOJI = ""
 MUST_HEAR_USERS_EMOJI = "<:musthear_users:1539713390820458566>"
 MUST_HEAR_CRITICS_EMOJI = "<:musthear_critics:1539713389557841981>"
 MUST_HEAR_BOTH_EMOJI = "<:musthear_both:1539713387150319679>"
@@ -88,6 +89,7 @@ SOURCE_EMOJIS = {
     "aoty": AOTY_SOURCE_EMOJI,
     "musicbrainz": MUSICBRAINZ_SOURCE_EMOJI,
     "lastfm": LASTFM_SOURCE_EMOJI,
+    "manual": MANUAL_SOURCE_EMOJI,
 }
 MUST_HEAR_EMOJIS = {
     "users": MUST_HEAR_USERS_EMOJI,
@@ -358,6 +360,8 @@ KOTONE_AVATAR_EMOJI_NAMES = {
     for profile in KOTONE_USERS.values()
     if profile.get("aoty_username")
 }
+KOTONE_BOT_AVATAR_EMOJI_KEY = "kotone"
+KOTONE_BOT_AVATAR_EMOJI_NAME = "kotone"
 
 
 def _validate_operators(raw_operators: object) -> dict[str, dict[str, object]]:

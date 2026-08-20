@@ -974,6 +974,32 @@ class Database:
                 """
             )
 
+            # Application-level presentation emoji, such as Kotone's own
+            # current avatar.  This is separate from AOTY user avatars because
+            # it is not tied to a row in users.
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS application_avatar_emojis (
+                    emoji_key TEXT PRIMARY KEY,
+                    emoji_id TEXT NOT NULL,
+                    emoji_name TEXT NOT NULL,
+                    avatar_url TEXT NOT NULL,
+                    synced_at REAL NOT NULL,
+                    last_error TEXT
+                )
+                """
+            )
+            self.connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS application_avatar_images (
+                    emoji_key TEXT PRIMARY KEY,
+                    avatar_url TEXT NOT NULL,
+                    image_png BLOB NOT NULL,
+                    cached_at REAL NOT NULL
+                )
+                """
+            )
+
             # Score emoji are application-owned presentation assets, not user
             # data.  Keeping their mutable Discord IDs in SQLite lets every
             # command render the same rating tile without hard-coding IDs.
@@ -1859,6 +1885,108 @@ class Database:
                 (str(message)[:1000], _now(), canonical),
             )
 
+    @staticmethod
+    def _application_emoji_key(key: object) -> str:
+        value = str(key or "").strip().casefold()
+        if not value:
+            raise ValueError("klucz emoji aplikacji nie moze byc pusty")
+        return value[:64]
+
+    def get_application_avatar_emoji_state(self, key: object) -> dict | None:
+        emoji_key = self._application_emoji_key(key)
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT emoji_id, emoji_name, avatar_url, synced_at, last_error
+                FROM application_avatar_emojis
+                WHERE emoji_key = ?
+                """,
+                (emoji_key,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_application_avatar_emoji_state(
+        self,
+        key: object,
+        emoji_id: object,
+        emoji_name: str,
+        avatar_url: str,
+    ) -> None:
+        emoji_key = self._application_emoji_key(key)
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO application_avatar_emojis(
+                    emoji_key, emoji_id, emoji_name, avatar_url, synced_at, last_error
+                ) VALUES(?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(emoji_key) DO UPDATE SET
+                    emoji_id = excluded.emoji_id,
+                    emoji_name = excluded.emoji_name,
+                    avatar_url = excluded.avatar_url,
+                    synced_at = excluded.synced_at,
+                    last_error = NULL
+                """,
+                (emoji_key, str(emoji_id), str(emoji_name), str(avatar_url), _now()),
+            )
+
+    def mark_application_avatar_emoji_error(self, key: object, message: str) -> None:
+        emoji_key = self._application_emoji_key(key)
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO application_avatar_emojis(
+                    emoji_key, emoji_id, emoji_name, avatar_url, synced_at, last_error
+                ) VALUES(?, '', ?, '', ?, ?)
+                ON CONFLICT(emoji_key) DO UPDATE SET
+                    last_error = excluded.last_error,
+                    synced_at = excluded.synced_at
+                """,
+                (emoji_key, emoji_key, _now(), str(message)[:1000]),
+            )
+
+    def get_application_avatar_image(
+        self,
+        key: object,
+        avatar_url: str | None = None,
+    ) -> bytes | None:
+        emoji_key = self._application_emoji_key(key)
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT avatar_url, image_png
+                FROM application_avatar_images
+                WHERE emoji_key = ?
+                """,
+                (emoji_key,),
+            ).fetchone()
+        if row is None or (avatar_url and row["avatar_url"] != str(avatar_url)):
+            return None
+        return bytes(row["image_png"])
+
+    def save_application_avatar_image(
+        self,
+        key: object,
+        avatar_url: str,
+        image_png: bytes,
+    ) -> None:
+        emoji_key = self._application_emoji_key(key)
+        image = bytes(image_png or b"")
+        if not image or len(image) > 256 * 1024:
+            raise ValueError("avatar PNG aplikacji jest pusty albo za duzy")
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO application_avatar_images(
+                    emoji_key, avatar_url, image_png, cached_at
+                ) VALUES(?, ?, ?, ?)
+                ON CONFLICT(emoji_key) DO UPDATE SET
+                    avatar_url = excluded.avatar_url,
+                    image_png = excluded.image_png,
+                    cached_at = excluded.cached_at
+                """,
+                (emoji_key, str(avatar_url), sqlite3.Binary(image), _now()),
+            )
+
     def get_score_emoji_map(self, *, render_version: str | None = None) -> dict[int, str]:
         """Return valid application emoji markup indexed by whole score."""
 
@@ -2614,7 +2742,7 @@ class Database:
         name = " ".join(str(artist or "").split())
         key = self._artist_image_key(name)
         source = str(source or "").strip().casefold()
-        if not key or source not in {"musicbrainz", "lastfm"} or not isinstance(data, dict):
+        if not key or source not in {"musicbrainz", "lastfm", "manual"} or not isinstance(data, dict):
             return False
         with self._lock, self.connection:
             in_scope = self.connection.execute(
@@ -3514,6 +3642,137 @@ class Database:
                 "changed": changed,
             }
 
+    def manual_update_rating_score(
+        self,
+        username: str,
+        album_id: str,
+        score: int,
+        *,
+        rating_date: str | None = None,
+    ) -> dict:
+        """Apply an operator-entered score for an existing configured rating."""
+
+        canonical = self._require_monitored(username)
+        album_id = str(album_id or "").strip()
+        value = int(score)
+        if not 0 <= value <= 100:
+            raise ValueError("Ocena musi byc w zakresie 0-100.")
+        date_value = str(rating_date or "").strip() or None
+
+        with self._lock, self.connection:
+            row = self.connection.execute(
+                """
+                SELECT album_id, artist, album, score, date, active
+                FROM ratings
+                WHERE username = ? AND album_id = ?
+                """,
+                (canonical, album_id),
+            ).fetchone()
+            if row is None or not bool(row["active"]):
+                raise ValueError("Wybrany album nie istnieje w aktywnym archiwum uzytkownika.")
+
+            old_score = row["score"]
+            old_date = row["date"]
+            new_score = str(value)
+            changed = old_score != new_score or (date_value is not None and old_date != date_value)
+            now = _now()
+            self.connection.execute(
+                """
+                UPDATE ratings
+                SET score = ?,
+                    date = COALESCE(?, date),
+                    last_seen_at = ?,
+                    notify_pending = 0
+                WHERE username = ? AND album_id = ?
+                """,
+                (new_score, date_value, now, canonical, album_id),
+            )
+
+            if old_score != new_score:
+                self._record_change_locked(
+                    canonical,
+                    entity_type="rating",
+                    event_type="rating_changed",
+                    album_id=album_id,
+                    field_name="score",
+                    old_value=old_score,
+                    new_value=new_score,
+                    source="manual_discord",
+                    detected_at=now,
+                )
+            if date_value is not None and old_date != date_value:
+                self._record_change_locked(
+                    canonical,
+                    entity_type="rating",
+                    event_type="rating_date_changed",
+                    album_id=album_id,
+                    field_name="date",
+                    old_value=old_date,
+                    new_value=date_value,
+                    source="manual_discord",
+                    detected_at=now,
+                )
+
+            self.connection.execute(
+                "UPDATE users SET updated_at = ? WHERE username = ?",
+                (now, canonical),
+            )
+            return {
+                "username": canonical,
+                "album_id": album_id,
+                "artist": row["artist"],
+                "album": row["album"],
+                "score": new_score,
+                "date": date_value or old_date,
+                "changed": changed,
+            }
+
+    def manual_update_release_details(
+        self,
+        album_id: str,
+        details: dict,
+        *,
+        actor: str = "operator",
+    ) -> bool:
+        """Persist operator-entered public release metadata as source=manual."""
+
+        album_id = str(album_id or "").strip()
+        if not album_id:
+            raise ValueError("album_id nie moze byc puste.")
+        payload = dict(details or {})
+        payload["source"] = "manual"
+        section_complete = dict(payload.get("_section_complete") or {})
+        payload["_section_complete"] = section_complete
+
+        saved = self.save_release_details(album_id, payload)
+        if not saved:
+            raise ValueError("Album nie jest w zakresie bazy Kotone.")
+
+        with self._lock, self.connection:
+            rows = self.connection.execute(
+                "SELECT DISTINCT username FROM ratings WHERE album_id = ?",
+                (album_id,),
+            ).fetchall()
+            now = _now()
+            clean_payload = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"_section_complete"} and value not in (None, "", [], {})
+            }
+            for row in rows:
+                self._record_change_locked(
+                    row["username"],
+                    entity_type="release",
+                    event_type="release_manual_updated",
+                    album_id=album_id,
+                    field_name="metadata",
+                    old_value=None,
+                    new_value=clean_payload,
+                    source=f"manual_discord:{actor}"[:80],
+                    detected_at=now,
+                )
+        return True
+
     def upsert_ratings(
         self,
         username: str,
@@ -3999,9 +4258,9 @@ class Database:
         raw_section_complete = details.get("_section_complete")
         legacy_authoritative = not isinstance(raw_section_complete, dict)
         source = str(details.get("source") or "").strip().casefold()
-        source = source if source in {"aoty", "musicbrainz", "lastfm"} else ""
+        source = source if source in {"aoty", "musicbrainz", "lastfm", "manual"} else ""
         official_must_hear = details.get("must_hear")
-        must_hear_complete = source == "aoty" and isinstance(
+        must_hear_complete = source in {"aoty", "manual"} and isinstance(
             official_must_hear,
             bool,
         )
@@ -4031,7 +4290,7 @@ class Database:
                 inferred_source = str(
                     existing["metadata_source"] or "aoty"
                 ).casefold()
-                if inferred_source not in {"aoty", "musicbrainz", "lastfm"}:
+                if inferred_source not in {"aoty", "musicbrainz", "lastfm", "manual"}:
                     inferred_source = "aoty"
 
                 def raw_present(*columns: str) -> bool:
@@ -4350,7 +4609,7 @@ class Database:
 
         album_id = str(album_id or "").strip()
         source = str(source or "").strip().casefold()
-        if not album_id or source not in {"musicbrainz", "lastfm"} or not isinstance(data, dict):
+        if not album_id or source not in {"musicbrainz", "lastfm", "manual"} or not isinstance(data, dict):
             return False
         with self._lock, self.connection:
             if not self._release_is_in_scope_locked(album_id):
@@ -4503,7 +4762,7 @@ class Database:
         if not isinstance(metadata_sources, dict):
             metadata_sources = {}
         inferred_source = str(row["metadata_source"] or "aoty").casefold()
-        if inferred_source not in {"aoty", "musicbrainz", "lastfm"}:
+        if inferred_source not in {"aoty", "musicbrainz", "lastfm", "manual"}:
             inferred_source = "aoty"
         if (
             row["user_score"]

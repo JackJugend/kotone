@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import discord
 
-from settings import SOURCE_EMOJIS
 from shared import (
     aoty_score_value,
     load_release_variables,
@@ -12,6 +11,7 @@ from shared import (
     score_color,
     score_or_nr,
     set_aoty_footer,
+    source_emoji,
 )
 
 
@@ -24,10 +24,10 @@ def _details_value(value: object) -> str:
 
 
 def _source_prefix(variables, section: str, value: object) -> str:
-    if _details_value(value) == "—":
+    if _details_value(value) == "-":
         return ""
     source = str(variables.metadata_sources.get(section) or "").casefold()
-    emoji = SOURCE_EMOJIS.get(source or "aoty")
+    emoji = source_emoji(source or "aoty")
     return f"{emoji} " if emoji else ""
 
 
@@ -78,17 +78,28 @@ async def build_release_details_embed(
         ):
             value = _details_value(musicbrainz_data.get(key))
             if value != "—":
-                lines.append(f"{SOURCE_EMOJIS['musicbrainz']} **{label}:** `{value}`")
+                lines.append(f"{source_emoji('musicbrainz')} **{label}:** `{value}`")
         country = _details_value(musicbrainz_data.get("release_country"))
         if country != "—":
-            lines.append(f"{SOURCE_EMOJIS['musicbrainz']} **Release country:** {country}")
+            lines.append(f"{source_emoji('musicbrainz')} **Release country:** {country}")
 
     lastfm_data = variables.source_data.get("lastfm") or {}
     if lastfm_data:
         for key, label in (("listeners_count", "Last.fm listeners"), ("playcount", "Last.fm scrobbles")):
             value = _details_value(lastfm_data.get(key))
-            if value != "—":
-                lines.append(f"{SOURCE_EMOJIS['lastfm']} **{label}:** {value}")
+            if value != "-":
+                lines.append(f"{source_emoji('lastfm')} **{label}:** {value}")
+
+    metadata_source = str(variables.metadata_source or "").strip().casefold()
+    if metadata_source:
+        prefix = source_emoji(metadata_source)
+        label = {
+            "aoty": "AOTY",
+            "musicbrainz": "MusicBrainz",
+            "lastfm": "Last.fm",
+            "manual": "manual",
+        }.get(metadata_source, metadata_source)
+        lines.append(f"{prefix} **Source:** {label}".strip())
 
     embed = discord.Embed(
         title=(
