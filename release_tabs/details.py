@@ -22,9 +22,6 @@ from shared import (
     score_or_nr,
     set_aoty_footer,
     source_emoji,
-    variables.critic_score,
-    variables.critic_reviews_count,
-    variables.must_hear_kind,
 )
 from ui_constants import DETAILS_BUTTON
 
