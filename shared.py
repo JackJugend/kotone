@@ -208,7 +208,7 @@ def score_or_missing(score: Any) -> str:
 
     text = str(score or "").strip()
     if not text or text.casefold() in {"nr", "n/r", "—", "?"}:
-        return "\⚪ —"
+        return "—"
     value = _whole_score_text(text)
     return score_icon(value)
 
