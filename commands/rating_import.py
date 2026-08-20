@@ -8,6 +8,7 @@ import io
 import discord
 
 from database import DB
+from import_payload import ImportPayloadError, extract_csv_payload
 from lastfm_globals import LASTFM_DB
 from lastfm_import import LastFMImportError, parse_lastfm_scrobbles_csv
 from rating_import import (
@@ -60,7 +61,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
     )
     @discord.app_commands.describe(
         source="Źródło importu",
-        file="Wymagany plik CSV AOTY albo Last.fm",
+        file="Plik .csv, .csv.gz lub .zip z jednym CSV",
     )
     @discord.app_commands.autocomplete(username=_kotone_user_autocomplete)
     @discord.app_commands.choices(
@@ -133,7 +134,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         if source == "lastfm":
             if file is None:
                 await interaction.response.send_message(
-                    "Dla importu Last.fm załącz plik `.csv`. Eksport możesz "
+                    "Dla importu Last.fm załącz `.csv`, `.csv.gz` albo `.zip` z CSV. Eksport możesz "
                     "pobrać z <https://lastfm.ghan.nl/export/>. Ręczne pobranie "
                     "najnowszych danych z API jest dostępne dla operatorów w `/check`.",
                     ephemeral=True,
@@ -141,12 +142,6 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                 return
             await interaction.response.defer(ephemeral=True, thinking=True)
             filename = str(file.filename or "")
-            if not filename.casefold().endswith(".csv"):
-                await interaction.followup.send(
-                    "Załącz plik `.csv` z historią Last.fm.",
-                    ephemeral=True,
-                )
-                return
             if int(file.size or 0) > MAX_LASTFM_CSV_BYTES:
                 await interaction.followup.send(
                     "Plik Last.fm jest za duży. Maksymalny rozmiar to 100 MB.",
@@ -154,10 +149,14 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                 )
                 return
             try:
-                payload = await file.read()
-                if len(payload) > MAX_LASTFM_CSV_BYTES:
-                    raise LastFMImportError("plik przekracza limit 100 MB")
+                payload, _container = extract_csv_payload(
+                    filename,
+                    await file.read(),
+                    max_bytes=MAX_LASTFM_CSV_BYTES,
+                )
                 parsed = await asyncio.to_thread(parse_lastfm_scrobbles_csv, payload)
+                # This import is strictly offline: matching MBIDs against the
+                # local SQLite cache performs no Last.fm/AOTY request.
                 tracks = await asyncio.to_thread(
                     DB.link_lastfm_tracks_to_releases,
                     list(parsed["tracks"]),
@@ -171,7 +170,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                     LASTFM_DB.archive_statistics,
                     str(kotone_profile.get("name") or ""),
                 )
-            except LastFMImportError as exc:
+            except (ImportPayloadError, LastFMImportError) as exc:
                 await interaction.followup.send(
                     f"❌ Niepoprawny CSV Last.fm: {exc}",
                     ephemeral=True,
@@ -185,15 +184,12 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                 return
             await interaction.followup.send(
                 f"✅ **Last.fm CSV → {kotone_profile.get('lastfm_username')}**\n"
-                f"• wykryty format: **{parsed['format']}**\n"
                 f"• dodane scrobble: **{inserted}**\n"
                 f"• duplikaty w pliku: **{parsed['duplicates']}**\n"
                 f"• odrzucone wiersze: **{len(parsed['rejected'])}**\n"
                 f"• archiwum Kotone: **{stats['scrobbles']}** scrobbli · "
                 f"**{stats['artists']}** wykonawców · **{stats['albums']}** albumów · "
-                f"**{stats['tracks']}** utworów\n\n"
-                "Daty zapisano w UTC. Powiązania z AOTY są tworzone tylko "
-                "dla dokładnie zgodnych identyfikatorów MusicBrainz.",
+                f"**{stats['tracks']}** utworów",
                 ephemeral=True,
             )
             return
@@ -216,12 +212,6 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             )
             return
         filename = str(file.filename or "")
-        if not filename.casefold().endswith(".csv"):
-            await interaction.response.send_message(
-                "Załącz oficjalny plik `.csv` pobrany z ustawień AOTY.",
-                ephemeral=True,
-            )
-            return
         if int(file.size or 0) > MAX_CSV_BYTES:
             await interaction.response.send_message(
                 "Plik jest za duży. Maksymalny rozmiar to 100 MB.",
@@ -231,9 +221,11 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            payload = await file.read()
-            if len(payload) > MAX_CSV_BYTES:
-                raise RatingImportError("plik przekracza limit 100 MB")
+            payload, _container = extract_csv_payload(
+                filename,
+                await file.read(),
+                max_bytes=MAX_CSV_BYTES,
+            )
             parsed = await asyncio.to_thread(parse_aoty_ratings_csv, payload)
             await asyncio.to_thread(DB.backup_if_due, force=True)
             result = await asyncio.to_thread(
@@ -241,7 +233,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                 canonical,
                 parsed["rows"],
             )
-        except RatingImportError as exc:
+        except (ImportPayloadError, RatingImportError) as exc:
             await interaction.followup.send(
                 f"❌ Niepoprawny eksport AOTY: {exc}",
                 ephemeral=True,
@@ -271,11 +263,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             f"• nowe powiadomienia w kolejce: "
             f"**{result['queued_notifications']}**\n"
             f"• nierozpoznane/błędne: **{len(unresolved)}**\n"
-            f"• duplikaty w CSV: **{parsed['duplicates']}**\n\n"
-            "Istniejące reviews, likes, Track Ratings i metadane nie zostały "
-            "usunięte. Brakujące pozycje nie zostały oznaczone jako usunięte. "
-            "Nowe rekordy ocenione po ostatnim potwierdzonym powiadomieniu "
-            "oczekują na pojedynczą wysyłkę monitora."
+            f"• duplikaty w CSV: **{parsed['duplicates']}**"
         )
         if unresolved:
             report = discord.File(

@@ -9,6 +9,9 @@ from lastfm_database import LASTFM_DB
 from settings import (
     KOTONE_USERS,
     KOTONE_USERS_BY_AOTY,
+    LASTFM_ICON,
+    LASTFM_ICON_ATTACHMENT,
+    LASTFM_ICON_FILENAME,
     SOURCE_EMOJIS,
     resolve_aoty_username,
     resolve_kotone_profile,
@@ -62,6 +65,21 @@ def _lastfm_count(value: object) -> str:
         return f"{int(value):,}".replace(",", " ")
     except (TypeError, ValueError):
         return "—"
+
+
+def _set_lastfm_footer(embed: discord.Embed) -> None:
+    """Apply the bundled Last.fm icon to every Last.fm profile card."""
+
+    embed.set_footer(
+        text="Last.fm • dane zapisane przez Kotone",
+        icon_url=LASTFM_ICON_ATTACHMENT,
+    )
+
+
+def _lastfm_footer_file() -> discord.File:
+    """Return a fresh attachment; Discord files cannot be reused between sends."""
+
+    return discord.File(LASTFM_ICON, filename=LASTFM_ICON_FILENAME)
 
 
 def _lastfm_archive_progress(profile_key: object, archive: dict | None = None) -> str:
@@ -153,7 +171,7 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
         )
     if avatar:
         details.set_thumbnail(url=avatar)
-    details.set_footer(text="Last.fm • dane zapisane przez Kotone")
+    _set_lastfm_footer(details)
     return [header, details]
 
 
@@ -207,7 +225,7 @@ def _build_lastfm_embed(
     avatar = str((profile or {}).get("avatar_url") or "").strip()
     if avatar:
         embed.set_thumbnail(url=avatar)
-    embed.set_footer(text="Last.fm • dane zapisane przez Kotone")
+    _set_lastfm_footer(embed)
     return embed
 
 
@@ -260,6 +278,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         if kotone_profile and not kotone_profile.get("aoty_username"):
             await interaction.followup.send(
                 embeds=_build_lastfm_only_embeds(kotone_profile),
+                file=_lastfm_footer_file(),
             )
             return
 
@@ -443,9 +462,12 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             owner_id=interaction.user.id,
         )
 
-        message = await interaction.followup.send(
-            embeds=view.build_message_embeds(0),
-            view=view,
-            wait=True,
-        )
+        send_kwargs = {
+            "embeds": view.build_message_embeds(0),
+            "view": view,
+            "wait": True,
+        }
+        if lastfm_embed:
+            send_kwargs["file"] = _lastfm_footer_file()
+        message = await interaction.followup.send(**send_kwargs)
         view.bind_message(message)

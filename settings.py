@@ -28,6 +28,9 @@ BASE_URL = "https://www.albumoftheyear.org"
 AOTY_ICON = os.path.join(BASE_DIR, "assets", "aoty.jpg")
 AOTY_ICON_FILENAME = "aoty.jpg"
 AOTY_ICON_URL = "https://cdn.albumoftheyear.org/images/favicon.png"
+LASTFM_ICON = os.path.join(BASE_DIR, "assets", "lastfm.png")
+LASTFM_ICON_FILENAME = "lastfm.png"
+LASTFM_ICON_ATTACHMENT = f"attachment://{LASTFM_ICON_FILENAME}"
 
 # Zachowujemy starą nazwę zmiennej dla kompatybilności istniejących komend.
 AOTY_ICON_ATTACHMENT = AOTY_ICON_URL
@@ -682,6 +685,11 @@ LASTFM_HISTORY_PAGE_SIZE = _runtime_int(
 )
 LASTFM_HISTORY_PAGE_INTERVAL = _runtime_int(
     "lastfm_history_page_interval", 20, 5
+)
+# The newest page is independent from the slow historical cursor.  It is
+# refreshed first so /album and /artist can use the last scrobble promptly.
+LASTFM_NEWEST_SCROBBLE_INTERVAL = _runtime_int(
+    "lastfm_newest_scrobble_interval", 10 * 60, 5 * 60
 )
 
 # Lokalny backup SQLite na tym samym volume. Railway backups nadal są mocno

@@ -13,6 +13,7 @@ from settings import (
     LASTFM_API_ENABLED,
     LASTFM_HISTORY_PAGE_INTERVAL,
     LASTFM_HISTORY_PAGE_SIZE,
+    LASTFM_NEWEST_SCROBBLE_INTERVAL,
     LASTFM_PROFILE_SYNC_INTERVAL,
 )
 from source_switches import SOURCES
@@ -75,38 +76,23 @@ class LastFMArchive:
                     refreshed_profile = True
 
             state = LASTFM_DB.state(key)
-            if state.get("complete"):
-                if refreshed_profile:
-                    page = await asyncio.to_thread(
-                        lastfm.LASTFM.recent_tracks,
-                        username,
-                        page=1,
-                        limit=LASTFM_HISTORY_PAGE_SIZE,
-                    )
-                    if page is None:
-                        raise lastfm.LastFMUnavailable("Last.fm nie zwrócił nowych scrobbli.")
-                    page["tracks"] = await asyncio.to_thread(
-                        DB.link_lastfm_tracks_to_releases,
-                        list(page.get("tracks") or []),
-                    )
-                    inserted = LASTFM_DB.refresh_newest_page(key, page)
-                    self.last_success_at = now
-                    self.last_error = None
-                    print(f"[LASTFM ARCHIVE] {key}: odświeżono najnowsze scrobble (+{inserted}).")
-                    return {"attempted": True, "profile": True, "inserted": inserted}
+            has_archive_cursor = state.get("total_pages") is not None
+            newest_due = LASTFM_DB.newest_due(
+                key, LASTFM_NEWEST_SCROBBLE_INTERVAL
+            )
+            if not has_archive_cursor or newest_due:
+                # First request after startup always persists the latest page.
+                # Later refreshes do not reset the historical cursor.
+                page_number = 1
+                refresh_only = has_archive_cursor
+            elif state.get("complete"):
                 self.last_success_at = now
                 self.last_error = None
                 return {"attempted": True, "profile": refreshed_profile, "complete": True}
+            else:
+                page_number = max(1, int(state.get("next_page") or 1))
+                refresh_only = False
 
-            if refreshed_profile:
-                self.last_success_at = now
-                self.last_error = None
-                print(f"[LASTFM ARCHIVE] {key}: zapisano podstawowe statystyki profilu.")
-                # First pass is profile-only. The next rotation begins at page
-                # one, so an empty archive never starts with a burst of calls.
-                return {"attempted": True, "profile": True}
-
-            page_number = max(1, int(state.get("next_page") or 1))
             page = await asyncio.to_thread(
                 lastfm.LASTFM.recent_tracks,
                 username,
@@ -119,7 +105,11 @@ class LastFMArchive:
                 DB.link_lastfm_tracks_to_releases,
                 list(page.get("tracks") or []),
             )
-            inserted = LASTFM_DB.import_page(key, page)
+            inserted = (
+                LASTFM_DB.refresh_newest_page(key, page)
+                if refresh_only
+                else LASTFM_DB.import_page(key, page)
+            )
             self.last_success_at = now
             self.last_error = None
             print(

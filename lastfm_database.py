@@ -52,6 +52,7 @@ class LastFMDatabase:
                     total_scrobbles INTEGER,
                     complete INTEGER NOT NULL DEFAULT 0,
                     last_page_at REAL NOT NULL DEFAULT 0,
+                    last_newest_at REAL NOT NULL DEFAULT 0,
                     last_error TEXT
                 );
 
@@ -79,6 +80,7 @@ class LastFMDatabase:
             self._ensure_column("scrobbles", "artist_key", "TEXT")
             self._ensure_column("scrobbles", "album_key", "TEXT")
             self._ensure_column("scrobbles", "track_key", "TEXT")
+            self._ensure_column("import_state", "last_newest_at", "REAL NOT NULL DEFAULT 0")
             self._backfill_identity_keys_locked()
             self.connection.execute(
                 """CREATE INDEX IF NOT EXISTS idx_lastfm_scrobbles_aoty_album
@@ -202,8 +204,17 @@ class LastFMDatabase:
             "total_scrobbles": None,
             "complete": 0,
             "last_page_at": 0.0,
+            "last_newest_at": 0.0,
             "last_error": None,
         }
+
+    def newest_due(self, profile_key: object, interval_seconds: float) -> bool:
+        """Return whether page one should be refreshed before older history."""
+
+        state = self.state(profile_key)
+        return time.time() - float(state.get("last_newest_at") or 0) >= max(
+            0.0, float(interval_seconds)
+        )
 
     def import_page(self, profile_key: object, page: dict) -> int:
         """Persist one newest-to-oldest API page and advance its cursor."""
@@ -222,14 +233,18 @@ class LastFMDatabase:
                 """
                 INSERT INTO import_state(
                     profile_key, next_page, total_pages, total_scrobbles,
-                    complete, last_page_at, last_error
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+                    complete, last_page_at, last_newest_at, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(profile_key) DO UPDATE SET
                     next_page=excluded.next_page,
                     total_pages=excluded.total_pages,
                     total_scrobbles=excluded.total_scrobbles,
                     complete=excluded.complete,
                     last_page_at=excluded.last_page_at,
+                    last_newest_at=CASE
+                        WHEN excluded.last_newest_at > 0 THEN excluded.last_newest_at
+                        ELSE import_state.last_newest_at
+                    END,
                     last_error=NULL
                 """,
                 (
@@ -239,6 +254,7 @@ class LastFMDatabase:
                     max(0, int(page.get("total") or 0)),
                     complete,
                     time.time(),
+                    time.time() if number == 1 else 0.0,
                 ),
             )
         return inserted
@@ -257,8 +273,10 @@ class LastFMDatabase:
             for track in page.get("tracks") or []:
                 inserted += self._insert_track_locked(key, track)
             self.connection.execute(
-                "UPDATE import_state SET last_page_at = ?, last_error = NULL WHERE profile_key = ?",
-                (time.time(), key),
+                """UPDATE import_state
+                SET last_page_at = ?, last_newest_at = ?, last_error = NULL
+                WHERE profile_key = ?""",
+                (time.time(), time.time(), key),
             )
         return inserted
 
