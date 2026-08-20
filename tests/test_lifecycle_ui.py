@@ -814,12 +814,13 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             embed = await views_module.build_combined_tracklist_embed(item)
 
         self.assertIn("**1.** Opening Track `3:45`", embed.description)
-        self.assertIn("AOTY", embed.description)
+        self.assertIn("<:aoty:", embed.description)
         self.assertIn("**82**", embed.description)
         self.assertIn("enso", embed.description)
         self.assertIn("**90**", embed.description)
         self.assertIn("kulkien", embed.description)
         self.assertIn("**75**", embed.description)
+        self.assertNotIn("<function user_avatar_emoji", embed.description)
         live_detail.assert_not_awaited()
 
     async def test_details_tab_marks_aoty_and_musicbrainz_sources(self):

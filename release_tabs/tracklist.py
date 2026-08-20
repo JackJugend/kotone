@@ -168,8 +168,12 @@ async def build_combined_tracklist_embeds(
             by_number, by_title = personal_maps.get(configured_username, ({}, {}))
             row = (by_number.get(number) if number is not None else None) or by_title.get(title_key)
             personal_score = (row or {}).get("score")
+            avatar = user_avatar_emoji(configured_username)
+            user_label = " ".join(
+                value for value in (avatar, configured_username) if value
+            )
             scores.append(
-                f"{user_avatar_emoji} {score_or_nr(personal_score)}"
+                f"{user_label} {score_or_nr(personal_score)}"
             )
         lines.append(f"**{display_number}.** {title_text}{duration}\n" + " • ".join(scores))
 

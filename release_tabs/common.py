@@ -5,6 +5,8 @@ from __future__ import annotations
 import discord
 
 from shared import ReleaseVariables, must_hear_title_marker
+from status_emoji_registry import status_emoji
+from ui_constants import TRACKLIST_BUTTON
 
 
 MISSING_VALUE = "—"
@@ -69,9 +71,16 @@ def paginate_description_lines(
 
 
 def release_tab_title(symbol: str, variables: ReleaseVariables) -> str:
-    """Zbuduj identyczny tytuł dla każdej dodatkowej zakładki."""
+    """Zbuduj identyczny tytuł dla każdej dodatkowej zakładki.
+
+    W samym nagłówku Tracklisty używamy application emoji ``:tracklist:``.
+    Przycisk zachowuje natywne ``☰``, ponieważ komponent Discorda nie
+    rozwiązuje tekstowego markup custom emoji tak jak opis embeda.
+    """
 
     marker = must_hear_title_marker(variables)
+    if symbol == TRACKLIST_BUTTON:
+        symbol = status_emoji("tracklist") or symbol
     return (
         f"{symbol} {variables.display_artist} — {variables.display_album} "
         f"{marker}"
