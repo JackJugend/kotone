@@ -99,7 +99,6 @@ async def build_release_details_embed(
             "lastfm": "Last.fm",
             "manual": "manual",
         }.get(metadata_source, metadata_source)
-        lines.append(f"{prefix} **Source:** {label}".strip())
 
     embed = discord.Embed(
         title=(
