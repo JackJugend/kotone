@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import csv
 import io
+from itertools import chain
 from datetime import datetime, timezone
 
 from rating_import import normalized_text
-
-
-MAX_LASTFM_IMPORT_ROWS = 100_000
 
 
 class LastFMImportError(ValueError):
@@ -63,50 +61,54 @@ def parse_lastfm_scrobbles_csv(payload: bytes) -> dict:
     except UnicodeDecodeError:
         raise LastFMImportError("plik CSV musi być zapisany jako UTF-8") from None
 
-    rows = list(csv.reader(io.StringIO(text, newline="")))
-    if not rows:
+    reader = csv.reader(io.StringIO(text, newline=""))
+    try:
+        first_row = next(reader)
+    except StopIteration:
         raise LastFMImportError("plik jest pusty")
-    first = [str(value or "").strip().casefold() for value in rows[0]]
+    first = [str(value or "").strip().casefold() for value in first_row]
     header_mode = "uts" in first or "utc_time" in first or "track_mbid" in first
-    parsed_rows: list[dict[str, str]] = []
     format_name = "lastfm-legacy"
     if header_mode:
-        headers = [str(value or "").strip().casefold() for value in rows[0]]
+        headers = [str(value or "").strip().casefold() for value in first_row]
         if not {"artist", "track"}.issubset(headers) or not (
             "uts" in headers or "utc_time" in headers
         ):
             raise LastFMImportError("brak kolumn artist, track lub daty Last.fm")
         format_name = "lastfm-mbid" if "track_mbid" in headers else "lastfm-header"
-        for values in rows[1:]:
-            parsed_rows.append(
+        raw_rows = (
+            (
+                row_index,
                 {
                     header: str(values[index]).strip() if index < len(values) else ""
                     for index, header in enumerate(headers)
-                }
+                },
             )
+            for row_index, values in enumerate(reader, start=2)
+        )
     else:
-        for values in rows:
-            if len(values) < 4:
-                parsed_rows.append({"_invalid": "za mało kolumn"})
-                continue
-            parsed_rows.append(
-                {
-                    "artist": str(values[0]).strip(),
-                    "album": str(values[1]).strip(),
-                    "track": str(values[2]).strip(),
-                    "utc_time": str(values[3]).strip(),
-                }
+        raw_rows = (
+            (
+                row_index,
+                (
+                    {
+                        "artist": str(values[0]).strip(),
+                        "album": str(values[1]).strip(),
+                        "track": str(values[2]).strip(),
+                        "utc_time": str(values[3]).strip(),
+                    }
+                    if len(values) >= 4
+                    else {"_invalid": "za mało kolumn"}
+                ),
             )
+            for row_index, values in enumerate(chain([first_row], reader), start=1)
+        )
 
     tracks: list[dict] = []
     rejected: list[dict] = []
     seen: set[tuple] = set()
     duplicates = 0
-    for index, raw in enumerate(parsed_rows, start=2 if header_mode else 1):
-        if index > MAX_LASTFM_IMPORT_ROWS:
-            raise LastFMImportError(
-                f"plik przekracza limit {MAX_LASTFM_IMPORT_ROWS} rekordów"
-            )
+    for index, raw in raw_rows:
         try:
             if raw.get("_invalid"):
                 raise LastFMImportError(raw["_invalid"])
