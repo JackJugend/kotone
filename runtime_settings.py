@@ -208,6 +208,39 @@ MUSICBRAINZ_FALLBACK_RETRY_INTERVAL = _runtime_int(
 
 
 # ---------------------------------------------------------------------------
+# Discogs
+# ---------------------------------------------------------------------------
+
+# Discogs is a deliberately narrow, low-priority fallback.  Kotone asks it
+# only for a missing public tracklist or total release duration; it never
+# reads ratings, reviews or other personal data from this provider.
+DISCOGS_MIN_REQUEST_INTERVAL = _runtime_float(
+    "discogs_min_request_interval",
+    1.25,
+    1.0,
+)
+DISCOGS_REQUEST_TIMEOUT = _runtime_float(
+    "discogs_request_timeout",
+    15.0,
+    3.0,
+)
+DISCOGS_OUTAGE_COOLDOWN = _runtime_float(
+    "discogs_outage_cooldown",
+    15 * 60.0,
+    60.0,
+)
+DISCOGS_MAX_OUTAGE_COOLDOWN = _runtime_float(
+    "discogs_max_outage_cooldown",
+    6 * 60 * 60.0,
+    DISCOGS_OUTAGE_COOLDOWN,
+)
+DISCOGS_STATE_FILE = os.path.join(
+    DATA_DIR or BASE_DIR,
+    "discogs_state.json",
+)
+
+
+# ---------------------------------------------------------------------------
 # Last.fm
 # ---------------------------------------------------------------------------
 

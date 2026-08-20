@@ -413,6 +413,52 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_manual_personal_track_scores_keep_review_and_like(self):
+        db = self.make_db()
+        try:
+            db.upsert_rating(
+                "enso",
+                {
+                    "album_id": "personal-tracks",
+                    "score": "85",
+                    "artist": "Artist",
+                    "album": "Album",
+                    "has_review": True,
+                    "review_text": "Keep this review",
+                    "liked": True,
+                },
+            )
+            db.manual_update_rating_detail(
+                "enso",
+                "personal-tracks",
+                "review_set",
+                review_text="Keep this review",
+            )
+            db.manual_update_rating_detail(
+                "enso",
+                "personal-tracks",
+                "like_on",
+            )
+            saved = db.manual_update_user_track_ratings(
+                "enso",
+                "personal-tracks",
+                [
+                    {"number": 1, "title": "First", "score": "90"},
+                    {"number": 2, "title": "Second", "score": "89"},
+                ],
+            )
+            self.assertEqual(saved["count"], 2)
+            detail = db.get_rating_detail("enso", "personal-tracks")
+            self.assertTrue(detail["has_review"])
+            self.assertEqual(detail["review_text"], "Keep this review")
+            self.assertTrue(detail["liked"])
+            self.assertEqual(
+                [track["score"] for track in detail["track_ratings"]],
+                ["90", "89"],
+            )
+        finally:
+            db.close()
+
     def test_config_allow_list_change_snapshots_before_prune_once(self):
         db = self.make_db(users=("enso",))
         db.upsert_rating(

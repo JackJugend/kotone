@@ -18,6 +18,7 @@ import time
 import requests
 
 import aoty
+import discogs
 import lastfm
 import musicbrainz
 from database import DB
@@ -39,6 +40,7 @@ from settings import (
     LASTFM_API_ENABLED,
     LASTFM_RELEASE_SOURCE_TTL,
     ARTIST_SOURCE_TTL,
+    DISCOGS_API_ENABLED,
     artist_alias_variants,
     KOTONE_USERS_BY_AOTY,
     AVATAR_AOTY_SYNC_INTERVAL,
@@ -78,6 +80,8 @@ class DataService:
         self._release_priority_queue: dict[str, dict] = {}
         self._musicbrainz_blocked_until = 0.0
         self._musicbrainz_last_error: str | None = None
+        self._discogs_blocked_until = 0.0
+        self._discogs_last_error: str | None = None
         self._lastfm_release_retry_after: dict[str, float] = {}
         self._artist_metadata_cursor: dict[str, int] = {}
 
@@ -116,6 +120,35 @@ class DataService:
         )
         self._musicbrainz_last_error = (
             str(provider.get("last_error") or "MusicBrainz cooldown")
+        )
+        return True
+
+    def discogs_status(self) -> dict:
+        provider = discogs.DISCOGS.status()
+        blocked_seconds = max(
+            0.0,
+            self._discogs_blocked_until - time.time(),
+            float(provider.get("blocked_seconds") or 0),
+        )
+        return {
+            "configured": bool(provider.get("configured")),
+            "blocked": blocked_seconds > 0,
+            "blocked_seconds": round(blocked_seconds, 1),
+            "consecutive_failures": int(provider.get("consecutive_failures") or 0),
+            "last_error": self._discogs_last_error or provider.get("last_error"),
+        }
+
+    def _discogs_is_blocked(self) -> bool:
+        provider = discogs.DISCOGS.status()
+        blocked_seconds = float(provider.get("blocked_seconds") or 0)
+        if blocked_seconds <= 0:
+            return self._discogs_blocked_until > time.time()
+        self._discogs_blocked_until = max(
+            self._discogs_blocked_until,
+            time.time() + blocked_seconds,
+        )
+        self._discogs_last_error = str(
+            provider.get("last_error") or "Discogs cooldown"
         )
         return True
 
@@ -162,6 +195,51 @@ class DataService:
                 )
             print(f"[MUSICBRAINZ] fallback: {self._musicbrainz_last_error}")
             return None
+
+    async def _discogs_release_fallback(
+        self,
+        item: dict,
+        *,
+        priority: int,
+    ) -> dict | None:
+        """Fetch only an exact Discogs tracklist/duration in the worker."""
+
+        if not DISCOGS_API_ENABLED or not SOURCES.enabled("discogs"):
+            return None
+        if self._discogs_is_blocked():
+            return None
+        try:
+            result = await _thread_call(
+                priority,
+                discogs.DISCOGS.lookup_release,
+                item.get("artist"),
+                item.get("album") or item.get("title"),
+            )
+            self._discogs_last_error = None
+            return result
+        except (discogs.DiscogsUnavailable, requests.RequestException) as exc:
+            self._discogs_last_error = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, discogs.DiscogsUnavailable) and exc.retry_after > 0:
+                self._discogs_blocked_until = max(
+                    self._discogs_blocked_until,
+                    time.time() + max(exc.retry_after, 60.0),
+                )
+            print(f"[DISCOGS] fallback: {self._discogs_last_error}")
+            return None
+
+    async def _persist_discogs_release_fallback(
+        self,
+        item: dict,
+        *,
+        priority: int,
+    ) -> bool:
+        """Fill only missing public tracks/duration after the primary fallback."""
+
+        album_id = str(item.get("album_id") or "").strip()
+        if not album_id:
+            return False
+        details = await self._discogs_release_fallback(item, priority=priority)
+        return bool(details and DB.save_discogs_fallback(album_id, details))
 
     async def _lastfm_release_fallback(
         self,
@@ -1625,6 +1703,9 @@ class DataService:
                     await self._persist_lastfm_release_fallback(
                         username, item, priority=priority
                     )
+                    await self._persist_discogs_release_fallback(
+                        item, priority=priority
+                    )
                     self._release_priority_queue.pop(album_id, None)
                     self._release_retry_after[album_id] = (
                         time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
@@ -1632,6 +1713,15 @@ class DataService:
                     release_done += 1
                     musicbrainz_done += 1
                 elif details is None:
+                    if await self._persist_discogs_release_fallback(
+                        item, priority=priority
+                    ):
+                        self._release_priority_queue.pop(album_id, None)
+                        self._release_retry_after[album_id] = (
+                            time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
+                        )
+                        release_done += 1
+                        continue
                     if self._musicbrainz_is_blocked():
                         return {
                             "releases": release_done,
@@ -1673,12 +1763,24 @@ class DataService:
                     await self._persist_lastfm_release_fallback(
                         username, item, priority=priority
                     )
+                    await self._persist_discogs_release_fallback(
+                        item, priority=priority
+                    )
                     self._release_priority_queue.pop(album_id, None)
                     self._release_retry_after[album_id] = (
                         time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
                     )
                     release_done += 1
                     musicbrainz_done += 1
+                    continue
+                if await self._persist_discogs_release_fallback(
+                    item, priority=priority
+                ):
+                    self._release_priority_queue.pop(album_id, None)
+                    self._release_retry_after[album_id] = (
+                        time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
+                    )
+                    release_done += 1
                     continue
                 if self._musicbrainz_is_blocked():
                     return {

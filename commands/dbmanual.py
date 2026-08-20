@@ -21,7 +21,35 @@ def _split_values(value: str | None) -> list[str]:
     ]
 
 
-def _parse_tracklist(value: str | None) -> list[dict]:
+def _parse_track_scores(value: str | None) -> list[str]:
+    """Return optional AOTY track scores in the exact supplied order."""
+
+    scores: list[str] = []
+    for raw in re.split(r"[,;\s]+", str(value or "").strip()):
+        if not raw:
+            continue
+        try:
+            score = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"Nieprawidlowa ocena utworu: {raw}.") from exc
+        if not 0 <= score <= 100:
+            raise ValueError(f"Nieprawidlowa ocena utworu: {raw}.")
+        scores.append(str(score))
+    return scores
+
+
+def _looks_like_tracklist(value: str | None) -> bool:
+    """Recognise pasted numbered rows before they can become fake genres."""
+
+    return bool(
+        re.search(r"(?:^|\n|\s)\d{1,3}\s*[.)]\s*(?:\[.+?\]\(|\S)", str(value or ""))
+    )
+
+
+def _parse_tracklist(
+    value: str | None,
+    track_scores: str | None = None,
+) -> list[dict]:
     """Parse compact or copied AOTY rows into release-track rows.
 
     Accepted copied form: ``1 [Title](https://...)3:12 96``. The final
@@ -32,7 +60,14 @@ def _parse_tracklist(value: str | None) -> list[dict]:
     text = str(value or "").strip()
     if not text:
         return []
-    rows = [row.strip() for row in re.split(r"\n|;", text) if row.strip()]
+    # A slash-command field occasionally arrives as a single wrapped line.
+    # Splitting before every numbered item lets both pasted AOTY rows and
+    # simple ``1. Track`` lists stay structured.
+    rows = [
+        row.strip()
+        for row in re.split(r"\n|;|(?=\s+\d{1,3}\s*[.)]\s+)", text)
+        if row.strip()
+    ]
     tracks: list[dict] = []
     for index, row in enumerate(rows, start=1):
         copied = re.match(
@@ -52,6 +87,28 @@ def _parse_tracklist(value: str | None) -> list[dict]:
                     "title": copied.group("title").strip(),
                     "url": copied.group("url").strip(),
                     "duration": copied.group("duration") or None,
+                    "user_score": user_score,
+                    "disc": None,
+                }
+            )
+            continue
+
+        plain = re.match(
+            r"^\s*(?P<number>\d+)\s*[.)]?\s*"
+            r"(?P<title>.+?)"
+            r"(?P<duration>\d{1,2}:\d{2})?\s*"
+            r"(?P<user_score>\d{1,3})?\s*$",
+            row,
+        )
+        if plain and plain.group("duration"):
+            user_score = plain.group("user_score")
+            if user_score is not None and not 0 <= int(user_score) <= 100:
+                raise ValueError(f"Nieprawidlowa ocena utworu: {user_score}.")
+            tracks.append(
+                {
+                    "number": int(plain.group("number")),
+                    "title": plain.group("title").rstrip(" :").strip(),
+                    "duration": plain.group("duration") or None,
                     "user_score": user_score,
                     "disc": None,
                 }
@@ -85,6 +142,14 @@ def _parse_tracklist(value: str | None) -> list[dict]:
                     "disc": disc,
                 }
             )
+    supplied_scores = _parse_track_scores(track_scores)
+    if supplied_scores:
+        if len(supplied_scores) != len(tracks):
+            raise ValueError(
+                "Liczba track_scores musi być taka sama jak liczba utworów w tracklist."
+            )
+        for track, score in zip(tracks, supplied_scores, strict=True):
+            track["user_score"] = score
     return tracks
 
 
@@ -111,6 +176,7 @@ def _section_complete(payload: dict) -> dict[str, bool]:
             payload.get(key) not in (None, "")
             for key in ("year_ranking_text", "all_time_ranking")
         ),
+        "duration": payload.get("duration") not in (None, ""),
         "tracklist": payload.get("tracklist") not in (None, "", [], {}),
     }
 
@@ -194,13 +260,12 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         artist="Nazwa artysty",
         album="Nazwa wydania",
         cover="URL okladki",
-        release_date="Data wydania, np. 31.01.2021",
-        year="Rok wydania",
+        release_date="Data wydania albo sam rok, np. 31.01.2021",
         format="Format wydania",
+        duration="Czas trwania wydania, np. 45:12",
         label="Glowna wytwornia",
         genres="Gatunki po przecinku",
         secondary_genres="Drugorzedne gatunki po przecinku",
-        vibes="Vibes po przecinku",
         aoty_score="AOTY User Score",
         ratings_count="Liczba ocen AOTY",
         critic_score="Critic Score",
@@ -209,8 +274,10 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         all_time_ranking="Ranking all-time, np. #48",
         must_hear="Status Must Hear",
         tracklist=(
-            "Wklej: 1 [Title](https://aoty.org/song/...)3:12 96; score opcjonalny"
+            "Utwory: 1. Tytul 2. Tytul; czas trwania opcjonalny"
         ),
+        track_scores="Oceny AOTY utworow w kolejnosci, np. 89, 93, 86",
+        user_track_scores="Oceny tracklisty wskazanego username, np. 90, 89, 94",
     )
     @discord.app_commands.autocomplete(
         album_id=dbmanual_album_autocomplete,
@@ -240,12 +307,11 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         album: str | None = None,
         cover: str | None = None,
         release_date: str | None = None,
-        year: str | None = None,
         format: str | None = None,
+        duration: str | None = None,
         label: str | None = None,
         genres: str | None = None,
         secondary_genres: str | None = None,
-        vibes: str | None = None,
         aoty_score: str | None = None,
         ratings_count: str | None = None,
         critic_score: str | None = None,
@@ -254,6 +320,8 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         all_time_ranking: str | None = None,
         must_hear: str | None = None,
         tracklist: str | None = None,
+        track_scores: str | None = None,
+        user_track_scores: str | None = None,
     ) -> None:
         if interaction.guild_id != GUILD_ID:
             await interaction.response.send_message(
@@ -314,18 +382,37 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                 )
                 changed_parts.append(f"review {result['username']}")
 
+            # Older Discord clients can keep a stale field order after a
+            # command update.  A pasted numbered list is never a genre; move
+            # it to the intended field instead of displaying it on the home
+            # card as one long fake genre line.
+            moved_tracklist = False
+            if not tracklist and _looks_like_tracklist(genres):
+                tracklist, genres = genres, None
+                moved_tracklist = True
+            parsed_tracklist = _parse_tracklist(tracklist, track_scores)
+            personal_track_scores = _parse_track_scores(user_track_scores)
+            if personal_track_scores and not username:
+                raise ValueError("Podaj username dla user_track_scores.")
+            existing_release = await asyncio.to_thread(DB.get_release_details, album_id)
+            tracks_for_user = parsed_tracklist or list(
+                (existing_release or {}).get("tracklist") or []
+            )
+            if personal_track_scores and len(personal_track_scores) != len(tracks_for_user):
+                raise ValueError(
+                    "Liczba user_track_scores musi być taka sama jak liczba utworów w tracklist."
+                )
             release_payload = {
                 "artist": artist,
                 "album": album,
                 "cover": cover,
                 "release_date": release_date,
-                "year": year,
                 "album_format": _format_label(format),
+                "duration": duration,
                 "label": label,
                 "labels": _split_values(label),
                 "genres": _split_values(genres),
                 "secondary_genres": _split_values(secondary_genres),
-                "vibes": _split_values(vibes),
                 "user_score": aoty_score,
                 "ratings_count": ratings_count,
                 "critic_score": critic_score,
@@ -333,14 +420,13 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                 "year_ranking_text": year_ranking,
                 "all_time_ranking": all_time_ranking,
                 "must_hear_kind": must_hear,
-                "tracklist": _parse_tracklist(tracklist),
+                "tracklist": parsed_tracklist,
             }
             release_payload = {
                 key: value
                 for key, value in release_payload.items()
                 if value not in (None, "", [], {})
             }
-            existing_release = await asyncio.to_thread(DB.get_release_details, album_id)
             if release_payload or existing_release is None:
                 # Bare album_id creates a small manual placeholder. The
                 # operator can fill the remaining fields in another call.
@@ -356,6 +442,31 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                 )
                 changed_parts.append(
                     "nowa pozycja" if existing_release is None else "release metadata"
+                )
+                if moved_tracklist:
+                    changed_parts.append("tracklista przeniesiona z błędnego pola")
+
+            if personal_track_scores:
+                personal_tracks = [
+                    {
+                        "number": track.get("number"),
+                        "title": track.get("title"),
+                        "score": score,
+                    }
+                    for track, score in zip(
+                        tracks_for_user,
+                        personal_track_scores,
+                        strict=True,
+                    )
+                ]
+                saved_tracks = await asyncio.to_thread(
+                    DB.manual_update_user_track_ratings,
+                    username,
+                    album_id,
+                    personal_tracks,
+                )
+                changed_parts.append(
+                    f"oceny tracklisty {saved_tracks['username']}={saved_tracks['count']}"
                 )
 
         except Exception as exc:

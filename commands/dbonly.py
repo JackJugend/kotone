@@ -57,6 +57,7 @@ def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
             discord.app_commands.Choice(name="AOTY scraper", value="aoty"),
             discord.app_commands.Choice(name="MusicBrainz API", value="musicbrainz"),
             discord.app_commands.Choice(name="Last.fm API", value="lastfm"),
+            discord.app_commands.Choice(name="Discogs API", value="discogs"),
             discord.app_commands.Choice(name="Wszystkie źródła", value="all"),
         ],
     )
@@ -84,6 +85,7 @@ def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
             aoty_status = HTTP.status()
             musicbrainz_status = DATA.musicbrainz_status()
             lastfm_status = lastfm.LASTFM.status()
+            discogs_status = DATA.discogs_status()
             if HTTP.db_only_enabled():
                 aoty_runtime = "ręcznie zablokowany"
             elif aoty_status.get("challenge_open"):
@@ -120,11 +122,24 @@ def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
                 )
             else:
                 lastfm_runtime = "gotowy"
+
+            if not discogs_status.get("configured"):
+                discogs_runtime = "brak DISCOGS_TOKEN"
+            elif not switches["discogs"]:
+                discogs_runtime = "ręcznie zablokowany"
+            elif discogs_status.get("blocked"):
+                discogs_runtime = (
+                    "cooldown: "
+                    f"{_remaining(discogs_status.get('blocked_seconds'))}"
+                )
+            else:
+                discogs_runtime = "gotowy"
             lines = [
                 "**Źródła Kotone**",
                 f"• AOTY scraper: {'⏸ zablokowany' if HTTP.db_only_enabled() else '▶ włączony'} — {aoty_runtime}",
                 f"• MusicBrainz API: {'▶ włączone' if switches['musicbrainz'] else '⏸ zablokowane'} — {musicbrainz_runtime}",
                 f"• Last.fm API: {'▶ włączone' if switches['lastfm'] else '⏸ zablokowane'} — {lastfm_runtime}",
+                f"• Discogs API: {'▶ włączone' if switches['discogs'] else '⏸ zablokowane'} — {discogs_runtime}",
             ]
             if lastfm_status.get("last_error"):
                 lines.append(f"  ↳ Last.fm: {lastfm_status['last_error']}")
@@ -133,7 +148,7 @@ def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
             )
             message = "\n".join(lines)
         else:
-            if source not in {"aoty", "musicbrainz", "lastfm", "all"}:
+            if source not in {"aoty", "musicbrainz", "lastfm", "discogs", "all"}:
                 await interaction.response.send_message(
                     "Nieznane źródło dla `/dbonly`.",
                     ephemeral=True,
@@ -147,11 +162,14 @@ def setup_dbonly_command(tree: discord.app_commands.CommandTree) -> None:
                 SOURCES.set_enabled("musicbrainz", enabled, actor=actor)
             if source in {"lastfm", "all"}:
                 SOURCES.set_enabled("lastfm", enabled, actor=actor)
+            if source in {"discogs", "all"}:
+                SOURCES.set_enabled("discogs", enabled, actor=actor)
 
             source_label = {
                 "aoty": "AOTY scraper",
                 "musicbrainz": "MusicBrainz API",
                 "lastfm": "Last.fm API",
+                "discogs": "Discogs API",
                 "all": "wszystkie źródła",
             }[source]
             state = "odblokowane" if enabled else "zablokowane"

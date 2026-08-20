@@ -17,7 +17,7 @@ import time
 from settings import SOURCE_SWITCH_STATE_FILE
 
 
-OPTIONAL_SOURCES = ("musicbrainz", "lastfm")
+OPTIONAL_SOURCES = ("musicbrainz", "lastfm", "discogs")
 
 
 class SourceSwitches:

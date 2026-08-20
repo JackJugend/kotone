@@ -37,7 +37,7 @@ from settings import (
     USERS,
 )
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 # One-time migration data for pages verified before the scraper stored AOTY's
 # explicit Must Hear marker.  Values are written into ``releases.must_hear``;
@@ -879,6 +879,7 @@ class Database:
                     release_date TEXT,
                     year TEXT,
                     album_format TEXT,
+                    duration TEXT,
                     label TEXT,
                     labels_json TEXT,
                     genres_json TEXT,
@@ -904,6 +905,7 @@ class Database:
             self._ensure_column("releases", "must_hear", "INTEGER")
             self._ensure_column("releases", "must_hear_kind", "TEXT")
             self._ensure_column("releases", "all_time_ranking", "TEXT")
+            self._ensure_column("releases", "duration", "TEXT")
 
             self.connection.execute(
                 """
@@ -3651,6 +3653,119 @@ class Database:
                 "changed": changed,
             }
 
+    def manual_update_user_track_ratings(
+        self,
+        username: str,
+        album_id: str,
+        tracks: Iterable[dict],
+    ) -> dict:
+        """Store one user's Track Ratings without touching review or like."""
+
+        canonical = self._require_monitored(username)
+        album_id = str(album_id or "").strip()
+        normalized: list[dict] = []
+        for index, raw in enumerate(list(tracks or []), start=1):
+            track = dict(raw or {})
+            try:
+                score = int(str(track.get("score") or "").strip())
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Oceny użytkownika utworów muszą być liczbami 0–100.") from exc
+            if not 0 <= score <= 100:
+                raise ValueError("Oceny użytkownika utworów muszą być liczbami 0–100.")
+            title = str(track.get("title") or "").strip()
+            if not title:
+                raise ValueError("Każdy utwór z oceną użytkownika musi mieć tytuł.")
+            normalized.append(
+                {
+                    "number": track.get("number"),
+                    "title": title,
+                    "score": str(score),
+                    "index": index,
+                }
+            )
+        if not normalized:
+            raise ValueError("Podaj co najmniej jedną ocenę użytkownika utworu.")
+
+        with self._lock, self.connection:
+            rating = self.connection.execute(
+                """SELECT active, has_track_ratings FROM ratings
+                WHERE username = ? AND album_id = ?""",
+                (canonical, album_id),
+            ).fetchone()
+            if rating is None or not bool(rating["active"]):
+                raise ValueError("Wybrany album nie istnieje w aktywnym archiwum użytkownika.")
+            old_rows = self.connection.execute(
+                """SELECT track_number AS number, title, score
+                FROM user_track_ratings
+                WHERE username = ? AND album_id = ?""",
+                (canonical, album_id),
+            ).fetchall()
+            old_map = self._normalized_track_map([dict(row) for row in old_rows])
+            new_map = self._normalized_track_map(normalized)
+            old_has_tracks = bool(rating["has_track_ratings"])
+            now = _now()
+            self.connection.execute(
+                "DELETE FROM user_track_ratings WHERE username = ? AND album_id = ?",
+                (canonical, album_id),
+            )
+            for track in normalized:
+                number = track["number"]
+                title = track["title"]
+                key = f"{number if number is not None else 'x'}:{title.casefold()}:{track['index']}"
+                self.connection.execute(
+                    """INSERT INTO user_track_ratings(
+                        username, album_id, track_key, track_number, title, score
+                    ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (canonical, album_id, key, number, title, track["score"]),
+                )
+            self.connection.execute(
+                """UPDATE ratings
+                SET has_track_ratings = 1, detail_complete = 0,
+                    detail_synced_at = 0, last_seen_at = ?
+                WHERE username = ? AND album_id = ?""",
+                (now, canonical, album_id),
+            )
+            for track_key in sorted(set(old_map) | set(new_map)):
+                old_track = old_map.get(track_key)
+                new_track = new_map.get(track_key)
+                if old_track == new_track:
+                    continue
+                display = new_track or old_track or {}
+                item_key = f"{display.get('number')}. {display.get('title') or 'Unknown track'}"
+                self._record_change_locked(
+                    canonical,
+                    entity_type="track_rating",
+                    event_type=(
+                        "track_rating_added" if old_track is None
+                        else "track_rating_removed" if new_track is None
+                        else "track_rating_changed"
+                    ),
+                    album_id=album_id,
+                    field_name="track_score",
+                    item_key=item_key,
+                    old_value=old_track,
+                    new_value=new_track,
+                    source="manual_discord",
+                    detected_at=now,
+                )
+            if not old_has_tracks and not new_map:
+                self._record_change_locked(
+                    canonical,
+                    entity_type="track_rating",
+                    event_type="track_ratings_added",
+                    album_id=album_id,
+                    field_name="has_track_ratings",
+                    old_value=False,
+                    new_value=True,
+                    source="manual_discord",
+                    detected_at=now,
+                )
+            self.connection.execute(
+                "UPDATE users SET updated_at = ? WHERE username = ?",
+                (now, canonical),
+            )
+        return {"username": canonical, "album_id": album_id, "count": len(normalized)}
+
     def manual_update_rating_score(
         self,
         username: str,
@@ -4303,7 +4418,7 @@ class Database:
         raw_section_complete = details.get("_section_complete")
         legacy_authoritative = not isinstance(raw_section_complete, dict)
         source = str(details.get("source") or "").strip().casefold()
-        source = source if source in {"aoty", "musicbrainz", "lastfm", "manual"} else ""
+        source = source if source in {"aoty", "musicbrainz", "lastfm", "discogs", "manual"} else ""
         official_must_hear = details.get("must_hear")
         raw_must_hear_kind = str(details.get("must_hear_kind") or "").strip().casefold()
         if raw_must_hear_kind in {"users", "critics", "both"}:
@@ -4352,7 +4467,7 @@ class Database:
                 inferred_source = str(
                     existing["metadata_source"] or "aoty"
                 ).casefold()
-                if inferred_source not in {"aoty", "musicbrainz", "lastfm", "manual"}:
+                if inferred_source not in {"aoty", "musicbrainz", "lastfm", "discogs", "manual"}:
                     inferred_source = "aoty"
 
                 def raw_present(*columns: str) -> bool:
@@ -4373,6 +4488,8 @@ class Database:
                     metadata_sources.setdefault("release_date", inferred_source)
                 if raw_present("album_format"):
                     metadata_sources.setdefault("format", inferred_source)
+                if raw_present("duration"):
+                    metadata_sources.setdefault("duration", inferred_source)
                 if raw_present("label", "labels_json"):
                     metadata_sources.setdefault("labels", inferred_source)
                 if raw_present("genres_json", "secondary_genres_json"):
@@ -4409,6 +4526,8 @@ class Database:
                     "year_ranking_text",
                     "all_time_ranking",
                 ),
+                "duration": ("duration",),
+                "duration": ("duration",),
                 "tracklist": ("tracklist",),
             }
             if source:
@@ -4425,12 +4544,12 @@ class Database:
                     album_id, artist, artist_url, album, url, cover_url,
                     user_score, ratings_count, critic_score,
                     critic_reviews_count, release_date, year,
-                    album_format, label, labels_json, genres_json,
+                    album_format, duration, label, labels_json, genres_json,
                     secondary_genres_json, vibes_json, ranking_year,
                     year_ranking, year_ranking_text, all_time_ranking,
                     must_hear, must_hear_kind, metadata_source,
                     metadata_sources_json, fetched_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(album_id) DO UPDATE SET
                     artist = COALESCE(excluded.artist, releases.artist),
                     artist_url = COALESCE(excluded.artist_url, releases.artist_url),
@@ -4460,6 +4579,9 @@ class Database:
                     album_format = CASE WHEN ? THEN
                         COALESCE(excluded.album_format, releases.album_format)
                         ELSE releases.album_format END,
+                    duration = CASE WHEN ? THEN
+                        COALESCE(excluded.duration, releases.duration)
+                        ELSE releases.duration END,
                     label = CASE WHEN ? THEN excluded.label ELSE releases.label END,
                     labels_json = CASE WHEN ? THEN
                         excluded.labels_json ELSE releases.labels_json END,
@@ -4505,6 +4627,7 @@ class Database:
                     details.get("release_date"),
                     details.get("year"),
                     details.get("album_format"),
+                    details.get("duration"),
                     details.get("label"),
                     _json_dump(list(details.get("labels") or [])),
                     _json_dump(list(details.get("genres") or [])),
@@ -4526,6 +4649,7 @@ class Database:
                     section_complete("release_date"),
                     section_complete("release_date"),
                     section_complete("format"),
+                    section_complete("duration"),
                     section_complete("labels"),
                     section_complete("labels"),
                     section_complete("genres"),
@@ -4648,6 +4772,7 @@ class Database:
             section_keys = {
                 "release_date": ("release_date", "year"),
                 "labels": ("label", "labels"),
+                "duration": ("duration",),
                 "tracklist": ("tracklist",),
             }
             for section, keys in section_keys.items():
@@ -4672,6 +4797,57 @@ class Database:
             )
         return saved
 
+    def save_discogs_fallback(self, album_id: str, details: dict) -> bool:
+        """Persist Discogs only for still-missing tracks and total duration.
+
+        Discogs is intentionally narrower than the other providers: no title,
+        cover, genres or scores may be overwritten through this route.
+        """
+
+        album_id = str(album_id or "").strip()
+        if not album_id:
+            return False
+        incoming = dict(details or {})
+        existing = self.get_release_details(album_id)
+        complete = dict(incoming.get("_section_complete") or {})
+
+        if existing is not None:
+            for section, keys in {
+                "duration": ("duration",),
+                "tracklist": ("tracklist",),
+            }.items():
+                if any(existing.get(key) not in (None, "", [], {}) for key in keys):
+                    complete[section] = False
+            for detail_key in (
+                "artist",
+                "artist_url",
+                "album",
+                "url",
+                "cover",
+                "release_date",
+                "year",
+                "album_format",
+                "label",
+                "labels",
+                "genres",
+                "secondary_genres",
+                "vibes",
+            ):
+                incoming[detail_key] = None
+
+        external_metadata = dict(incoming.pop("external_metadata", {}) or {})
+        incoming["source"] = "discogs"
+        incoming["_section_complete"] = complete
+        saved = self.save_release_details(album_id, incoming)
+        if saved and external_metadata:
+            self.save_release_source_data(
+                album_id,
+                "discogs",
+                external_metadata,
+                quality="exact-api-release-match",
+            )
+        return saved
+
     def save_release_source_data(
         self,
         album_id: str,
@@ -4684,7 +4860,7 @@ class Database:
 
         album_id = str(album_id or "").strip()
         source = str(source or "").strip().casefold()
-        if not album_id or source not in {"musicbrainz", "lastfm", "manual"} or not isinstance(data, dict):
+        if not album_id or source not in {"musicbrainz", "lastfm", "discogs", "manual"} or not isinstance(data, dict):
             return False
         with self._lock, self.connection:
             if not self._release_is_in_scope_locked(album_id):
@@ -4837,7 +5013,7 @@ class Database:
         if not isinstance(metadata_sources, dict):
             metadata_sources = {}
         inferred_source = str(row["metadata_source"] or "aoty").casefold()
-        if inferred_source not in {"aoty", "musicbrainz", "lastfm", "manual"}:
+        if inferred_source not in {"aoty", "musicbrainz", "lastfm", "discogs", "manual"}:
             inferred_source = "aoty"
         if (
             row["user_score"]
@@ -4850,6 +5026,8 @@ class Database:
             metadata_sources.setdefault("release_date", inferred_source)
         if row["album_format"]:
             metadata_sources.setdefault("format", inferred_source)
+        if row["duration"]:
+            metadata_sources.setdefault("duration", inferred_source)
         if row["label"] or labels:
             metadata_sources.setdefault("labels", inferred_source)
         if genres or secondary:
@@ -4876,6 +5054,7 @@ class Database:
             "release_date": row["release_date"],
             "year": row["year"],
             "album_format": row["album_format"],
+            "duration": row["duration"],
             "label": row["label"],
             "labels": labels,
             "labels_text": ", ".join(labels) if labels else None,

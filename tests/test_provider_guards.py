@@ -22,10 +22,11 @@ class ProviderSwitchTests(unittest.TestCase):
 
         self.assertEqual(
             switches.status(),
-            {"musicbrainz": True, "lastfm": True},
+            {"musicbrainz": True, "lastfm": True, "discogs": True},
         )
         self.assertFalse(switches.set_enabled("lastfm", False, actor="enso"))
         self.assertTrue(switches.enabled("musicbrainz"))
+        self.assertTrue(switches.enabled("discogs"))
         self.assertFalse(SourceSwitches(str(path)).enabled("lastfm"))
 
 

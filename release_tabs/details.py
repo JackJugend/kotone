@@ -122,7 +122,7 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
         ),
         _detail_line(
             variables,
-            section="tracklist",
+            section="duration",
             label="Duration",
             value=variables.duration,
         ),
@@ -196,19 +196,16 @@ def _lastfm_section(source_data: Mapping[str, object]) -> list[str]:
     ]
 
 
-def _source_section(variables: ReleaseVariables) -> list[str]:
-    source = str(variables.metadata_source or "").strip().casefold()
-    if not source:
-        return []
+def _discogs_section(source_data: Mapping[str, object]) -> list[str]:
+    """Show only durable Discogs identity, not a redundant source summary."""
 
-    label = {
-        "aoty": "AOTY",
-        "musicbrainz": "MusicBrainz",
-        "lastfm": "Last.fm",
-        "manual": "manual",
-    }.get(source, source)
-    prefix = source_emoji(source)
-    return [f"{prefix} **Source:** {label}".lstrip()]
+    return [
+        line
+        for label, value in (
+            ("Discogs release ID", source_data.get("discogs_release_id")),
+        )
+        if (line := _provider_line("discogs", label, value))
+    ]
 
 
 def _description_lines(variables: ReleaseVariables) -> list[str]:
@@ -221,7 +218,7 @@ def _description_lines(variables: ReleaseVariables) -> list[str]:
         _ranking_section(variables),
         _musicbrainz_section(variables.source_data.get("musicbrainz") or {}),
         _lastfm_section(variables.source_data.get("lastfm") or {}),
-        _source_section(variables),
+        _discogs_section(variables.source_data.get("discogs") or {}),
     ]
 
     lines: list[str] = []
