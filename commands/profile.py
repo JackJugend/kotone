@@ -8,6 +8,7 @@ from services import DATA
 from lastfm_database import LASTFM_DB
 from settings import (
     KOTONE_USERS,
+    KOTONE_USERS_BY_AOTY,
     LASTFM_ICON,
     LASTFM_ICON_ATTACHMENT,
     LASTFM_ICON_FILENAME,
@@ -104,8 +105,14 @@ def _lastfm_archive_progress(profile_key: object, archive: dict | None = None) -
     return f"{base} • oczekuje na pierwszy import"
 
 
-def _build_lastfm_only_embed(kotone_profile: dict[str, object]) -> discord.Embed:
-    """Build the sole profile card for a Kotone user without AOTY."""
+def _build_lastfm_embed(
+    kotone_profile: dict[str, object],
+    *,
+    author_name: str | None = None,
+    author_url: str | None = None,
+    author_icon_url: str | None = None,
+) -> discord.Embed:
+    """Build a Last.fm card, mirroring the AOTY profile author when present."""
 
     profile_key = str(kotone_profile.get("name") or "").strip()
     lastfm_username = str(kotone_profile.get("lastfm_username") or "").strip()
@@ -117,7 +124,7 @@ def _build_lastfm_only_embed(kotone_profile: dict[str, object]) -> discord.Embed
         or f"https://www.last.fm/user/{lastfm_username}"
     )
     avatar = str(lastfm_profile.get("avatar_url") or "").strip() or None
-    display_name = str(kotone_profile.get("name") or profile_key)
+    display_name = str(author_name or kotone_profile.get("name") or profile_key)
     embed = discord.Embed(
         title=f"{SOURCE_EMOJIS['lastfm']} Last.fm — @{lastfm_username}",
         url=profile_url,
@@ -152,12 +159,18 @@ def _build_lastfm_only_embed(kotone_profile: dict[str, object]) -> discord.Embed
                 f"{latest.get('track') or '—'}**{album}"
             ),
             inline=False,
+    )
+    source_avatar = str(author_icon_url or avatar or "").strip()
+    if source_avatar:
+        embed.set_author(
+            name=display_name,
+            url=str(author_url or profile_url),
+            icon_url=source_avatar,
         )
-    if avatar:
-        embed.set_author(name=display_name, url=profile_url, icon_url=avatar)
-        embed.set_thumbnail(url=avatar)
     else:
-        embed.set_author(name=display_name, url=profile_url)
+        embed.set_author(name=display_name, url=str(author_url or profile_url))
+    if avatar:
+        embed.set_thumbnail(url=avatar)
     _set_lastfm_footer(embed)
     return embed
 
@@ -210,7 +223,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         kotone_profile = resolve_kotone_profile(interaction.user.id, username)
         if kotone_profile and not kotone_profile.get("aoty_username"):
             await interaction.followup.send(
-                embed=_build_lastfm_only_embed(kotone_profile),
+                embed=_build_lastfm_embed(kotone_profile),
                 file=_lastfm_footer_file(),
             )
             return
@@ -362,11 +375,27 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             )
             return embed
 
+        # A supplementary Last.fm card is available only to Kotone users who
+        # have both configured accounts.  The card mirrors the visible AOTY
+        # author so both sources clearly belong to the same person.
+        kotone_profile = KOTONE_USERS_BY_AOTY.get(username.casefold())
+        lastfm_embed = (
+            _build_lastfm_embed(
+                kotone_profile,
+                author_name=display_username,
+                author_url=profile_url,
+                author_icon_url=avatar,
+            )
+            if kotone_profile and kotone_profile.get("lastfm_username")
+            else None
+        )
+
         view = ProfilePagerView(
             username=username,
             ratings=recent_ratings,
             favorites=variables.favorites,
             build_page_embed=build_page_embed,
+            supplemental_embeds=[lastfm_embed] if lastfm_embed else [],
             owner_id=interaction.user.id,
         )
 
@@ -375,5 +404,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             "view": view,
             "wait": True,
         }
+        if lastfm_embed:
+            send_kwargs["file"] = _lastfm_footer_file()
         message = await interaction.followup.send(**send_kwargs)
         view.bind_message(message)
