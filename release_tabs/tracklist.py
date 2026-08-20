@@ -72,7 +72,7 @@ def _build_tracklist_embed(
         username=username,
         author_icon_url=author_icon_url,
     )
-    set_aoty_footer(embed, f"AOTY tracklist  •  {variables.album_format}  •  oceny użytkowników")
+    set_aoty_footer(embed, f"Tracklist  •  {variables.album_format}  •  oceny użytkowników")
     return embed
 
 
@@ -160,16 +160,16 @@ async def build_combined_tracklist_embeds(
         title_text = f"[{title}]({url})" if url else title
         public_score = track.get("user_score")
         scores = [
-            f"AOTY {score_or_nr(public_score)}"
+            f"<:aoty:1539095897084924004> {score_or_nr(public_score)}"
             if str(public_score or "").strip()
-            else "AOTY **—**"
+            else "<:aoty:1539095897084924004> **—**"
         ]
         for configured_username in USERS[:25]:
             by_number, by_title = personal_maps.get(configured_username, ({}, {}))
             row = (by_number.get(number) if number is not None else None) or by_title.get(title_key)
             personal_score = (row or {}).get("score")
             scores.append(
-                f"{user_avatar_emoji(username: str)} {score_or_nr(personal_score)}"
+                f"{user_avatar_emoji} {score_or_nr(personal_score)}"
             )
         lines.append(f"**{display_number}.** {title_text}{duration}\n" + " • ".join(scores))
 
