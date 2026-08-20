@@ -186,7 +186,7 @@ async def build_combined_tracklist_embeds(
 
     descriptions = paginate_description_lines(lines, limit=3200) if lines else ["Brak tracklisty w kotone."]
     if lines:
-        descriptions = [f"{score_header}\n{description}" for description in descriptions]
+        descriptions = [f"{description}\n\n{score_header}" for description in descriptions]
     return [
         _build_tracklist_embed(
             variables,

@@ -820,10 +820,11 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             embed = await views_module.build_combined_tracklist_embed(item)
 
         self.assertIn("**1.** Opening Track `3:45`", embed.description)
-        self.assertIn(
-            "<:aoty:1539095897084924004>  •  <:enso:123>  •  <:kulkien:123>",
-            embed.description,
+        score_legend = (
+            "<:aoty:1539095897084924004>  │  "
+            "<:enso:123>  │  <:kulkien:123>"
         )
+        self.assertTrue(embed.description.endswith(score_legend))
         self.assertIn("**82**", embed.description)
         self.assertNotIn(" enso ", embed.description)
         self.assertIn("**90**", embed.description)
