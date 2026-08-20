@@ -1,3 +1,5 @@
+"""Komenda /recent renderująca serię ostatnich ocen z SQLite."""
+
 import asyncio
 
 import discord
@@ -229,3 +231,4 @@ def setup_recent_command(tree: discord.app_commands.CommandTree):
                 wait=True,
             )
             view.bind_message(message)
+"""Komenda /recent renderująca serię ostatnich ocen z SQLite."""

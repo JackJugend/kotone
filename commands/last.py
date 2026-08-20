@@ -1,3 +1,5 @@
+"""Komenda /last renderująca ostatnią pasującą ocenę z bazy Kotone."""
+
 import asyncio
 
 import discord
@@ -344,3 +346,4 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             wait=True,
         )
         view.bind_message(message)
+"""Komenda /last renderująca ostatnią pasującą ocenę z bazy Kotone."""

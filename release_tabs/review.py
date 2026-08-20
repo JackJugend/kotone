@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import discord
 
+from release_tabs.common import (
+    apply_release_identity,
+    release_tab_title,
+    trim_description,
+)
 from services import DATA
 from shared import (
     build_release_variables,
-    must_hear_title_marker,
     score_color,
     score_or_nr,
 )
-
-
-def _trim_description(text: str, limit: int = 4000) -> str:
-    text = str(text or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
+from ui_constants import REVIEW_BUTTON
 
 
 def build_review_embed(
@@ -35,23 +33,19 @@ def build_review_embed(
     album_id = str(hydrated.get("album_id") or "").strip()
     cached = DATA.cached_release_details(album_id) if album_id else {}
     variables = build_release_variables(hydrated, cached or {})
-    marker = must_hear_title_marker(variables)
+    variables.date = str(extra.get("date") or item.get("date") or "—")
 
     embed = discord.Embed(
-        title=(
-            f"✎ {variables.display_artist} — {variables.display_album}"
-            f" {marker}".rstrip()
-        ),
+        title=release_tab_title(REVIEW_BUTTON, variables),
         url=extra.get("review_url") or item.get("url"),
-        description=_trim_description(review_text),
+        description=trim_description(review_text),
         color=score_color(score),
     )
-    embed.set_author(
-        name=f"{username}  •  {extra.get('date') or item.get('date') or '—'}",
-        url=f"https://www.albumoftheyear.org/user/{username}/",
-        icon_url=author_icon_url,
+    apply_release_identity(
+        embed,
+        variables,
+        username=username,
+        author_icon_url=author_icon_url,
     )
-    if variables.cover:
-        embed.set_thumbnail(url=variables.cover)
     embed.set_footer(text=f"AOTY • {score_or_nr(score)}")
     return embed

@@ -5,25 +5,20 @@ from __future__ import annotations
 import discord
 
 import aoty
+from release_tabs.common import (
+    apply_release_identity,
+    release_tab_title,
+    trim_description,
+)
 from services import DATA
 from settings import USERS
 from shared import (
     build_release_variables,
-    must_hear_title_marker,
     score_color,
     score_value_or_nr,
     set_aoty_footer,
 )
-
-
-TRACKLIST_BUTTON = "☰"
-
-
-def _trim_description(text: str, limit: int = 4000) -> str:
-    text = str(text or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
+from ui_constants import TRACKLIST_BUTTON
 
 
 def _track_key(value: object) -> str:
@@ -140,21 +135,18 @@ async def build_combined_tracklist_embed(
         lines.append(f"**{display_number}.** {title_text}{duration}\n" + " • ".join(scores))
 
     embed = discord.Embed(
-        title=(
-            f"{TRACKLIST_BUTTON} {variables.display_artist} — {variables.display_album}"
-            f" {must_hear_title_marker(variables)}".rstrip()
-        ),
+        title=release_tab_title(TRACKLIST_BUTTON, variables),
         url=variables.url or None,
-        description=_trim_description("\n".join(lines) if lines else "Brak tracklisty w kotone."),
+        description=trim_description(
+            "\n".join(lines) if lines else "Brak tracklisty w kotone."
+        ),
         color=score_color(variables.score or variables.aoty_user_score),
     )
-    if variables.cover:
-        embed.set_thumbnail(url=variables.cover)
-    if username:
-        embed.set_author(
-            name=f"{username}  •  {variables.date}",
-            url=f"https://www.albumoftheyear.org/user/{username}/",
-            icon_url=author_icon_url,
-        )
+    apply_release_identity(
+        embed,
+        variables,
+        username=username,
+        author_icon_url=author_icon_url,
+    )
     set_aoty_footer(embed, f"AOTY tracklist  •  {variables.album_format}  •  oceny użytkowników")
     return embed

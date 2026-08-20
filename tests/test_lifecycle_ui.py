@@ -475,8 +475,17 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         ) as builder:
             await view._tracks(interaction)
 
-        builder.assert_awaited_once_with(item)
-        interaction.message.edit.assert_awaited_once_with(embed=combined, view=view)
+        builder.assert_awaited_once_with(
+            item,
+            username="enso",
+            author_icon_url=None,
+        )
+        interaction.message.edit.assert_awaited_once_with(view=view)
+        interaction.followup.send.assert_awaited_once_with(
+            embed=combined,
+            ephemeral=False,
+            wait=True,
+        )
 
     async def test_profile_review_failure_is_not_reported_as_no_review(self):
         item = {

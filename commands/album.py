@@ -1,3 +1,5 @@
+"""Komenda /album oraz odczyt albumu z Discord Rich Presence."""
+
 import asyncio
 import re
 import time

@@ -1,0 +1,1 @@
+"""Rejestratory slash commandów Kotone."""

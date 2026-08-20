@@ -1,22 +1,21 @@
+"""Komenda /profile łącząca zapisane karty AOTY i Last.fm."""
+
+from __future__ import annotations
+
 import asyncio
 
 import discord
 import requests
 
 import aoty
-from services import DATA
+from display_utils import display_romanized_name
 from lastfm_database import LASTFM_DB
 from settings import (
     KOTONE_USERS,
     KOTONE_USERS_BY_AOTY,
-    LASTFM_ICON,
-    LASTFM_ICON_ATTACHMENT,
-    LASTFM_ICON_FILENAME,
-    SOURCE_EMOJIS,
     resolve_aoty_username,
     resolve_kotone_profile,
 )
-from display_utils import display_romanized_name
 from shared import (
     build_profile_variables,
     rating_flags_text,
@@ -24,6 +23,13 @@ from shared import (
     score_or_nr,
     set_aoty_footer,
     username_autocomplete,
+)
+from services import DATA
+from ui_constants import (
+    LASTFM_ICON,
+    LASTFM_ICON_ATTACHMENT,
+    LASTFM_ICON_FILENAME,
+    SOURCE_EMOJIS,
 )
 from views import ProfilePagerView
 
@@ -408,3 +414,4 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             send_kwargs["file"] = _lastfm_footer_file()
         message = await interaction.followup.send(**send_kwargs)
         view.bind_message(message)
+"""Komenda /profile łącząca zapisane karty AOTY i Last.fm."""

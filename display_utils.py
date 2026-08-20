@@ -1,3 +1,5 @@
+"""Wspólne formatowanie nazw, gatunków i dat wyświetlanych przez Kotone."""
+
 import re
 import unicodedata
 from datetime import datetime
@@ -222,3 +224,4 @@ def display_romanized_name(text):
         return text
 
     return candidate
+"""Wspólne formatowanie nazw, gatunków i dat wyświetlanych przez Kotone."""

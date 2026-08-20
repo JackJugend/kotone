@@ -1,35 +1,229 @@
-"""Wspólna zakładka 🛈 informacji o wydaniu."""
+"""Wspólna zakładka informacji o wydaniu."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import discord
 
+from release_tabs.common import (
+    MISSING_VALUE,
+    apply_release_identity,
+    display_value,
+    release_tab_title,
+)
 from shared import (
+    ReleaseVariables,
     aoty_score_value,
     load_release_variables,
-    must_hear_title_marker,
     score_color,
     score_or_nr,
     set_aoty_footer,
     source_emoji,
 )
+from ui_constants import DETAILS_BUTTON
 
 
-DETAILS_BUTTON = "🛈"
+# ---------------------------------------------------------------------------
+# Formatowanie pojedynczych wierszy
+# ---------------------------------------------------------------------------
 
+def _source_prefix(
+    variables: ReleaseVariables,
+    section: str,
+    value: object,
+) -> str:
+    """Zwróć emoji źródła tylko przy istniejącej wartości."""
 
-def _details_value(value: object) -> str:
-    text = str(value or "").strip()
-    return text if text and text not in {"?", "Brak danych", "None"} else "—"
-
-
-def _source_prefix(variables, section: str, value: object) -> str:
-    if _details_value(value) == "-":
+    if display_value(value) == MISSING_VALUE:
         return ""
-    source = str(variables.metadata_sources.get(section) or "").casefold()
-    emoji = source_emoji(source or "aoty")
+    source = str(variables.metadata_sources.get(section) or "aoty").casefold()
+    emoji = source_emoji(source)
     return f"{emoji} " if emoji else ""
 
+
+def _detail_line(
+    variables: ReleaseVariables,
+    *,
+    section: str,
+    label: str,
+    value: object,
+) -> str:
+    return (
+        f"{_source_prefix(variables, section, value)}"
+        f"**{label}:** {display_value(value)}"
+    )
+
+
+def _provider_line(source: str, label: str, value: object) -> str | None:
+    rendered = display_value(value)
+    if rendered == MISSING_VALUE:
+        return None
+    prefix = source_emoji(source)
+    return f"{prefix} **{label}:** {rendered}".lstrip()
+
+
+# ---------------------------------------------------------------------------
+# Sekcje opisu
+# ---------------------------------------------------------------------------
+
+def _score_section(variables: ReleaseVariables) -> list[str]:
+    score = aoty_score_value(
+        variables.aoty_user_score,
+        variables.ratings_count,
+    )
+    return [
+        _detail_line(
+            variables,
+            section="score",
+            label="AOTY User Score",
+            value=score,
+        ),
+        _detail_line(
+            variables,
+            section="score",
+            label="Ratings",
+            value=variables.ratings_count,
+        ),
+    ]
+
+
+def _genres_section(variables: ReleaseVariables) -> list[str]:
+    return [
+        _detail_line(
+            variables,
+            section="genres",
+            label="Genre",
+            value=variables.genres_text,
+        ),
+        _detail_line(
+            variables,
+            section="genres",
+            label="Secondary genres",
+            value=variables.secondary_genres_text,
+        ),
+        _detail_line(
+            variables,
+            section="vibes",
+            label="Vibes",
+            value=variables.vibes_text,
+        ),
+    ]
+
+
+def _release_section(variables: ReleaseVariables) -> list[str]:
+    return [
+        _detail_line(
+            variables,
+            section="release_date",
+            label="Release date",
+            value=variables.release_date,
+        ),
+        _detail_line(
+            variables,
+            section="tracklist",
+            label="Duration",
+            value=variables.duration,
+        ),
+        _detail_line(
+            variables,
+            section="format",
+            label="Format",
+            value=variables.album_format,
+        ),
+        _detail_line(
+            variables,
+            section="labels",
+            label="Label",
+            value=variables.labels_text,
+        ),
+    ]
+
+
+def _ranking_section(variables: ReleaseVariables) -> list[str]:
+    ranking_year = display_value(variables.ranking_year)
+    if ranking_year == MISSING_VALUE:
+        ranking_year = display_value(variables.year)
+    label = f"{ranking_year} ratings" if ranking_year != MISSING_VALUE else "Year ratings"
+    return [
+        _detail_line(
+            variables,
+            section="ranking",
+            label=label,
+            value=variables.year_ranking_text,
+        )
+    ]
+
+
+def _musicbrainz_section(source_data: Mapping[str, object]) -> list[str]:
+    rows = (
+        ("MusicBrainz release ID", source_data.get("musicbrainz_release_id")),
+        (
+            "MusicBrainz release-group ID",
+            source_data.get("musicbrainz_release_group_id"),
+        ),
+        ("Release country", source_data.get("release_country")),
+    )
+    return [
+        line
+        for label, value in rows
+        if (line := _provider_line("musicbrainz", label, value))
+    ]
+
+
+def _lastfm_section(source_data: Mapping[str, object]) -> list[str]:
+    rows = (
+        ("Listeners", source_data.get("listeners_count")),
+        ("Scrobbles", source_data.get("playcount")),
+    )
+    return [
+        line
+        for label, value in rows
+        if (line := _provider_line("lastfm", label, value))
+    ]
+
+
+def _source_section(variables: ReleaseVariables) -> list[str]:
+    source = str(variables.metadata_source or "").strip().casefold()
+    if not source:
+        return []
+
+    label = {
+        "aoty": "AOTY",
+        "musicbrainz": "MusicBrainz",
+        "lastfm": "Last.fm",
+        "manual": "manual",
+    }.get(source, source)
+    prefix = source_emoji(source)
+    return [f"{prefix} **Source:** {label}".lstrip()]
+
+
+def _description_lines(variables: ReleaseVariables) -> list[str]:
+    """Złożyć sekcje w jednym, czytelnym miejscu i stałej kolejności."""
+
+    sections = [
+        _score_section(variables),
+        _genres_section(variables),
+        _release_section(variables),
+        _ranking_section(variables),
+        _musicbrainz_section(variables.source_data.get("musicbrainz") or {}),
+        _lastfm_section(variables.source_data.get("lastfm") or {}),
+        _source_section(variables),
+    ]
+
+    lines: list[str] = []
+    for section in sections:
+        if not section:
+            continue
+        if lines:
+            lines.append("")
+        lines.extend(section)
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Publiczny renderer zakładki
+# ---------------------------------------------------------------------------
 
 async def build_release_details_embed(
     item: dict,
@@ -37,95 +231,26 @@ async def build_release_details_embed(
     username: str | None = None,
     author_icon_url: str | None = None,
 ) -> discord.Embed:
-    """Renderuj pełne informacje z SQLite i ich źródła."""
+    """Renderuj pełne informacje z SQLite wraz z ich źródłami."""
 
-    variables = await load_release_variables(item, username=username, missing="—")
-    lines = [
-
-        f"{_source_prefix(variables, 'score', variables.aoty_user_score)}"
-        f"**User score:** "
-        f"{aoty_score_value(variables.aoty_user_score, variables.ratings_count)}",
-        
-        f"{_source_prefix(variables, 'score', variables.ratings_count)}"
-        f"**Ratings:** {variables.ratings_count}\n",
-
-        f"{_source_prefix(variables, 'genres', variables.genres_text)}"
-        f"**Genre:** {_details_value(variables.genres_text)}",
-        
-        f"{_source_prefix(variables, 'genres', variables.secondary_genres_text)}"
-        f"**Secondary genres:** {_details_value(variables.secondary_genres_text)}",
-        
-        f"{_source_prefix(variables, 'vibes', variables.vibes_text)}"
-        f"**Vibes:** {_details_value(variables.vibes_text)}\n",
-
-        f"{_source_prefix(variables, 'release_date', variables.release_date)}"
-        f"**Release date:** {variables.release_date}",
-
-        f"{_source_prefix(variables, 'tracklist', variables.duration)}"
-        f"**Duration:** {variables.duration}",
-
-        f"{_source_prefix(variables, 'format', variables.album_format)}"
-        f"**Format:** {variables.album_format}",
-
-        f"{_source_prefix(variables, 'labels', variables.labels_text)}"
-        f"**Label:** {variables.labels_text}",
-    ]
-    ranking_year = _details_value(variables.ranking_year)
-    if ranking_year == "—":
-        ranking_year = _details_value(variables.year)
-    lines.append(
-        f"{_source_prefix(variables, 'ranking', variables.year_ranking_text)}"
-        f"**{ranking_year if ranking_year != '—' else 'Year'} ratings:** "
-        f"{_details_value(variables.year_ranking_text)}"
+    variables = await load_release_variables(
+        item,
+        username=username,
+        missing=MISSING_VALUE,
     )
-
-    musicbrainz_data = variables.source_data.get("musicbrainz") or {}
-    if musicbrainz_data:
-        for key, label in (
-            ("musicbrainz_release_id", "MusicBrainz release ID"),
-            ("musicbrainz_release_group_id", "MusicBrainz release-group ID"),
-        ):
-            value = _details_value(musicbrainz_data.get(key))
-            if value != "—":
-                lines.append(f"{source_emoji('musicbrainz')} **{label}:** `{value}`")
-        country = _details_value(musicbrainz_data.get("release_country"))
-        if country != "—":
-            lines.append(f"{source_emoji('musicbrainz')} **Release country:** {country}")
-
-    lastfm_data = variables.source_data.get("lastfm") or {}
-    if lastfm_data:
-        for key, label in (("listeners_count", "Listeners"), ("playcount", "Scrobbles")):
-            value = _details_value(lastfm_data.get(key))
-            if value != "-":
-                lines.append(f"{source_emoji('lastfm')} **{label}:** {value}")
-
-    metadata_source = str(variables.metadata_source or "").strip().casefold()
-    if metadata_source:
-        prefix = source_emoji(metadata_source)
-        label = {
-            "aoty": "AOTY",
-            "musicbrainz": "MusicBrainz",
-            "lastfm": "Last.fm",
-            "manual": "manual",
-        }.get(metadata_source, metadata_source)
-
     embed = discord.Embed(
-        title=(
-            f"{DETAILS_BUTTON} {variables.display_artist} — {variables.display_album}"
-            f" {must_hear_title_marker(variables)}".rstrip()
-        ),
+        title=release_tab_title(DETAILS_BUTTON, variables),
         url=variables.url or None,
-        description="\n".join(lines),
+        description="\n".join(_description_lines(variables)),
         color=score_color(variables.score or variables.aoty_user_score),
     )
-    if variables.cover:
-        embed.set_thumbnail(url=variables.cover)
-    if username:
-        embed.set_author(
-            name=f"{username}  •  {variables.date}",
-            url=f"https://www.albumoftheyear.org/user/{username}/",
-            icon_url=author_icon_url,
-        )
+    apply_release_identity(
+        embed,
+        variables,
+        username=username,
+        author_icon_url=author_icon_url,
+    )
+
     footer = f"AOTY • {score_or_nr(variables.score)}" if username else "AOTY"
     set_aoty_footer(embed, footer)
     return embed

@@ -18,8 +18,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from database import DB
 from score_emoji_registry import set_score_emojis
-from settings import MANUAL_STATUS_EMOJI_IDS
 from status_emoji_registry import set_status_emojis
+from ui_constants import MANUAL_STATUS_EMOJI_IDS
 
 SCORE_EMOJI_PREFIX = "score_"
 SCORE_EMOJI_RENDER_VERSION = "aoty-tile-v8-large-centred"

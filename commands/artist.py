@@ -1,3 +1,5 @@
+"""Komenda /artist: lokalna dyskografia, filtry i paginacja Discord UI."""
+
 import discord
 import requests
 
@@ -17,7 +19,8 @@ from shared import (
     score_or_missing,
     set_aoty_footer,
 )
-from views import TimedDisableView, VIEW_TIMEOUT_SECONDS
+from ui_constants import VIEW_TIMEOUT_SECONDS
+from views import TimedDisableView
 
 
 MAX_ARTIST_RELEASES = 18

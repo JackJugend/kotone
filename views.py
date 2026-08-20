@@ -2,41 +2,33 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import traceback
+from collections.abc import Callable
 
 import discord
 
 import aoty
-from services import DATA
 from display_utils import display_romanized_name
 from release_tabs import (
     build_combined_tracklist_embed,
     build_release_details_embed,
     build_review_embed,
 )
+from services import DATA
 from settings import USERS
 from shared import (
     dropdown_score_or_nr,
     rating_flags_text,
 )
-
-
-HOME_BUTTON = "🏠︎"
-TRACKLIST_BUTTON = "☰"
-REVIEW_BUTTON = "✎"
-DETAILS_BUTTON = "🛈"
-ARTIST_BUTTON = "★"
-# One declarative source for every interactive command.  Individual views only
-# provide callbacks and availability; changing order or symbols happens here.
-ACTION_TABS = {
-    "artist": ARTIST_BUTTON,
-    "details": DETAILS_BUTTON,
-    "home": HOME_BUTTON,
-    "tracklist": TRACKLIST_BUTTON,
-    "review": REVIEW_BUTTON,
-}
-ACTION_BUTTON_ORDER = tuple(ACTION_TABS.values())
+from ui_constants import (
+    ACTION_BUTTON_ORDER,
+    ARTIST_BUTTON,
+    DETAILS_BUTTON,
+    HOME_BUTTON,
+    REVIEW_BUTTON,
+    TRACKLIST_BUTTON,
+    VIEW_TIMEOUT_SECONDS,
+)
 
 
 async def _aoty_avatar(username: str) -> str | None:
@@ -216,9 +208,6 @@ async def _open_release_tab(
     bind_message = getattr(tab_view, "bind_message", None)
     if callable(bind_message):
         bind_message(message)
-
-
-VIEW_TIMEOUT_SECONDS = 20 * 60
 
 
 class TimedDisableView(discord.ui.View):

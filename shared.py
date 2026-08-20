@@ -18,18 +18,21 @@ from display_utils import display_genres, display_release_date, display_romanize
 from must_hear import marked_cover_url, must_hear_album, must_hear_kind, numeric_count
 from score_emoji_registry import score_emoji
 from status_emoji_registry import status_emoji
-from settings import (
+from settings import KOTONE_BOT_AVATAR_EMOJI_KEY, USERS
+from ui_constants import (
     AOTY_ICON_ATTACHMENT,
     EMBED_SCORE_EMOJIS,
     EMBED_STATUS_EMOJIS,
-    KOTONE_BOT_AVATAR_EMOJI_KEY,
     MENU_SCORE_EMOJIS,
     MENU_STATUS_EMOJIS,
     MUST_HEAR_EMOJIS,
     SOURCE_EMOJIS,
-    USERS,
 )
 
+
+# ---------------------------------------------------------------------------
+# Stopki, kolory i wartości ocen
+# ---------------------------------------------------------------------------
 
 def set_aoty_footer(embed: discord.Embed, text: str) -> None:
     """Apply Kotone's shared AOTY footer asset consistently."""
@@ -229,6 +232,10 @@ def release_year_suffix(year: Any) -> str:
     return f" ({text})"
 
 
+# ---------------------------------------------------------------------------
+# Wspólne modele danych embedów
+# ---------------------------------------------------------------------------
+
 @dataclass(slots=True)
 class ReleaseVariables:
     # Dane oceny użytkownika.
@@ -330,6 +337,10 @@ class ProfileVariables:
     recent_ratings: list[dict] = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Normalizacja profilu
+# ---------------------------------------------------------------------------
+
 def build_profile_variables(
     profile: dict | None,
     fallback_username: str = "",
@@ -365,6 +376,10 @@ def build_profile_variables(
         recent_ratings=list(profile.get("recent_ratings") or []),
     )
 
+
+# ---------------------------------------------------------------------------
+# Dynamiczne emoji zapisane w SQLite
+# ---------------------------------------------------------------------------
 
 def user_avatar_emoji(username: str) -> str:
     """Return the current cached custom emoji for a Kotone profile.
@@ -409,6 +424,10 @@ def source_emoji(source: str) -> str:
         return application_avatar_emoji() or SOURCE_EMOJIS.get("manual", "")
     return SOURCE_EMOJIS.get(key, "")
 
+
+# ---------------------------------------------------------------------------
+# Jedno źródło zmiennych wydania
+# ---------------------------------------------------------------------------
 
 def build_release_variables(
     item: dict | None,
@@ -632,6 +651,10 @@ async def load_release_variables(
         missing=missing,
     )
 
+
+# ---------------------------------------------------------------------------
+# Flagi pozycji i autocomplete użytkowników
+# ---------------------------------------------------------------------------
 
 def rating_flags_text(
     item_or_variables: dict | ReleaseVariables | None,

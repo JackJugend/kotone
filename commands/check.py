@@ -1,3 +1,5 @@
+"""Operatorska komenda /check uruchamiająca kontrolowaną synchronizację."""
+
 import discord
 
 from lastfm_globals import LASTFM_ARCHIVE
@@ -172,3 +174,4 @@ def setup_check_command(tree: discord.app_commands.CommandTree, monitor):
             f"zmienione: **{result.get('changed', 0)}** • "
             f"pobrane: **{result.get('ratings', 0)}**"
         )
+"""Operatorska komenda /check uruchamiająca kontrolowaną synchronizację."""
