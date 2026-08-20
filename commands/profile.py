@@ -137,9 +137,7 @@ def _build_lastfm_only_embeds(kotone_profile: dict[str, object]) -> list[discord
             f"{_lastfm_archive_progress(profile_key, archive)}\n"
             f"**{_lastfm_count(archive['artists'])}** wykonawców  •  "
             f"**{_lastfm_count(archive['albums'])}** albumów  •  "
-            f"**{_lastfm_count(archive['tracks'])}** utworów\n"
-            "*Liczby wykonawców i albumów dotyczą wyłącznie zapisanych "
-            "scrobbli, więc mogą różnić się od biblioteki Last.fm.*"
+            f"**{_lastfm_count(archive['tracks'])}** utworów"
         ),
         inline=False,
     )
@@ -195,9 +193,7 @@ def _build_lastfm_embed(
                 f"{_lastfm_archive_progress(profile_key, archive)}\n"
                 f"**{_lastfm_count(archive.get('artists'))}** wykonawców  •  "
                 f"**{_lastfm_count(archive.get('albums'))}** albumów  •  "
-                f"**{_lastfm_count(archive.get('tracks'))}** utworów\n"
-                "*Liczby wykonawców i albumów dotyczą wyłącznie zapisanych "
-                "scrobbli, więc mogą różnić się od biblioteki Last.fm.*"
+                f"**{_lastfm_count(archive.get('tracks'))}** utworów"
             ),
             inline=False,
         )
