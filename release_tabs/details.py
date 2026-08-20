@@ -73,15 +73,12 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
     score = aoty_score_value(
         variables.aoty_user_score,
         variables.ratings_count,
-        variables.critic_score,
-        variables.critic_reviews_count,
-        variables.must_hear_kind,
     )
     return [
         _detail_line(
             variables,
             section="score",
-            label="User score",
+            label="AOTY User Score",
             value=score,
         ),
         _detail_line(

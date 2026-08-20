@@ -1,7 +1,5 @@
 """Komenda /last renderująca ostatnią pasującą ocenę z bazy Kotone."""
 
-import asyncio
-
 import discord
 import requests
 
@@ -15,14 +13,139 @@ from shared import (
     rating_flags_text,
     release_year_suffix,
     score_color,
-    score_icon,
     set_aoty_footer,
     score_or_nr,
     username_autocomplete,
 )
 from settings import resolve_aoty_username
-from release_tabs import build_release_details_embed
 from views import SingleRatingView
+
+
+def _safe_link_label(value: object) -> str:
+    """Zachowaj czytelną nazwę wewnątrz linku Markdown Discorda."""
+
+    return str(value or "—").replace("[", "\\[").replace("]", "\\]")
+
+
+def _release_header_links(variables) -> str:
+    """Pokaż artystę i album jako dwa osobne linki w ``/last``.
+
+    Tytuł embeda Discorda obsługuje tylko jeden URL, przez co oba napisy
+    prowadziły wcześniej do albumu. Nagłówek Markdown zachowuje jeden wiersz,
+    ale pozwala dać każdemu z nich właściwy adres.
+    """
+
+    artist = _safe_link_label(variables.display_artist)
+    album = _safe_link_label(variables.display_album)
+    if variables.artist_url:
+        artist = f"[{artist}]({variables.artist_url})"
+    if variables.album_url or variables.url:
+        album = f"[**{album}**]({variables.album_url or variables.url})"
+    else:
+        album = f"**{album}**"
+    must_hear = must_hear_title_marker(variables)
+    separator = f" — {must_hear} " if must_hear else " — "
+    return f"{artist}{separator}{album}{release_year_suffix(variables.year)}"
+
+
+def _apply_rating_detail(item: dict, detail: dict) -> None:
+    """Przenieś do wybranej oceny tylko flagi i kanoniczny URL recenzji."""
+
+    if detail.get("review_url"):
+        item["review_url"] = detail["review_url"]
+    for key in ("has_review", "has_track_ratings", "liked"):
+        if detail.get(key):
+            item[key] = True
+
+
+async def _preload_rating_detail(username: str, item: dict) -> dict | None:
+    """Wczytaj szczegóły oceny z SQLite bez interaktywnego HTTP."""
+
+    try:
+        detail = await DATA.get_user_rating_for_album(
+            username,
+            item.get("album_id"),
+            item.get("url"),
+            item.get("release_format"),
+            fallback_limit=10,
+            user_release_url=item.get("review_url"),
+            album_title=item.get("album"),
+            require_detail=True,
+            allow_network=False,
+        )
+    except aoty.AOTYRateLimit:
+        return None
+    except Exception as exc:
+        print(
+            f"[LAST] Nie udało się wstępnie pobrać szczegółów "
+            f"{username} / {item.get('album_id')}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
+
+    _apply_rating_detail(item, detail)
+    return detail if not detail.get("detail_incomplete") else None
+
+
+async def _cached_avatar(username: str) -> str | None:
+    """Avatar AOTY jest opcjonalny i nie może blokować `/last`."""
+
+    try:
+        return await DATA.get_avatar(username)
+    except Exception:
+        return None
+
+
+def _build_last_embed(username: str, variables, item: dict, avatar: str | None) -> discord.Embed:
+    """Zbuduj kartę Home; cała prezentacja pozostaje w jednym helperze."""
+
+    flags = rating_flags_text(item)
+    last_flags = f"  •  {flags}" if flags else ""
+    description_lines = [
+        f"## {_release_header_links(variables)}",
+        f"# {score_or_nr(variables.score)} {last_flags}",
+    ]
+    if variables.genres:
+        description_lines.append(variables.all_genres_text.title())
+    if variables.secondary_genres:
+        description_lines.append(f"*{variables.secondary_genres_text.title()}*")
+    if variables.vibes:
+        description_lines.append(f"-# {variables.vibes_text}")
+
+    embed = discord.Embed(
+        description="\n".join(description_lines),
+        color=score_color(variables.score),
+    )
+    embed.add_field(
+        name=(
+            f"<:aoty:1539095897084924004> "
+            f"**{aoty_score_or_missing(variables.aoty_user_score, variables.ratings_count)}**"
+        ),
+        value=f"/{variables.ratings_count}",
+        inline=True,
+    )
+    embed.add_field(
+        name=f"\\🏆 **{variables.year_ranking_text}**",
+        value=f"for **{variables.year}**",
+        inline=True,
+    )
+    author = f"{username}  •  {variables.date}"
+    if avatar:
+        embed.set_author(
+            name=author,
+            url=f"https://www.albumoftheyear.org/user/{username}",
+            icon_url=avatar,
+        )
+    else:
+        embed.set_author(name=author)
+    if variables.cover:
+        embed.set_thumbnail(url=variables.cover)
+    set_aoty_footer(
+        embed,
+        f"{variables.album_format}  •  {variables.release_date}  •  "
+        f"{variables.labels_text}",
+    )
+    return embed
 
 
 def setup_last_command(tree: discord.app_commands.CommandTree):
@@ -150,172 +273,9 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         if variables.album_url:
             latest["url"] = variables.album_url
 
-        # /last already knows exactly which rating was selected, so fetch its
-        # user-specific detail NOW and give it to the View. This removes the
-        # old inconsistency where the main embed worked but Track ratings had
-        # to search for the same release again after the button was clicked.
-        live_extra = None
-
-        try:
-            live_extra = await DATA.get_user_rating_for_album(
-                username,
-                latest.get("album_id"),
-                latest.get("url"),
-                latest.get("release_format"),
-                fallback_limit=10,
-                user_release_url=latest.get("review_url"),
-                album_title=latest.get("album"),
-                require_detail=True,
-                allow_network=False,
-            )
-
-            # Preserve the exact user-release URL discovered live.
-            if live_extra.get("review_url"):
-                latest["review_url"] = live_extra.get(
-                    "review_url"
-                )
-
-            if live_extra.get("has_review"):
-                latest["has_review"] = True
-
-            if live_extra.get("has_track_ratings"):
-                latest["has_track_ratings"] = True
-
-            if live_extra.get("liked"):
-                latest["liked"] = True
-
-        except aoty.AOTYRateLimit:
-            # Main /last should still render. The View will retry if the user
-            # presses a detail button later.
-            live_extra = None
-
-        except Exception as exc:
-            print(
-                f"[LAST] Nie udało się wstępnie pobrać szczegółów "
-                f"{username} / {latest.get('album_id')}: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            live_extra = None
-
-        try:
-            avatar = await DATA.get_avatar(username)
-        except Exception:
-            avatar = None
-
-        flags = rating_flags_text(latest)
-        last_flags = f"  •  {flags}" if flags else ""
-
-        description_lines = [f"# {score_or_nr(variables.score)} {last_flags}"]
-        if variables.genres:
-            description_lines.append(variables.all_genres_text.title())
-        if variables.secondary_genres:
-            description_lines.append(f"*{variables.secondary_genres_text.title()}*")
-        if variables.vibes:
-            description_lines.append(f"-# {variables.vibes_text}")
-
-        # Wygląd zachowany z obecnej wersji /last.
-        embed = discord.Embed(
-            title=(
-                f"{variables.display_artist} — {must_hear_title_marker(variables)} "
-                f"**{variables.display_album}**"
-                f"{release_year_suffix(variables.year)}"
-            ),
-            url=variables.url,
-            description="\n".join(description_lines),
-            color=score_color(variables.score),
-        )
-
-        embed.add_field(
-            name=(
-                f"<:aoty:1539095897084924004> "
-                f"**{aoty_score_or_missing(variables.aoty_user_score, variables.ratings_count)}**"
-            ),
-            value=f"/{variables.ratings_count}",
-            inline=True,
-        )
-        embed.add_field(
-            name=f"\🏆 **{variables.year_ranking_text}**",
-            value=f"for **{variables.year}**",
-            inline=True,
-        )
-
-        if avatar:
-            embed.set_author(
-                name=f"{username}  •  {variables.date}",
-                url=f"https://www.albumoftheyear.org/user/{username}",
-                icon_url=avatar,
-            )
-        else:
-            embed.set_author(name=f"{username}  •  {variables.date}")
-
-        if variables.cover:
-            embed.set_thumbnail(url=variables.cover)
-
-        set_aoty_footer(
-            embed,
-            f"{variables.album_format}  •  {variables.release_date}  •  "
-            f"{variables.labels_text}",
-        )
-
-
-        # Every command uses the same details renderer and provenance markers.
-        details_embed = await build_release_details_embed(
-            latest,
-            username=username,
-            author_icon_url=avatar,
-        )
-
-        # Dodatkowy tab: publiczna tracklista.
-        track_lines = []
-
-        for track in variables.tracklist:
-            number = track.get("number") or "—"
-            title = track.get("title") or "Nieznany utwór"
-            duration = track.get("duration")
-            public_score = track.get("user_score")
-
-            line = f"**{number}.** {title}"
-
-            if duration:
-                line += f" `{duration}`"
-
-            line += f" — **{score_or_nr(public_score)}**"
-            track_lines.append(line)
-
-        if not track_lines:
-            track_lines = [
-                "Brak tracklisty na AOTY."
-            ]
-
-        tracklist_embed = discord.Embed(
-            title=(
-                f"<:tracklist:1539780590751187014> {variables.display_artist} — "
-                f"{variables.display_album}"
-            ),
-            url=variables.url,
-            description="\n".join(
-                track_lines
-            )[:4000],
-            color=score_color(
-                variables.score
-            ),
-        )
-
-        if variables.cover:
-            tracklist_embed.set_thumbnail(
-                url=variables.cover
-            )
-
-        tracklist_embed.set_author(
-            name=f"{username}  •  {variables.date}",
-            url=f"https://www.albumoftheyear.org/user/{username}",
-            icon_url=avatar if avatar else None,
-        )
-
-        set_aoty_footer(
-            tracklist_embed,
-            f"AOTY track scores • {variables.album_format}",
-        )
+        live_extra = await _preload_rating_detail(username, latest)
+        avatar = await _cached_avatar(username)
+        embed = _build_last_embed(username, variables, latest, avatar)
 
         view = SingleRatingView(
             username=username,
@@ -331,8 +291,6 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
                 )
                 else None
             ),
-            details_embed=details_embed,
-            tracklist_embed=tracklist_embed,
             artist_url=variables.artist_url or None,
             album_url=variables.album_url or variables.url or None,
             author_icon_url=avatar,
@@ -345,4 +303,3 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             wait=True,
         )
         view.bind_message(message)
-"""Komenda /last renderująca ostatnią pasującą ocenę z bazy Kotone."""
