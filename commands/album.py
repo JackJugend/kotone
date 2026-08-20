@@ -390,7 +390,7 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
             variables.ratings_count,
         )
 
-        rating_fields = [("<:aoty:1539095897084924004>", f"**{aoty_score}**")]
+        rating_fields = [(" ", f"<:aoty:1539095897084924004> **{aoty_score}**")]
 
         # Pełny zapis SQLite jest źródłem domyślnym. AOTY jest używane tylko,
         # gdy danego usera/wydania nie ma jeszcze w trwałym cache.
@@ -425,8 +425,8 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
                 rating_value = f"{score_or_nr(None)}{flags_text}"
 
             avatar_emoji = user_avatar_emoji(username)
-            field_name = f"{avatar_emoji} {username}".strip()
-            rating_fields.append((field_name, rating_value))
+            field_name = f"{avatar_emoji} {rating_value}".strip()
+            rating_fields.append((" ", field_name))
             await asyncio.sleep(0.15)
 
         # Values may contain flags (✎/☰/❤︎), but alignment is based on the
