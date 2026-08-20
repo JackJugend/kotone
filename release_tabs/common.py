@@ -28,6 +28,46 @@ def trim_description(text: str, limit: int = 4000) -> str:
     return normalized[: limit - 1].rstrip() + "…"
 
 
+def paginate_description_lines(
+    lines: list[str],
+    *,
+    limit: int = 3600,
+) -> list[str]:
+    """Podziel kompletne wiersze na bezpieczne strony embeda.
+
+    Nie przycinamy tracklisty ani szczegółów tylko dlatego, że Discord ma
+    limit opisu.  Strona kończy się pomiędzy wierszami; wyjątkowo długi
+    pojedynczy wiersz dzielimy dopiero jako ostatnią deskę ratunku.
+    """
+
+    pages: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    def finish_page() -> None:
+        nonlocal current, current_length
+        text = "\n".join(current).strip()
+        if text:
+            pages.append(text)
+        current = []
+        current_length = 0
+
+    for raw_line in lines:
+        line = str(raw_line or "")
+        # Discord cannot accept one enormous line either.  Most content never
+        # enters this branch, but it keeps a malformed external value safe.
+        fragments = [line[index:index + limit] for index in range(0, len(line), limit)] or [""]
+        for fragment in fragments:
+            addition = len(fragment) + (1 if current else 0)
+            if current and current_length + addition > limit:
+                finish_page()
+            current.append(fragment)
+            current_length += len(fragment) + (1 if len(current) > 1 else 0)
+
+    finish_page()
+    return pages or [""]
+
+
 def release_tab_title(symbol: str, variables: ReleaseVariables) -> str:
     """Zbuduj identyczny tytuł dla każdej dodatkowej zakładki."""
 
@@ -55,4 +95,3 @@ def apply_release_identity(
             url=f"https://www.albumoftheyear.org/user/{username}/",
             icon_url=author_icon_url,
         )
-

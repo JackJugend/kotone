@@ -3692,8 +3692,56 @@ class Database:
                 WHERE username = ? AND album_id = ?""",
                 (canonical, album_id),
             ).fetchone()
+            created_rating = False
             if rating is None or not bool(rating["active"]):
-                raise ValueError("Wybrany album nie istnieje w aktywnym archiwum użytkownika.")
+                # Track Ratings can be known before the user assigned an
+                # overall album score. /dbmanual deliberately supports this
+                # case for a configured Kotone user, but only for a release
+                # that the same command has already saved to the local cache.
+                release = self.connection.execute(
+                    """SELECT artist, album, url, cover_url, album_format
+                    FROM releases WHERE album_id = ?""",
+                    (album_id,),
+                ).fetchone()
+                if release is None:
+                    raise ValueError(
+                        "Najpierw zapisz wydanie lub podaj tracklistę w tej samej komendzie."
+                    )
+                now = _now()
+                self.connection.execute(
+                    """INSERT INTO ratings(
+                        username, album_id, score, artist, album,
+                        album_url, cover_url, release_format,
+                        has_track_ratings, active, notify_pending,
+                        first_seen_at, last_seen_at
+                    ) VALUES (?, ?, 'NR', ?, ?, ?, ?, ?, 0, 1, 0, ?, ?)
+                    ON CONFLICT(username, album_id) DO UPDATE SET
+                        active = 1,
+                        artist = COALESCE(ratings.artist, excluded.artist),
+                        album = COALESCE(ratings.album, excluded.album),
+                        album_url = COALESCE(ratings.album_url, excluded.album_url),
+                        cover_url = COALESCE(ratings.cover_url, excluded.cover_url),
+                        release_format = COALESCE(ratings.release_format, excluded.release_format),
+                        last_seen_at = excluded.last_seen_at
+                    """,
+                    (
+                        canonical,
+                        album_id,
+                        release["artist"],
+                        release["album"],
+                        release["url"],
+                        release["cover_url"],
+                        release["album_format"],
+                        now,
+                        now,
+                    ),
+                )
+                rating = self.connection.execute(
+                    """SELECT active, has_track_ratings FROM ratings
+                    WHERE username = ? AND album_id = ?""",
+                    (canonical, album_id),
+                ).fetchone()
+                created_rating = True
             old_rows = self.connection.execute(
                 """SELECT track_number AS number, title, score
                 FROM user_track_ratings
@@ -3748,7 +3796,7 @@ class Database:
                     source="manual_discord",
                     detected_at=now,
                 )
-            if not old_has_tracks and not new_map:
+            if not old_has_tracks:
                 self._record_change_locked(
                     canonical,
                     entity_type="track_rating",
@@ -3764,7 +3812,12 @@ class Database:
                 "UPDATE users SET updated_at = ? WHERE username = ?",
                 (now, canonical),
             )
-        return {"username": canonical, "album_id": album_id, "count": len(normalized)}
+        return {
+            "username": canonical,
+            "album_id": album_id,
+            "count": len(normalized),
+            "created_rating": created_rating,
+        }
 
     def manual_update_rating_score(
         self,

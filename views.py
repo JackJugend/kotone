@@ -11,7 +11,9 @@ import aoty
 from display_utils import display_romanized_name
 from release_tabs import (
     build_combined_tracklist_embed,
+    build_combined_tracklist_embeds,
     build_release_details_embed,
+    build_release_details_embeds,
     build_review_embed,
 )
 from services import DATA
@@ -208,6 +210,113 @@ async def _open_release_tab(
     bind_message = getattr(tab_view, "bind_message", None)
     if callable(bind_message):
         bind_message(message)
+
+
+class ReleaseTabPagerView(discord.ui.View):
+    """Mały pager dla dodatkowego embeda Info lub Tracklisty.
+
+    To osobna wiadomość pod kartą Home, dlatego nie miesza pięciu głównych
+    przycisków komendy. Jest tworzony wyłącznie przy więcej niż jednej stronie.
+    """
+
+    def __init__(
+        self,
+        embeds: list[discord.Embed],
+        *,
+        owner_id: int | None,
+        timeout: float = VIEW_TIMEOUT_SECONDS,
+    ):
+        super().__init__(timeout=timeout)
+        self.embeds = list(embeds)
+        self.owner_id = int(owner_id) if owner_id is not None else None
+        self.page_index = 0
+        self.message = None
+        self._bound_channel = None
+        self._bound_message_id: int | None = None
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.previous.disabled = self.page_index <= 0
+        self.next.disabled = self.page_index >= len(self.embeds) - 1
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        user_id = getattr(getattr(interaction, "user", None), "id", None)
+        if self.owner_id is None or user_id == self.owner_id:
+            return True
+        await interaction.response.send_message(
+            "Tylko osoba, która wywołała tę komendę, może używać tych kontrolek.",
+            ephemeral=True,
+        )
+        return False
+
+    def bind_message(self, message) -> None:
+        self.message = message
+        self._bound_channel = getattr(message, "channel", None)
+        try:
+            self._bound_message_id = int(getattr(message, "id", 0) or 0) or None
+        except (TypeError, ValueError):
+            self._bound_message_id = None
+
+    @discord.ui.button(label="←", style=discord.ButtonStyle.secondary, row=0)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.page_index > 0:
+            self.page_index -= 1
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            embed=self.embeds[self.page_index],
+            view=self,
+        )
+
+    @discord.ui.button(label="→", style=discord.ButtonStyle.secondary, row=0)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.page_index < len(self.embeds) - 1:
+            self.page_index += 1
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            embed=self.embeds[self.page_index],
+            view=self,
+        )
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        channel = self._bound_channel
+        message_id = self._bound_message_id
+        get_partial = getattr(channel, "get_partial_message", None)
+        if channel is not None and message_id and callable(get_partial):
+            try:
+                await get_partial(message_id).edit(view=self)
+                return
+            except Exception:
+                pass
+        try:
+            await self.message.edit(view=self)
+        except Exception:
+            pass
+
+
+async def _open_release_tab_pages(
+    interaction: discord.Interaction,
+    source_view: discord.ui.View,
+    embeds: list[discord.Embed],
+) -> None:
+    """Otwórz jedną stronę lub pager bez pustych strzałek."""
+
+    pages = list(embeds) or [discord.Embed(description="Brak danych.")]
+    tab_view = (
+        ReleaseTabPagerView(
+            pages,
+            owner_id=getattr(source_view, "owner_id", None),
+        )
+        if len(pages) > 1
+        else None
+    )
+    await _open_release_tab(
+        interaction,
+        source_view,
+        pages[0],
+        tab_view=tab_view,
+    )
 
 
 class TimedDisableView(discord.ui.View):
@@ -586,12 +695,12 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         _set_active_action(self, TRACKLIST_BUTTON)
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_combined_tracklist_embed(
+        embeds = await build_combined_tracklist_embeds(
             self.item,
             username=self.username,
             author_icon_url=self.author_icon_url,
         )
-        await _open_release_tab(interaction, self, embed)
+        await _open_release_tab_pages(interaction, self, embeds)
 
     @discord.ui.button(
         label=REVIEW_BUTTON,
@@ -654,20 +763,14 @@ class SingleRatingView(TimedDisableView, RatingDetailsMixin):
         button: discord.ui.Button,
     ):
         _set_active_action(self, DETAILS_BUTTON)
-        if self.details_embed is not None:
-            await interaction.response.defer()
-            await _clear_artist_result(self)
-            await _open_release_tab(interaction, self, self.details_embed)
-            return
-
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_release_details_embed(
+        embeds = await build_release_details_embeds(
             self.item,
             username=self.username,
             author_icon_url=self.author_icon_url,
         )
-        await _open_release_tab(interaction, self, embed)
+        await _open_release_tab_pages(interaction, self, embeds)
 
 
 class RatingSelect(discord.ui.Select):
@@ -801,12 +904,12 @@ class MultiRatingView(TimedDisableView):
         _set_active_action(self, TRACKLIST_BUTTON)
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_combined_tracklist_embed(
+        embeds = await build_combined_tracklist_embeds(
             item,
             username=self.username,
             author_icon_url=self.author_icon_url,
         )
-        await _open_release_tab(interaction, self, embed)
+        await _open_release_tab_pages(interaction, self, embeds)
 
     @discord.ui.button(label=REVIEW_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -848,12 +951,12 @@ class MultiRatingView(TimedDisableView):
         _set_active_action(self, DETAILS_BUTTON)
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_release_details_embed(
+        embeds = await build_release_details_embeds(
             item,
             username=self.username,
             author_icon_url=self.author_icon_url,
         )
-        await _open_release_tab(interaction, self, embed)
+        await _open_release_tab_pages(interaction, self, embeds)
 
 
 class UserRatingSelect(discord.ui.Select):
@@ -1143,8 +1246,8 @@ class AlbumRatingView(TimedDisableView):
         _set_active_action(self, TRACKLIST_BUTTON)
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_combined_tracklist_embed(self.release_item)
-        await _open_release_tab(interaction, self, embed)
+        embeds = await build_combined_tracklist_embeds(self.release_item)
+        await _open_release_tab_pages(interaction, self, embeds)
 
     @discord.ui.button(label=REVIEW_BUTTON, style=discord.ButtonStyle.secondary, row=0)
     async def review_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1155,8 +1258,8 @@ class AlbumRatingView(TimedDisableView):
         _set_active_action(self, DETAILS_BUTTON)
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_release_details_embed(self.release_item)
-        await _open_release_tab(interaction, self, embed)
+        embeds = await build_release_details_embeds(self.release_item)
+        await _open_release_tab_pages(interaction, self, embeds)
 
 
 def _normalize_profile_favorite(item: dict) -> dict:
@@ -1431,12 +1534,12 @@ class ProfilePagerView(TimedDisableView):
         await interaction.response.defer()
         await _clear_artist_result(self)
         avatar = await _aoty_avatar(self.username)
-        embed = await build_combined_tracklist_embed(
+        embeds = await build_combined_tracklist_embeds(
             item,
             username=self.username,
             author_icon_url=avatar,
         )
-        await _open_release_tab(interaction, self, embed)
+        await _open_release_tab_pages(interaction, self, embeds)
 
     # Compatibility name for older tests/callers; this is intentionally the
     # same combined public + configured-user tracklist now.
@@ -1486,7 +1589,7 @@ class ProfilePagerView(TimedDisableView):
         self._rebuild_components()
         await interaction.response.defer()
         await _clear_artist_result(self)
-        embed = await build_release_details_embed(
+        embeds = await build_release_details_embeds(
             item,
             username=self.username if self.selected_source == "rating" else None,
             author_icon_url=(
@@ -1495,4 +1598,4 @@ class ProfilePagerView(TimedDisableView):
                 else None
             ),
         )
-        await _open_release_tab(interaction, self, embed)
+        await _open_release_tab_pages(interaction, self, embeds)

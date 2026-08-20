@@ -459,6 +459,36 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_manual_personal_track_scores_can_create_nr_rating(self):
+        """A manual tracklist may precede a user's overall album rating."""
+
+        db = self.make_db()
+        try:
+            self.assertTrue(
+                db.manual_update_release_details(
+                    "tracks-only",
+                    {
+                        "artist": "Artist",
+                        "album": "Album",
+                        "tracklist": [{"number": 1, "title": "First"}],
+                        "_section_complete": {"tracklist": True},
+                    },
+                )
+            )
+            saved = db.manual_update_user_track_ratings(
+                "enso",
+                "tracks-only",
+                [{"number": 1, "title": "First", "score": "95"}],
+            )
+            self.assertTrue(saved["created_rating"])
+            self.assertEqual(db.get_rating("enso", "tracks-only")["score"], "NR")
+            self.assertEqual(
+                db.get_rating_detail("enso", "tracks-only")["track_ratings"][0]["score"],
+                "95",
+            )
+        finally:
+            db.close()
+
     def test_config_allow_list_change_snapshots_before_prune_once(self):
         db = self.make_db(users=("enso",))
         db.upsert_rating(

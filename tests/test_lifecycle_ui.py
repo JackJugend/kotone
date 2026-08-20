@@ -278,6 +278,17 @@ class SharedAssetTests(unittest.TestCase):
     f"project dependencies unavailable: {PROJECT_IMPORT_ERROR}",
 )
 class DetailViewTests(unittest.IsolatedAsyncioTestCase):
+    def test_release_tab_pager_only_has_arrows_for_multiple_pages(self):
+        one_page = [discord.Embed(description="jedna strona")]
+        many_pages = [discord.Embed(description="pierwsza"), discord.Embed(description="druga")]
+
+        self.assertEqual(len(one_page), 1)
+        pager = views_module.ReleaseTabPagerView(many_pages, owner_id=123)
+
+        self.assertEqual(len(pager.children), 2)
+        self.assertTrue(pager.previous.disabled)
+        self.assertFalse(pager.next.disabled)
+
     async def test_controls_reject_anyone_except_the_command_invoker(self):
         view = views_module.TimedDisableView(owner_id=805601151366070292)
         outsider = SimpleNamespace(
@@ -467,10 +478,10 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             message=SimpleNamespace(edit=AsyncMock()),
         )
 
-        combined = discord.Embed(description="combined")
+        combined = [discord.Embed(description="combined")]
         with patch.object(
             views_module,
-            "build_combined_tracklist_embed",
+            "build_combined_tracklist_embeds",
             new=AsyncMock(return_value=combined),
         ) as builder:
             await view._tracks(interaction)
@@ -482,7 +493,7 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         )
         interaction.message.edit.assert_awaited_once_with(view=view)
         interaction.followup.send.assert_awaited_once_with(
-            embed=combined,
+            embed=combined[0],
             ephemeral=False,
             wait=True,
         )
@@ -803,9 +814,12 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             embed = await views_module.build_combined_tracklist_embed(item)
 
         self.assertIn("**1.** Opening Track `3:45`", embed.description)
-        self.assertIn("AOTY **82**", embed.description)
-        self.assertIn("enso **90**", embed.description)
-        self.assertIn("kulkien **75**", embed.description)
+        self.assertIn("AOTY", embed.description)
+        self.assertIn("**82**", embed.description)
+        self.assertIn("enso", embed.description)
+        self.assertIn("**90**", embed.description)
+        self.assertIn("kulkien", embed.description)
+        self.assertIn("**75**", embed.description)
         live_detail.assert_not_awaited()
 
     async def test_details_tab_marks_aoty_and_musicbrainz_sources(self):

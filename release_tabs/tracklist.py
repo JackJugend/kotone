@@ -7,15 +7,15 @@ import discord
 import aoty
 from release_tabs.common import (
     apply_release_identity,
+    paginate_description_lines,
     release_tab_title,
-    trim_description,
 )
 from services import DATA
 from settings import USERS
 from shared import (
     build_release_variables,
     score_color,
-    score_value_or_nr,
+    score_or_nr,
     set_aoty_footer,
 )
 from ui_constants import TRACKLIST_BUTTON
@@ -45,12 +45,42 @@ def _rating_track_maps(rows: list[dict]) -> tuple[dict[int, dict], dict[str, dic
     return by_number, by_title
 
 
-async def build_combined_tracklist_embed(
+def _build_tracklist_embed(
+    variables,
+    description: str,
+    *,
+    username: str | None,
+    author_icon_url: str | None,
+    page_number: int | None = None,
+    page_count: int | None = None,
+) -> discord.Embed:
+    """Zbuduj jedną stronę tracklisty, zachowując wspólną identyfikację."""
+
+    title = release_tab_title(TRACKLIST_BUTTON, variables)
+    if page_count and page_count > 1 and page_number:
+        title = f"{title}  •  {page_number}/{page_count}"
+    embed = discord.Embed(
+        title=title,
+        url=variables.url or None,
+        description=description,
+        color=score_color(variables.score or variables.aoty_user_score),
+    )
+    apply_release_identity(
+        embed,
+        variables,
+        username=username,
+        author_icon_url=author_icon_url,
+    )
+    set_aoty_footer(embed, f"AOTY tracklist  •  {variables.album_format}  •  oceny użytkowników")
+    return embed
+
+
+async def build_combined_tracklist_embeds(
     item: dict,
     *,
     username: str | None = None,
     author_icon_url: str | None = None,
-) -> discord.Embed:
+) -> list[discord.Embed]:
     """Połącz trwałą tracklistę z ocenami użytkowników z configu."""
 
     item = dict(item or {})
@@ -127,26 +157,49 @@ async def build_combined_tracklist_embed(
         duration = f" `{track.get('duration')}`" if track.get("duration") else ""
         url = track.get("url")
         title_text = f"[{title}]({url})" if url else title
-        scores = [f"AOTY **{track.get('user_score') or '—'}**"]
+        public_score = track.get("user_score")
+        scores = [
+            f"AOTY {score_or_nr(public_score)}"
+            if str(public_score or "").strip()
+            else "AOTY **—**"
+        ]
         for configured_username in USERS[:25]:
             by_number, by_title = personal_maps.get(configured_username, ({}, {}))
             row = (by_number.get(number) if number is not None else None) or by_title.get(title_key)
-            scores.append(f"{configured_username} **{score_value_or_nr((row or {}).get('score'))}**")
+            personal_score = (row or {}).get("score")
+            scores.append(
+                f"{configured_username} {score_or_nr(personal_score)}"
+                if str(personal_score or "").strip()
+                else f"{configured_username} **NR**"
+            )
         lines.append(f"**{display_number}.** {title_text}{duration}\n" + " • ".join(scores))
 
-    embed = discord.Embed(
-        title=release_tab_title(TRACKLIST_BUTTON, variables),
-        url=variables.url or None,
-        description=trim_description(
-            "\n".join(lines) if lines else "Brak tracklisty w kotone."
-        ),
-        color=score_color(variables.score or variables.aoty_user_score),
+    descriptions = paginate_description_lines(
+        lines or ["Brak tracklisty w kotone."]
     )
-    apply_release_identity(
-        embed,
-        variables,
+    return [
+        _build_tracklist_embed(
+            variables,
+            description,
+            username=username,
+            author_icon_url=author_icon_url,
+            page_number=index,
+            page_count=len(descriptions),
+        )
+        for index, description in enumerate(descriptions, start=1)
+    ]
+
+
+async def build_combined_tracklist_embed(
+    item: dict,
+    *,
+    username: str | None = None,
+    author_icon_url: str | None = None,
+) -> discord.Embed:
+    """Kompatybilny renderer pierwszej strony tracklisty."""
+
+    return (await build_combined_tracklist_embeds(
+        item,
         username=username,
         author_icon_url=author_icon_url,
-    )
-    set_aoty_footer(embed, f"AOTY tracklist  •  {variables.album_format}  •  oceny użytkowników")
-    return embed
+    ))[0]

@@ -10,6 +10,7 @@ from release_tabs.common import (
     MISSING_VALUE,
     apply_release_identity,
     display_value,
+    paginate_description_lines,
     release_tab_title,
 )
 from shared import (
@@ -235,23 +236,24 @@ def _description_lines(variables: ReleaseVariables) -> list[str]:
 # Publiczny renderer zakładki
 # ---------------------------------------------------------------------------
 
-async def build_release_details_embed(
-    item: dict,
+def _build_release_details_embed(
+    variables: ReleaseVariables,
+    description: str,
     *,
-    username: str | None = None,
-    author_icon_url: str | None = None,
+    username: str | None,
+    author_icon_url: str | None,
+    page_number: int | None = None,
+    page_count: int | None = None,
 ) -> discord.Embed:
-    """Renderuj pełne informacje z SQLite wraz z ich źródłami."""
+    """Zbuduj jedną stronę wspólnej zakładki szczegółów."""
 
-    variables = await load_release_variables(
-        item,
-        username=username,
-        missing=MISSING_VALUE,
-    )
+    title = release_tab_title(DETAILS_BUTTON, variables)
+    if page_count and page_count > 1 and page_number:
+        title = f"{title}  •  {page_number}/{page_count}"
     embed = discord.Embed(
-        title=release_tab_title(DETAILS_BUTTON, variables),
+        title=title,
         url=variables.url or None,
-        description="\n".join(_description_lines(variables)),
+        description=description,
         color=score_color(variables.score or variables.aoty_user_score),
     )
     apply_release_identity(
@@ -260,7 +262,48 @@ async def build_release_details_embed(
         username=username,
         author_icon_url=author_icon_url,
     )
-
     footer = f"AOTY • {score_or_nr(variables.score)}" if username else "AOTY"
     set_aoty_footer(embed, footer)
     return embed
+
+
+async def build_release_details_embeds(
+    item: dict,
+    *,
+    username: str | None = None,
+    author_icon_url: str | None = None,
+) -> list[discord.Embed]:
+    """Renderuj pełne informacje z SQLite, dzieląc je bez utraty danych."""
+
+    variables = await load_release_variables(
+        item,
+        username=username,
+        missing=MISSING_VALUE,
+    )
+    descriptions = paginate_description_lines(_description_lines(variables))
+    return [
+        _build_release_details_embed(
+            variables,
+            description,
+            username=username,
+            author_icon_url=author_icon_url,
+            page_number=index,
+            page_count=len(descriptions),
+        )
+        for index, description in enumerate(descriptions, start=1)
+    ]
+
+
+async def build_release_details_embed(
+    item: dict,
+    *,
+    username: str | None = None,
+    author_icon_url: str | None = None,
+) -> discord.Embed:
+    """Kompatybilny renderer pierwszej strony zakładki szczegółów."""
+
+    return (await build_release_details_embeds(
+        item,
+        username=username,
+        author_icon_url=author_icon_url,
+    ))[0]
