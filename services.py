@@ -89,13 +89,35 @@ class DataService:
         return DB.is_monitored(username)
 
     def musicbrainz_status(self) -> dict:
-        blocked_seconds = max(0.0, self._musicbrainz_blocked_until - time.time())
+        provider = musicbrainz.MUSICBRAINZ.status()
+        blocked_seconds = max(
+            0.0,
+            self._musicbrainz_blocked_until - time.time(),
+            float(provider.get("blocked_seconds") or 0),
+        )
         return {
             "blocked": blocked_seconds > 0,
             "blocked_seconds": round(blocked_seconds, 1),
             "priority_queue": len(self._release_priority_queue),
-            "last_error": self._musicbrainz_last_error,
+            "consecutive_failures": int(provider.get("consecutive_failures") or 0),
+            "last_error": self._musicbrainz_last_error or provider.get("last_error"),
         }
+
+    def _musicbrainz_is_blocked(self) -> bool:
+        """Mirror the durable provider circuit into this service instance."""
+
+        provider = musicbrainz.MUSICBRAINZ.status()
+        blocked_seconds = float(provider.get("blocked_seconds") or 0)
+        if blocked_seconds <= 0:
+            return self._musicbrainz_blocked_until > time.time()
+        self._musicbrainz_blocked_until = max(
+            self._musicbrainz_blocked_until,
+            time.time() + blocked_seconds,
+        )
+        self._musicbrainz_last_error = (
+            str(provider.get("last_error") or "MusicBrainz cooldown")
+        )
+        return True
 
     async def _musicbrainz_release_fallback(
         self,
@@ -111,7 +133,7 @@ class DataService:
         """
         if not MUSICBRAINZ_FALLBACK_ENABLED or not SOURCES.enabled("musicbrainz"):
             return None
-        if self._musicbrainz_blocked_until > time.time():
+        if self._musicbrainz_is_blocked():
             return None
         try:
             result = await _thread_call(
@@ -130,7 +152,10 @@ class DataService:
             requests.RequestException,
         ) as exc:
             self._musicbrainz_last_error = f"{type(exc).__name__}: {exc}"
-            if isinstance(exc, musicbrainz.MusicBrainzUnavailable):
+            if (
+                isinstance(exc, musicbrainz.MusicBrainzUnavailable)
+                and exc.retry_after > 0
+            ):
                 self._musicbrainz_blocked_until = max(
                     self._musicbrainz_blocked_until,
                     time.time() + max(exc.retry_after, 60.0),
@@ -569,7 +594,7 @@ class DataService:
                 not mb_cached.get("aliases")
                 or now - float(mb_cached.get("fetched_at") or 0) >= ARTIST_SOURCE_TTL
             )
-            and self._musicbrainz_blocked_until <= now
+            and not self._musicbrainz_is_blocked()
         ):
             try:
                 data = await _thread_call(
@@ -586,10 +611,11 @@ class DataService:
                     saved += 1
             except musicbrainz.MusicBrainzUnavailable as exc:
                 self._musicbrainz_last_error = f"{type(exc).__name__}: {exc}"
-                self._musicbrainz_blocked_until = max(
-                    self._musicbrainz_blocked_until,
-                    time.time() + max(exc.retry_after, 60.0),
-                )
+                if exc.retry_after > 0:
+                    self._musicbrainz_blocked_until = max(
+                        self._musicbrainz_blocked_until,
+                        time.time() + max(exc.retry_after, 60.0),
+                    )
                 return saved
 
         lastfm_cached = cached.get("lastfm") or {}
@@ -1527,7 +1553,7 @@ class DataService:
         detail_done = 0
         errors = 0
 
-        if musicbrainz_only and self._musicbrainz_blocked_until > now:
+        if musicbrainz_only and self._musicbrainz_is_blocked():
             return {
                 "releases": 0,
                 "musicbrainz": 0,
@@ -1606,7 +1632,7 @@ class DataService:
                     release_done += 1
                     musicbrainz_done += 1
                 elif details is None:
-                    if self._musicbrainz_blocked_until > time.time():
+                    if self._musicbrainz_is_blocked():
                         return {
                             "releases": release_done,
                             "musicbrainz": musicbrainz_done,
@@ -1654,7 +1680,7 @@ class DataService:
                     release_done += 1
                     musicbrainz_done += 1
                     continue
-                if self._musicbrainz_blocked_until > time.time():
+                if self._musicbrainz_is_blocked():
                     return {
                         "releases": release_done,
                         "musicbrainz": musicbrainz_done,

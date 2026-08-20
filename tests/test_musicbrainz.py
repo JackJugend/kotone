@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
+
+import requests
 
 
 os.environ.setdefault("DISCORD_TOKEN", "test-token")
@@ -15,19 +19,66 @@ from musicbrainz import (  # noqa: E402
     _pick_exact_release,
     release_to_details,
 )
+from shared import country_flag_emoji  # noqa: E402
 
 
 class MusicBrainzFallbackTests(unittest.TestCase):
+    def test_release_country_uses_flags_and_global_code_uses_globe(self):
+        self.assertEqual(country_flag_emoji("PL"), "🇵🇱")
+        self.assertEqual(country_flag_emoji("XW"), "🌐")
+        self.assertEqual(country_flag_emoji("invalid"), "")
+
+    def test_outage_cooldown_survives_client_restart_without_another_request(self):
+        with tempfile.TemporaryDirectory(prefix="kotone-musicbrainz-test-") as tmp:
+            state_file = Path(tmp) / "musicbrainz_state.json"
+            client = MusicBrainzClient(state_file=str(state_file))
+            response = Mock(status_code=503, headers={})
+            client.session.get = Mock(return_value=response)
+
+            with self.assertRaises(MusicBrainzUnavailable):
+                client._json("/release/", params={"query": "test", "fmt": "json"})
+
+            self.assertTrue(state_file.exists())
+            self.assertEqual(client.session.get.call_count, 1)
+
+            restarted = MusicBrainzClient(state_file=str(state_file))
+            restarted.session.get = Mock()
+            with self.assertRaises(MusicBrainzUnavailable) as raised:
+                restarted._json("/release/", params={"query": "test", "fmt": "json"})
+
+            self.assertGreater(raised.exception.retry_after, 0)
+            restarted.session.get.assert_not_called()
+
+    def test_not_found_does_not_open_global_cooldown(self):
+        with tempfile.TemporaryDirectory(prefix="kotone-musicbrainz-test-") as tmp:
+            client = MusicBrainzClient(
+                state_file=str(Path(tmp) / "musicbrainz_state.json")
+            )
+            response = Mock(status_code=404, headers={})
+            error = requests.HTTPError("404 Client Error")
+            error.response = response
+            response.raise_for_status.side_effect = error
+            client.session.get = Mock(return_value=response)
+
+            with self.assertRaises(MusicBrainzUnavailable) as raised:
+                client._json("/release/", params={"query": "missing", "fmt": "json"})
+
+            self.assertEqual(raised.exception.retry_after, 0)
+            self.assertFalse(client.status()["blocked"])
+
     def test_503_opens_meaningful_global_retry_window(self):
-        client = MusicBrainzClient()
-        response = Mock(status_code=503, headers={"Retry-After": "120"})
-        client.session.get = Mock(return_value=response)
+        with tempfile.TemporaryDirectory(prefix="kotone-musicbrainz-test-") as tmp:
+            client = MusicBrainzClient(
+                state_file=str(Path(tmp) / "musicbrainz_state.json")
+            )
+            response = Mock(status_code=503, headers={"Retry-After": "120"})
+            client.session.get = Mock(return_value=response)
 
-        with self.assertRaises(MusicBrainzUnavailable) as raised:
-            client._json("/release/", params={"query": "test", "fmt": "json"})
+            with self.assertRaises(MusicBrainzUnavailable) as raised:
+                client._json("/release/", params={"query": "test", "fmt": "json"})
 
-        self.assertGreaterEqual(raised.exception.retry_after, 15 * 60)
-        response.raise_for_status.assert_not_called()
+            self.assertGreaterEqual(raised.exception.retry_after, 15 * 60)
+            response.raise_for_status.assert_not_called()
 
     def test_exact_matching_refuses_similar_but_wrong_release(self):
         candidates = [

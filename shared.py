@@ -34,6 +34,17 @@ from ui_constants import (
 # Stopki, kolory i wartości ocen
 # ---------------------------------------------------------------------------
 
+def country_flag_emoji(country_code: object) -> str:
+    """Return a country flag for an ISO code; MusicBrainz ``XW`` is global."""
+
+    code = str(country_code or "").strip().upper()
+    if code == "XW":
+        return "🌐"
+    if len(code) != 2 or not code.isalpha():
+        return ""
+    return "".join(chr(127397 + ord(character)) for character in code)
+
+
 def set_aoty_footer(embed: discord.Embed, text: str) -> None:
     """Apply Kotone's shared AOTY footer asset consistently."""
 

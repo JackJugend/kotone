@@ -191,6 +191,15 @@ MUSICBRAINZ_OUTAGE_COOLDOWN = _runtime_float(
     15 * 60.0,
     60.0,
 )
+MUSICBRAINZ_MAX_OUTAGE_COOLDOWN = _runtime_float(
+    "musicbrainz_max_outage_cooldown",
+    6 * 60 * 60.0,
+    MUSICBRAINZ_OUTAGE_COOLDOWN,
+)
+MUSICBRAINZ_STATE_FILE = os.path.join(
+    DATA_DIR or BASE_DIR,
+    "musicbrainz_state.json",
+)
 MUSICBRAINZ_FALLBACK_RETRY_INTERVAL = _runtime_int(
     "musicbrainz_fallback_retry_interval",
     24 * 60 * 60,
@@ -272,4 +281,3 @@ ALBUM_LOOKUP_FALLBACK_LIMIT = max(
     20,
     int(CONFIG.get("album_lookup_fallback_limit", 300)),
 )
-

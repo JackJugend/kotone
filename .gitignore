@@ -30,6 +30,8 @@ aoty_challenge_state.json
 aoty_challenge_state.json.tmp
 aoty_db_only_state.json
 aoty_db_only_state.json.tmp
+musicbrainz_state.json
+musicbrainz_state.json.tmp
 
 railway ssh
 railway ssh.pub

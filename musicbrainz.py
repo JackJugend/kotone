@@ -8,6 +8,8 @@ then its result may fill only missing sections in the SQLite release cache.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import threading
 import time
@@ -17,8 +19,10 @@ import requests
 
 from settings import (
     MUSICBRAINZ_MIN_REQUEST_INTERVAL,
+    MUSICBRAINZ_MAX_OUTAGE_COOLDOWN,
     MUSICBRAINZ_OUTAGE_COOLDOWN,
     MUSICBRAINZ_REQUEST_TIMEOUT,
+    MUSICBRAINZ_STATE_FILE,
 )
 
 
@@ -281,14 +285,103 @@ def release_to_details(release: dict, *, requested_format: object = None) -> dic
 class MusicBrainzClient:
     """Minimal official Web Service client with a shared polite rate gate."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, state_file: str | None = None) -> None:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
         self._lock = threading.Lock()
         self._next_request_at = 0.0
+        self._state_file = str(state_file or MUSICBRAINZ_STATE_FILE)
+        self._blocked_until = 0.0
+        self._consecutive_failures = 0
+        self._last_error: str | None = None
+        self._restore_state()
+
+    def _restore_state(self) -> None:
+        """Restore only an active outage cooldown across Railway deploys."""
+
+        try:
+            with open(self._state_file, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            blocked_until = float(payload.get("blocked_until") or 0)
+            if blocked_until > time.time():
+                self._blocked_until = blocked_until
+                self._consecutive_failures = max(
+                    1,
+                    int(payload.get("consecutive_failures") or 1),
+                )
+                self._last_error = str(payload.get("last_error") or "") or None
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            # A missing/corrupt state marker must never block the bot.
+            return
+
+    def _persist_state_locked(self) -> None:
+        """Atomically retain an outage cooldown; failure is non-fatal."""
+
+        payload = {
+            "blocked_until": self._blocked_until,
+            "consecutive_failures": self._consecutive_failures,
+            "last_error": self._last_error,
+        }
+        temporary = f"{self._state_file}.tmp"
+        try:
+            directory = os.path.dirname(self._state_file)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(temporary, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+            os.replace(temporary, self._state_file)
+        except OSError:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+    def _record_outage_locked(
+        self,
+        message: str,
+        *,
+        retry_after: float = 0.0,
+    ) -> float:
+        """Open one durable exponential circuit for all MusicBrainz routes."""
+
+        self._consecutive_failures = min(self._consecutive_failures + 1, 8)
+        delay = max(float(retry_after or 0), MUSICBRAINZ_OUTAGE_COOLDOWN)
+        delay = min(
+            MUSICBRAINZ_MAX_OUTAGE_COOLDOWN,
+            delay * (2 ** (self._consecutive_failures - 1)),
+        )
+        self._blocked_until = max(self._blocked_until, time.time() + delay)
+        self._last_error = str(message or "MusicBrainz temporarily unavailable")
+        self._persist_state_locked()
+        return delay
+
+    def _record_success_locked(self) -> None:
+        if self._blocked_until or self._consecutive_failures or self._last_error:
+            self._blocked_until = 0.0
+            self._consecutive_failures = 0
+            self._last_error = None
+            self._persist_state_locked()
+
+    def status(self) -> dict:
+        """Return safe, provider-wide circuit state for /dbonly and /health."""
+
+        with self._lock:
+            remaining = max(0.0, self._blocked_until - time.time())
+            return {
+                "blocked": remaining > 0,
+                "blocked_seconds": round(remaining, 1),
+                "consecutive_failures": self._consecutive_failures,
+                "last_error": self._last_error,
+            }
 
     def _json(self, path: str, *, params: dict[str, str]) -> dict:
         with self._lock:
+            blocked_seconds = self._blocked_until - time.time()
+            if blocked_seconds > 0:
+                raise MusicBrainzUnavailable(
+                    "MusicBrainz jest chwilowo w globalnym cooldownie.",
+                    retry_after=blocked_seconds,
+                )
             remaining = self._next_request_at - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
@@ -298,28 +391,55 @@ class MusicBrainzClient:
                     params=params,
                     timeout=MUSICBRAINZ_REQUEST_TIMEOUT,
                 )
-                if response.status_code in {429, 502, 503, 504}:
+                if response.status_code == 429 or response.status_code >= 500:
                     try:
                         retry_after = float(response.headers.get("Retry-After") or 0)
                     except (TypeError, ValueError):
                         retry_after = 0.0
+                    delay = self._record_outage_locked(
+                        f"HTTP {response.status_code}: MusicBrainz temporarily unavailable",
+                        retry_after=retry_after,
+                    )
                     raise MusicBrainzUnavailable(
                         f"HTTP {response.status_code}: MusicBrainz temporarily unavailable",
-                        retry_after=max(retry_after, MUSICBRAINZ_OUTAGE_COOLDOWN),
+                        retry_after=delay,
                     )
+                # A missing or invalid candidate is not a provider outage.
+                # Do not put the whole MusicBrainz integration on cooldown for
+                # one bad lookup (for example a release that simply is absent).
+                if 400 <= response.status_code < 500:
+                    try:
+                        response.raise_for_status()
+                    except requests.HTTPError as exc:
+                        raise MusicBrainzUnavailable(str(exc), retry_after=0.0) from exc
                 response.raise_for_status()
                 payload = response.json()
+                if not isinstance(payload, dict):
+                    delay = self._record_outage_locked(
+                        "MusicBrainz returned an invalid JSON document"
+                    )
+                    raise MusicBrainzUnavailable(
+                        "MusicBrainz returned an invalid JSON document",
+                        retry_after=delay,
+                    )
+                self._record_success_locked()
             except MusicBrainzUnavailable:
                 raise
+            except requests.HTTPError as exc:
+                response = getattr(exc, "response", None)
+                status_code = getattr(response, "status_code", None)
+                if status_code is not None and 400 <= status_code < 500:
+                    raise MusicBrainzUnavailable(str(exc), retry_after=0.0) from exc
+                delay = self._record_outage_locked(str(exc))
+                raise MusicBrainzUnavailable(str(exc), retry_after=delay) from exc
             except (requests.RequestException, ValueError) as exc:
+                delay = self._record_outage_locked(str(exc))
                 raise MusicBrainzUnavailable(
                     str(exc),
-                    retry_after=MUSICBRAINZ_OUTAGE_COOLDOWN,
+                    retry_after=delay,
                 ) from exc
             finally:
                 self._next_request_at = time.monotonic() + MUSICBRAINZ_MIN_REQUEST_INTERVAL
-        if not isinstance(payload, dict):
-            raise MusicBrainzUnavailable("MusicBrainz returned an invalid JSON document")
         return payload
 
     def lookup_release(

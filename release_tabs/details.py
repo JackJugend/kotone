@@ -15,6 +15,7 @@ from release_tabs.common import (
 from shared import (
     ReleaseVariables,
     aoty_score_value,
+    country_flag_emoji,
     load_release_variables,
     score_color,
     score_or_nr,
@@ -156,13 +157,15 @@ def _ranking_section(variables: ReleaseVariables) -> list[str]:
 
 
 def _musicbrainz_section(source_data: Mapping[str, object]) -> list[str]:
+    country_code = source_data.get("release_country")
+    country = country_flag_emoji(country_code) or display_value(country_code)
     rows = (
         ("MusicBrainz release ID", source_data.get("musicbrainz_release_id")),
         (
             "MusicBrainz release-group ID",
             source_data.get("musicbrainz_release_group_id"),
         ),
-        ("Release country", source_data.get("release_country")),
+        ("Release country", country),
     )
     return [
         line
