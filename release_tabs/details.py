@@ -78,14 +78,14 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
         _detail_line(
             variables,
             section="score",
-            label="AOTY User Score",
+            label=User Score",
             value=score,
         ),
         _detail_line(
             variables,
             section="score",
-            label="Ratings",
-            value=variables.ratings_count,
+            label="Based on "[:1],
+            value=f"{variables.ratings_count} ratings.",
         ),
     ]
 
