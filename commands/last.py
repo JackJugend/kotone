@@ -203,9 +203,9 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
             avatar = None
 
         flags = rating_flags_text(latest)
-        footer_flags = f"  •  {flags}" if flags else ""
+        last_flags = f"  •  {flags}" if flags else ""
 
-        description_lines = [f"# {score_or_nr(variables.score)}"]
+        description_lines = [f"# {score_or_nr(variables.score)} {last_flags}"]
         if variables.genres:
             description_lines.append(variables.all_genres_text.title())
         if variables.secondary_genres:
@@ -216,7 +216,6 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         # Wygląd zachowany z obecnej wersji /last.
         embed = discord.Embed(
             title=(
-                f"{score_icon(variables.score)} "
                 f"{variables.display_artist} — {must_hear_title_marker(variables)} "
                 f"**{variables.album_title}**"
                 f"{release_year_suffix(variables.year)}"
@@ -255,7 +254,7 @@ def setup_last_command(tree: discord.app_commands.CommandTree):
         set_aoty_footer(
             embed,
             f"{variables.album_format}  •  {variables.release_date}  •  "
-            f"{variables.labels_text}{footer_flags}",
+            f"{variables.labels_text}",
         )
 
 
