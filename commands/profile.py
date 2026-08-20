@@ -324,7 +324,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             recent_lines = [_recent_line(item) for item in page_items]
 
             embed = discord.Embed(
-                title=display_username,
+                title=" ",
                 url=profile_url,
                 description=(
                     f"**{ratings_count}** ocen  •  "
