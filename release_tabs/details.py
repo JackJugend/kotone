@@ -111,14 +111,34 @@ def _linked_genres(values: list[str], urls: list[str], *, bold_first: bool = Fal
 
 
 def _details_title(variables: ReleaseVariables) -> str:
+    """Zbuduj tytuł embeda z limitem Discorda 256 znaków.
+
+    Link Markdown zawiera długi URL, dlatego przy bardzo długich nazwach
+    najpierw przechodzimy na krótszą wersję bez linków, a dopiero na końcu
+    bezpiecznie skracamy tekst. Dzięki temu pojedynczy rekord nie może
+    przerwać wysyłania całej zakładki `details`.
+    """
+
     tab = status_emoji("details") or DETAILS_BUTTON
-    artist = _markdown_link(variables.display_artist, variables.artist_url)
-    album = _markdown_link(variables.display_album, variables.album_url or variables.url)
+    artist_name = str(variables.display_artist or MISSING_VALUE).strip()
+    album_name = str(variables.display_album or MISSING_VALUE).strip()
+    artist = _markdown_link(artist_name, variables.artist_url)
+    album = _markdown_link(album_name, variables.album_url or variables.url)
     kind = str(variables.must_hear_kind or "").casefold()
     marker = must_hear_title_marker(variables)
     if marker and (target := _must_hear_url(kind)):
         marker = _markdown_link(marker, target)
-    return f"{tab} {artist} — {marker + ' ' if marker else ''}{album}".strip()
+    title = f"{tab} {artist} — {marker + ' ' if marker else ''}{album}".strip()
+    if len(title) <= 256:
+        return title
+
+    # URL-e w Markdown są tylko dodatkiem; zachowaj czytelne nazwy, gdy
+    # pełna wersja nie mieści się w limicie.
+    short_marker = must_hear_title_marker(variables)
+    title = f"{tab} {artist_name} — {short_marker + ' ' if short_marker else ''}{album_name}".strip()
+    if len(title) <= 256:
+        return title
+    return title[:253].rstrip() + "..."
 
 def _source_prefix(
     variables: ReleaseVariables,
