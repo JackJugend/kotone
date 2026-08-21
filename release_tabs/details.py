@@ -197,7 +197,7 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
         _detail_line(
             variables,
             section="country",
-            label="Country"
+            label="Country",
             value=country,
         )
     ]
@@ -283,7 +283,7 @@ def _build_release_details_embed(
 
     title = release_tab_title(DETAILS_BUTTON, variables)
     if page_count and page_count > 1 and page_number:
-        title = f"{title}  •  {page_number}/{page_count}"
+        title = f"{title}  •  [{page_number}/{page_count}]"
     embed = discord.Embed(
         title=title,
         url=variables.url or None,
