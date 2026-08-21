@@ -16,6 +16,7 @@ from release_tabs.common import (
 from shared import (
     ReleaseVariables,
     aoty_score_value,
+    aoty_score_or_missing,
     country_flag_emoji,
     load_release_variables,
     score_color,
