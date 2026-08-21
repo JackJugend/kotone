@@ -4709,21 +4709,32 @@ class Database:
                     duration = CASE WHEN ? THEN
                         COALESCE(excluded.duration, releases.duration)
                         ELSE releases.duration END,
-                    label = CASE WHEN ? THEN excluded.label ELSE releases.label END,
+                    label = CASE WHEN ? THEN
+                        COALESCE(excluded.label, releases.label)
+                        ELSE releases.label END,
                     labels_json = CASE WHEN ? THEN
-                        excluded.labels_json ELSE releases.labels_json END,
+                        COALESCE(
+                            NULLIF(excluded.labels_json, '[]'),
+                            releases.labels_json
+                        ) ELSE releases.labels_json END,
                     label_url = CASE WHEN ? THEN
                         COALESCE(excluded.label_url, releases.label_url)
                         ELSE releases.label_url END,
                     genres_json = CASE WHEN ? THEN
-                        excluded.genres_json ELSE releases.genres_json END,
+                        COALESCE(
+                            NULLIF(excluded.genres_json, '[]'),
+                            releases.genres_json
+                        ) ELSE releases.genres_json END,
                     genre_urls_json = CASE WHEN ? THEN
                         COALESCE(
                             NULLIF(excluded.genre_urls_json, '[]'),
                             releases.genre_urls_json
                         ) ELSE releases.genre_urls_json END,
                     secondary_genres_json = CASE WHEN ? THEN
-                        excluded.secondary_genres_json
+                        COALESCE(
+                            NULLIF(excluded.secondary_genres_json, '[]'),
+                            releases.secondary_genres_json
+                        )
                         ELSE releases.secondary_genres_json END,
                     secondary_genre_urls_json = CASE WHEN ? THEN
                         COALESCE(
