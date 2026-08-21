@@ -118,59 +118,6 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
         ),
     ]
 
-
-def _genres_section(variables: ReleaseVariables) -> list[str]:
-    return [
-        _detail_line(
-            variables,
-            section="genres",
-            label="Genres",
-            value=variables.genres_text,
-        ),
-        _detail_line(
-            variables,
-            section="genres",
-            label="Secondary genres",
-            value=variables.secondary_genres_text,
-        ),
-        _detail_line(
-            variables,
-            section="vibes",
-            label="Vibes",
-            value=variables.vibes_text,
-        ),
-    ]
-
-
-def _release_section(variables: ReleaseVariables) -> list[str]:
-    return [
-        _detail_line(
-            variables,
-            section="release_date",
-            label="Release date",
-            value=variables.release_date,
-        ),
-        _detail_line(
-            variables,
-            section="duration",
-            label="Duration",
-            value=f"`{variables.duration}`",
-        ),
-        _detail_line(
-            variables,
-            section="format",
-            label="Format",
-            value=variables.album_format,
-        ),
-        _detail_line(
-            variables,
-            section="labels",
-            label="Label",
-            value=variables.labels_text,
-        ),
-    ]
-
-
 def _ranking_section(variables: ReleaseVariables) -> list[str]:
     ranking_year = display_value(variables.ranking_year)
     if ranking_year == MISSING_VALUE:
@@ -196,16 +143,74 @@ def _ranking_section(variables: ReleaseVariables) -> list[str]:
     return lines
 
 
-def _musicbrainz_section(source_data: Mapping[str, object]) -> list[str]:
+def _genres_section(variables: ReleaseVariables) -> list[str]:
+    return [
+        _detail_line(
+            variables,
+            section="genres",
+            label="Genres",
+            value=variables.genres_text,
+        ),
+        _detail_line(
+            variables,
+            section="genres",
+            label="Secondary genres",
+            value=variables.secondary_genres_text,
+        ),
+        _detail_line(
+            variables,
+            section="vibes",
+            label="Vibes",
+            value=variables.vibes_text,
+        ),
+    ]
+
+
+def _release_section(variables: ReleaseVariables) -> list[str]:
     country_code = source_data.get("release_country")
     country = country_flag_emoji(country_code) or display_value(country_code)
+    return [
+        _detail_line(
+            variables,
+            section="release_date",
+            label="Release date",
+            value=variables.release_date,
+        ),
+        _detail_line(
+            variables,
+            section="duration",
+            label="Duration",
+            value=f"`{variables.duration}`",
+        ),
+        _detail_line(
+            variables,
+            section="format",
+            label="Format",
+            value=variables.album_format,
+        ),
+        _detail_line(
+            variables,
+            section="labels",
+            label="Label",
+            value=variables.labels_text,
+        ),
+        _detail_line(
+            variables,
+            section="country",
+            label="Country"
+            value=country,
+        )
+    ]
+
+
+def _musicbrainz_section(source_data: Mapping[str, object]) -> list[str]:
     rows = (
         ("MusicBrainz release ID", source_data.get("musicbrainz_release_id")),
         (
             "MusicBrainz release-group ID",
             source_data.get("musicbrainz_release_group_id"),
         ),
-        ("Release country", country),
+        # ("Release country", country),
     )
     return [
         line
