@@ -3193,27 +3193,29 @@ class Database:
         canonical = self._require_monitored(username)
         records = list(records)
         now = _now()
-        notification_cutoff = self.last_notification_at(canonical)
+        # Oficjalny CSV może zostać wgrany po przerwie AOTY. Chcemy wtedy
+        # ogłosić świeżo ocenione *nowe* pozycje, nawet jeśli monitor wysłał
+        # wcześniej inne powiadomienie. Siedem dni ogranicza importowy spam.
+        recent_import_cutoff = now - 7 * 24 * 60 * 60
         summary = {
             "total": len(records),
             "added": 0,
             "updated": 0,
             "unchanged": 0,
             "queued_notifications": 0,
-            "notification_cutoff": notification_cutoff,
+            "notification_cutoff": recent_import_cutoff,
             "unmatched": [],
         }
         release_detail_hints: dict[str, dict] = {}
         notified_album_ids: set[str] = set()
 
-        def should_queue_notification(record: dict, album_id: str) -> bool:
+        def should_queue_new_import(record: dict, album_id: str) -> bool:
             try:
                 rated_at = float(record.get("sort_timestamp") or 0)
             except (TypeError, ValueError):
                 rated_at = 0.0
             return bool(
-                notification_cutoff is not None
-                and rated_at > notification_cutoff
+                rated_at >= recent_import_cutoff
                 and str(album_id) not in notified_album_ids
             )
 
@@ -3478,7 +3480,7 @@ class Database:
                         source="official_csv_import",
                         record_new_change=False,
                     )
-                    queue_notification = should_queue_notification(
+                    queue_notification = should_queue_new_import(
                         record,
                         album_id,
                     )
@@ -3505,7 +3507,10 @@ class Database:
                     or (not old_format and bool(new_format))
                     or existing["sort_timestamp"] is None
                 )
-                queue_notification = should_queue_notification(record, album_id)
+                # CSV nie może ponownie ogłaszać pozycji, która już była w
+                # SQLite. Zmiany istniejącej oceny pozostają w historii, ale
+                # nie tworzą importowego spamu.
+                queue_notification = False
                 pending_before = bool(existing["notify_pending"])
                 pending_after = pending_before or queue_notification
                 self.connection.execute(

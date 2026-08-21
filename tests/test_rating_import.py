@@ -215,9 +215,8 @@ class RatingImportDatabaseTests(unittest.TestCase):
         self.assertFalse(self.db.get_rating("enso", "722118")["notify_pending"])
         self.assertFalse(self.db.get_rating("enso", "732107")["notify_pending"])
 
-    def test_import_queues_only_new_rows_after_last_notification(self):
-        cutoff = 1_700_000_000.0
-        self.db.mark_notification_delivered("enso", delivered_at=cutoff)
+    def test_import_queues_only_new_rows_from_last_seven_days(self):
+        cutoff = time.time() - 7 * 24 * 60 * 60
         older = {
             **self._record(artist="Older", album="Older", score="70"),
             "album_id_hint": "older-id",
@@ -228,7 +227,7 @@ class RatingImportDatabaseTests(unittest.TestCase):
             **self._record(artist="Newer", album="Newer", score="90"),
             "album_id_hint": "newer-id",
             "album_url_hint": "https://example.invalid/newer",
-            "sort_timestamp": cutoff + 1,
+            "sort_timestamp": time.time(),
         }
         result = self.db.import_official_ratings("enso", [older, newer])
         self.assertEqual(result["added"], 2)
@@ -240,9 +239,7 @@ class RatingImportDatabaseTests(unittest.TestCase):
             self.db.get_rating("enso", "newer-id")["notify_pending"]
         )
 
-    def test_recent_unnotified_cached_row_is_also_queued_by_import(self):
-        cutoff = 1_700_000_000.0
-        self.db.mark_notification_delivered("enso", delivered_at=cutoff)
+    def test_recent_cached_row_is_not_requeued_by_import(self):
         self.db.upsert_rating(
             "enso",
             {
@@ -260,14 +257,12 @@ class RatingImportDatabaseTests(unittest.TestCase):
                 score="90",
             ),
             "release_format": "Single",
-            "sort_timestamp": cutoff + 1,
+            "sort_timestamp": time.time(),
         }
         result = self.db.import_official_ratings("enso", [record])
         self.assertEqual(result["added"], 0)
-        self.assertEqual(result["queued_notifications"], 1)
-        self.assertTrue(
-            self.db.get_rating("enso", "cached-id")["notify_pending"]
-        )
+        self.assertEqual(result["queued_notifications"], 0)
+        self.assertFalse(self.db.get_rating("enso", "cached-id")["notify_pending"])
 
     def test_changed_csv_row_keeps_old_score_for_offline_monitor_delivery(self):
         self.db.upsert_rating(
@@ -280,18 +275,15 @@ class RatingImportDatabaseTests(unittest.TestCase):
                 "release_format": "LP",
             },
         )
-        cutoff = 1_700_000_000.0
-        self.db.mark_notification_delivered("enso", delivered_at=cutoff)
         record = {
             **self._record(score="85"),
             "album_id_hint": "pending-change",
-            "sort_timestamp": cutoff + 1,
+            "sort_timestamp": time.time(),
         }
         result = self.db.import_official_ratings("enso", [record])
-        self.assertEqual(result["queued_notifications"], 1)
+        self.assertEqual(result["queued_notifications"], 0)
         pending = self.db.get_pending_notifications("enso")
-        self.assertEqual(len(pending), 1)
-        self.assertEqual(pending[0]["pending_old_score"], "70")
+        self.assertEqual(pending, [])
 
     def test_manual_review_and_like_preserve_tracks_and_become_due(self):
         self.db.upsert_rating(
