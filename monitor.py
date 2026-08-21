@@ -34,7 +34,13 @@ from settings import (
     USER_CHANNELS,
     USERS,
 )
-from shared import load_release_variables, rating_flags_text, score_color, score_icon
+from shared import (
+    load_release_variables,
+    must_hear_title_marker,
+    rating_flags_text,
+    score_color,
+    score_icon,
+)
 from views import SingleRatingView
 
 MONITOR_STATE_VERSION = 3
