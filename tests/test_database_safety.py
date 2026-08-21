@@ -413,6 +413,40 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_manual_year_ranking_does_not_clear_existing_all_time_ranking(self):
+        """Partial /dbmanual ranking edits must preserve the other ranking."""
+
+        db = self.make_db()
+        try:
+            db.manual_update_release_details(
+                "manual-ranking",
+                {
+                    "artist": "Artist",
+                    "album": "Album",
+                    "year_ranking_text": "#12",
+                    "all_time_ranking": "#48",
+                    "_section_complete": {"ranking": True},
+                    "_ranking_fields": [
+                        "year_ranking_text",
+                        "all_time_ranking",
+                    ],
+                },
+            )
+            db.manual_update_release_details(
+                "manual-ranking",
+                {
+                    "year_ranking_text": "#7",
+                    "_section_complete": {"ranking": True},
+                    "_ranking_fields": ["year_ranking_text"],
+                },
+            )
+
+            details = db.get_release_details("manual-ranking")
+            self.assertEqual(details["year_ranking_text"], "#7")
+            self.assertEqual(details["all_time_ranking"], "#48")
+        finally:
+            db.close()
+
     def test_manual_personal_track_scores_keep_review_and_like(self):
         db = self.make_db()
         try:

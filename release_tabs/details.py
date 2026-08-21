@@ -70,7 +70,11 @@ def _provider_line(source: str, label: str, value: object) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _score_section(variables: ReleaseVariables) -> list[str]:
-    score = aoty_score_value(
+    # score = aoty_score_value(
+    #     variables.aoty_user_score,
+    #     variables.ratings_count,
+    # )
+    aoty_score = aoty_score_or_missing(
         variables.aoty_user_score,
         variables.ratings_count,
     )
@@ -79,7 +83,7 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="score",
             label="AOTY User Score",
-            value=score,
+            value=aoty_score,
         ),
         _detail_line(
             variables,

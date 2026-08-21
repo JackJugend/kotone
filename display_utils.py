@@ -37,6 +37,10 @@ _GENRE_WORD_FORMS = {
     "c-pop": "C-Pop",
     "hip-hop": "Hip-Hop",
     "nu-metal": "Nu Metal",
+    # Utrwalony wariant AOTY/MB bywa zapisywany z łącznikiem albo bez niego.
+    # Kotone pokazuje i przechowuje zawsze jedną, krótszą formę.
+    "synthpop": "Synthpop",
+    "synth-pop": "Synthpop",
 }
 
 
@@ -46,7 +50,8 @@ def normalize_genres(values) -> list[str]:
     To jest jeden punkt normalizacji dla całego bota: ``ambient``,
     ``Ambient`` i ``AMBIENT`` stają się jedną pozycją ``Ambient``.  Funkcja
     nie próbuje łączyć różnych gatunków znaczeniowo — porządkuje wyłącznie
-    wielkość liter, spacje oraz równoważne znaki łącznika.
+    wielkość liter, spacje, równoważne znaki łącznika oraz kilka znanych
+    wariantów pisowni (np. ``Synth-pop`` → ``Synthpop``).
     """
 
     result: list[str] = []

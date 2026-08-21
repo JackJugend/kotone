@@ -221,8 +221,8 @@ def setup_album_command(tree: discord.app_commands.CommandTree):
         description="Pokazuje informacje danego release z AOTY.",
     )
     @discord.app_commands.describe(
-        artist="Artysta (opcjonalnie)",
-        album="Wydanie (opcjonalnie)",
+        artist="Artysta",
+        album="Wydanie",
     )
     @discord.app_commands.autocomplete(
         artist=artist_autocomplete,

@@ -252,32 +252,32 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
     )
     @discord.app_commands.describe(
         album_id="AOTY album_id; nowy identyfikator utworzy pozycję ręczną",
-        username="User z configu; wymagany tylko dla oceny/review/like",
-        rating_score="Ocena usera z configu 0-100",
-        rating_date="Data oceny usera, np. 20.08.2026",
-        liked="Ustawia like usera",
-        review="Ustawia albo nadpisuje review usera",
+        username="kotone user; wymagany tylko dla oceny/review/like",
+        rating_score="kotone user rating 0-100",
+        rating_date="kotone user rating date, np. 20.08.2026",
+        liked="kotone user like",
+        review="kotone user review",
         artist="Nazwa artysty",
-        album="Nazwa wydania",
-        cover="URL okladki",
-        release_date="Data wydania albo sam rok, np. 31.01.2021",
-        format="Format wydania",
-        duration="Czas trwania wydania, np. 45:12",
-        label="Glowna wytwornia",
+        album="Nazwa release",
+        cover="URL okładki",
+        release_date="Release date/year, np. 31.01.2021",
+        format="Release format",
+        duration="Release duration, np. 45:12",
+        label="Main label",
         genres="Gatunki po przecinku",
-        secondary_genres="Drugorzedne gatunki po przecinku",
-        aoty_score="AOTY User Score",
-        ratings_count="Liczba ocen AOTY",
-        critic_score="Critic Score",
-        critic_reviews_count="Liczba recenzji krytykow",
+        secondary_genres="Secondary gatunki po przecinku",
+        aoty_score="AOTY User score",
+        ratings_count="AOTY ratings count",
+        critic_score="AOTY Critic Score",
+        critic_reviews_count="AOTY critic reviews count",
         year_ranking="Ranking roczny, np. #12",
         all_time_ranking="Ranking all-time, np. #48",
         must_hear="Status Must Hear",
         tracklist=(
-            "Utwory: 1. Tytul 2. Tytul; czas trwania opcjonalny"
+            "Utwory: 1. Tytuł 2. Tytuł; czas trwania opcjonalnie"
         ),
-        track_scores="Oceny AOTY utworow w kolejnosci, np. 89, 93, 86",
-        user_track_scores="Oceny tracklisty wskazanego username, np. 90, 89, 94",
+        track_scores="Oceny AOTY utworów w kolejności, np. 89, 93, 86",
+        user_track_scores="Oceny tracklisty wskazanego kotone usera, np. 90, 89, 94",
     )
     @discord.app_commands.autocomplete(
         album_id=dbmanual_album_autocomplete,
@@ -325,13 +325,13 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
     ) -> None:
         if interaction.guild_id != GUILD_ID:
             await interaction.response.send_message(
-                "Ta komenda dziala tylko na skonfigurowanym serwerze.",
+                "Ta komenda działa tylko na skonfigurowanym serwerze.",
                 ephemeral=True,
             )
             return
         if not is_operator_discord_id(getattr(interaction.user, "id", None)):
             await interaction.response.send_message(
-                "Nie masz uprawnien do `/dbmanual`.",
+                "Nie masz uprawnień do `/dbmanual`.",
                 ephemeral=True,
             )
             return
@@ -433,6 +433,21 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                 if existing_release is None:
                     release_payload.setdefault("artist", "Nieznany artysta")
                     release_payload.setdefault("album", f"Album #{album_id}")
+                # Ranking roczny i all-time są niezależnymi wartościami.
+                # Oznaczamy dokładnie podane pola, aby np. ustawienie samego
+                # rankingu rocznego nie wyczyściło wcześniej zapisanego all-time.
+                ranking_fields = [
+                    key
+                    for key in (
+                        "ranking_year",
+                        "year_ranking",
+                        "year_ranking_text",
+                        "all_time_ranking",
+                    )
+                    if key in release_payload
+                ]
+                if ranking_fields:
+                    release_payload["_ranking_fields"] = ranking_fields
                 release_payload["_section_complete"] = _section_complete(release_payload)
                 await asyncio.to_thread(
                     DB.manual_update_release_details,

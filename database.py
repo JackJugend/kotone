@@ -3997,7 +3997,8 @@ class Database:
             clean_payload = {
                 key: value
                 for key, value in payload.items()
-                if key not in {"_section_complete"} and value not in (None, "", [], {})
+                if key not in {"_section_complete", "_ranking_fields"}
+                and value not in (None, "", [], {})
             }
             for row in rows:
                 self._record_change_locked(
@@ -4532,6 +4533,20 @@ class Database:
             # section-by-section non-destructive merging.
             return legacy_authoritative or bool(raw_section_complete.get(name))
 
+        # /dbmanual może zmienić tylko jeden z rankingów. Starsze wywołania
+        # nie zawierają tej listy i zachowują dotychczasowe, sekcyjne działanie.
+        raw_ranking_fields = details.get("_ranking_fields")
+        ranking_fields = (
+            {str(field).strip() for field in raw_ranking_fields}
+            if isinstance(raw_ranking_fields, (list, tuple, set))
+            else set()
+        )
+
+        def ranking_field_complete(field: str) -> bool:
+            return section_complete("ranking") and (
+                not ranking_fields or field in ranking_fields
+            )
+
         with self._lock, self.connection:
             # Scrapers still write only data connected to a configured Kotone
             # user. /dbmanual is the deliberate exception: an operator may
@@ -4745,10 +4760,10 @@ class Database:
                     section_complete("genres"),
                     section_complete("genres"),
                     section_complete("vibes"),
-                    section_complete("ranking"),
-                    section_complete("ranking"),
-                    section_complete("ranking"),
-                    section_complete("ranking"),
+                    ranking_field_complete("ranking_year"),
+                    ranking_field_complete("year_ranking"),
+                    ranking_field_complete("year_ranking_text"),
+                    ranking_field_complete("all_time_ranking"),
                     must_hear_complete,
                     must_hear_complete,
                 ),

@@ -52,9 +52,18 @@ class DisplayNormalizationTests(unittest.TestCase):
                     "Ambient—Pop",
                     "ambient-pop",
                     "EDM",
+                    "Synth-pop",
+                    "synthpop",
                 ]
             ),
-            ["Jazz Pop", "R&B", "Alternative Rock", "Ambient-Pop", "EDM"],
+            [
+                "Jazz Pop",
+                "R&B",
+                "Alternative Rock",
+                "Ambient-Pop",
+                "EDM",
+                "Synthpop",
+            ],
         )
 
     def test_release_dates_use_one_polish_format(self):
