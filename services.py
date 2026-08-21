@@ -364,7 +364,10 @@ class DataService:
             {
                 key: value
                 for key, value in item.items()
-                if value is not None
+                # Compact rating cards frequently carry empty placeholders
+                # (notably ``artist_url``). They must not erase a durable
+                # URL from SQLite, otherwise /last cannot link the artist.
+                if self._value_present(value)
             }
         )
 

@@ -368,6 +368,7 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
             "cached-release",
             {
                 "artist": "Artist",
+                "artist_url": "https://www.albumoftheyear.org/artist/1-artist/",
                 "album": "Album",
                 "year": "2025",
                 "labels": ["Cached Label"],
@@ -388,6 +389,22 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(merged["labels"], ["Cached Label"])
         self.assertEqual(merged["genres"], ["Art Pop"])
         self.assertEqual(merged["album_format"], "LP")
+        self.assertEqual(
+            merged["artist_url"],
+            "https://www.albumoftheyear.org/artist/1-artist/",
+        )
+
+        merged_with_empty_card_url = self.service.release_with_cached_details(
+            {
+                "album_id": "cached-release",
+                "title": "Album",
+                "artist_url": "",
+            }
+        )
+        self.assertEqual(
+            merged_with_empty_card_url["artist_url"],
+            "https://www.albumoftheyear.org/artist/1-artist/",
+        )
 
     async def test_stale_cached_track_scores_survive_challenge(self):
         self.db.upsert_rating(
