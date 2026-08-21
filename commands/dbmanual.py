@@ -22,10 +22,7 @@ def _split_values(value: str | None) -> list[str]:
 
 
 def _parse_aoty_links(value: str | None) -> dict[str, object]:
-    """Parse optional persistent AOTY links from one slash-command field.
-
-    Example: ``label=https://...;genres=https://...,https://...``.
-    """
+    """Parse only the optional AOTY label link from the manual field."""
 
     result: dict[str, object] = {}
     for part in re.split(r"\s*;\s*", str(value or "")):
@@ -38,10 +35,6 @@ def _parse_aoty_links(value: str | None) -> dict[str, object]:
             continue
         if key in {"label", "label_url"}:
             result["label_url"] = raw
-        elif key in {"genres", "genre_urls"}:
-            result["genre_urls"] = _split_values(raw)
-        elif key in {"secondary", "secondary_genres", "secondary_genre_urls"}:
-            result["secondary_genre_urls"] = _split_values(raw)
     return result
 
 
@@ -331,9 +324,7 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         label="Main label",
         genres="Gatunki po przecinku",
         secondary_genres="Secondary gatunki po przecinku",
-        aoty_links=(
-            "Opcjonalnie: label=URL;genres=URL1,URL2;secondary=URL1,URL2"
-        ),
+        aoty_links="Opcjonalnie: label=URL AOTY",
         aoty_score="AOTY User score",
         ratings_count="AOTY ratings count",
         critic_score="AOTY Critic Score",

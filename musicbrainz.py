@@ -165,6 +165,25 @@ def _aliases(items: object) -> list[str]:
     return result
 
 
+def _provider_relation_urls(relations: object) -> dict[str, str]:
+    """Extract durable provider URLs from MusicBrainz release-group links."""
+
+    result: dict[str, str] = {}
+    for relation in relations or []:
+        if not isinstance(relation, dict):
+            continue
+        relation_type = str(relation.get("type") or "").casefold()
+        url = str((relation.get("url") or {}).get("resource") or "").strip()
+        if not url.startswith(("https://", "http://")):
+            continue
+        lowered = url.casefold()
+        if relation_type == "discogs" or "discogs.com/" in lowered:
+            result.setdefault("discogs_master_url", url)
+        elif relation_type in {"rateyourmusic", "rate your music"} or "rateyourmusic.com/" in lowered:
+            result.setdefault("rym_url", url)
+    return result
+
+
 def _pick_exact_release(candidates: object, artist: str, album: str) -> dict | None:
     expected_artist = _normalized(artist)
     expected_album = _normalized(album)
@@ -183,8 +202,11 @@ def release_to_details(release: dict, *, requested_format: object = None) -> dic
     """Convert one MusicBrainz release document to Kotone's release cache."""
 
     group = release.get("release-group") or {}
+    # The release group carries the original publication date. A selected
+    # release can be a later remaster or regional edition, so it must never
+    # replace the group date in Kotone's canonical date/year fields.
     release_date = str(
-        release.get("date") or group.get("first-release-date") or ""
+        group.get("first-release-date") or release.get("date") or ""
     ).strip()
     tracks: list[dict] = []
     sequence = 0
@@ -496,13 +518,13 @@ class MusicBrainzClient:
             try:
                 group = self._json(
                     f"/release-group/{group_id}",
-                    params={"fmt": "json", "inc": "aliases"},
+                    params={"fmt": "json", "inc": "aliases+url-rels"},
                 )
                 aliases = _aliases(group.get("aliases"))
+                external_metadata = details.setdefault("external_metadata", {})
                 if aliases:
-                    details.setdefault("external_metadata", {})[
-                        "release_group_aliases"
-                    ] = aliases
+                    external_metadata["release_group_aliases"] = aliases
+                external_metadata.update(_provider_relation_urls(group.get("relations")))
             except MusicBrainzUnavailable:
                 # The alias is optional: retain the verified release cache
                 # even if this supplementary endpoint is temporarily busy.
@@ -530,7 +552,6 @@ class MusicBrainzClient:
             "/release/",
             params={"query": f"rgid:{group_id}", "fmt": "json", "limit": "100"},
         )
-        requested_key = _format_key(requested_format)
         compatible: list[tuple[str, str]] = []
         for candidate in payload.get("releases") or []:
             if not isinstance(candidate, dict) or not candidate.get("id"):
@@ -538,11 +559,6 @@ class MusicBrainzClient:
             if _normalized(candidate.get("title")) != _normalized(album):
                 continue
             if _normalized(_artist_name(candidate.get("artist-credit"))) != _normalized(artist):
-                continue
-            candidate_key = _format_key(
-                _release_format(candidate, requested_format=None)
-            )
-            if requested_key and candidate_key and candidate_key != requested_key:
                 continue
             date = str(candidate.get("date") or "9999-99-99")
             compatible.append((date, str(candidate["id"])))

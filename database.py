@@ -4934,6 +4934,16 @@ class Database:
                 "tracklist": ("tracklist",),
             }
             for section, keys in section_keys.items():
+                # A previously cached MusicBrainz reissue date is repairable:
+                # a newer lookup may discover the release group's original
+                # first-release-date. AOTY and manual dates always retain
+                # their priority and are never replaced here.
+                if (
+                    section == "release_date"
+                    and str((existing.get("metadata_sources") or {}).get(section) or "").casefold()
+                    == "musicbrainz"
+                ):
+                    continue
                 if any(existing.get(key) not in (None, "", [], {}) for key in keys):
                     complete[section] = False
             # AOTY/MB names and links describe the canonical release. Last.fm
@@ -4956,7 +4966,7 @@ class Database:
         return saved
 
     def save_discogs_fallback(self, album_id: str, details: dict) -> bool:
-        """Persist Discogs only for still-missing tracks and total duration.
+        """Persist Discogs only for still-missing release timing, tracks and duration.
 
         Discogs is intentionally narrower than the other providers: no title,
         cover, genres or scores may be overwritten through this route.
@@ -4971,6 +4981,7 @@ class Database:
 
         if existing is not None:
             for section, keys in {
+                "release_date": ("release_date", "year"),
                 "duration": ("duration",),
                 "tracklist": ("tracklist",),
             }.items():
@@ -4982,8 +4993,6 @@ class Database:
                 "album",
                 "url",
                 "cover",
-                "release_date",
-                "year",
                 "album_format",
                 "label",
                 "labels",

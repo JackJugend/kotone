@@ -18,7 +18,7 @@ from commands.dbmanual import _parse_aoty_links, _parse_tracklist  # noqa: E402
 
 
 class DBManualTracklistTests(unittest.TestCase):
-    def test_aoty_links_are_parsed_into_persistent_release_fields(self):
+    def test_manual_link_field_accepts_only_a_label_url(self):
         self.assertEqual(
             _parse_aoty_links(
                 "label=https://example.test/label;"
@@ -27,11 +27,6 @@ class DBManualTracklistTests(unittest.TestCase):
             ),
             {
                 "label_url": "https://example.test/label",
-                "genre_urls": [
-                    "https://example.test/genre/1",
-                    "https://example.test/genre/2",
-                ],
-                "secondary_genre_urls": ["https://example.test/genre/3"],
             },
         )
 

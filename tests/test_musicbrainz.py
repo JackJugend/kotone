@@ -131,6 +131,23 @@ class MusicBrainzFallbackTests(unittest.TestCase):
         self.assertFalse(details["_section_complete"]["score"])
         self.assertFalse(details["_section_complete"]["ranking"])
 
+    def test_release_group_first_date_wins_over_later_reissue_date(self):
+        details = release_to_details(
+            {
+                "id": "reissue-id",
+                "title": "Tin Drum",
+                "date": "2016-04-01",
+                "artist-credit": [{"name": "Japan"}],
+                "release-group": {
+                    "id": "group-id",
+                    "first-release-date": "1981-11-13",
+                },
+            }
+        )
+
+        self.assertEqual(details["release_date"], "1981-11-13")
+        self.assertEqual(details["year"], "1981")
+
     def test_artist_lookup_accepts_aoty_romanization_as_musicbrainz_alias(self):
         client = MusicBrainzClient()
         client._json = Mock(

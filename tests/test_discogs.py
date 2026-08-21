@@ -19,6 +19,8 @@ class DiscogsFallbackTests(unittest.TestCase):
         details = release_to_details(
             {
                 "id": 123,
+                "master_id": 456,
+                "released": "1981-11-13",
                 "tracklist": [
                     {"position": "1", "title": "First", "duration": "3:13"},
                     {"position": "2", "title": "Second", "duration": "3:53"},
@@ -37,6 +39,12 @@ class DiscogsFallbackTests(unittest.TestCase):
         )
         self.assertEqual(
             details["external_metadata"]["discogs_release_id"], "123"
+        )
+        self.assertEqual(details["release_date"], "1981-11-13")
+        self.assertEqual(details["year"], "1981")
+        self.assertEqual(
+            details["external_metadata"]["discogs_master_url"],
+            "https://www.discogs.com/master/456",
         )
 
     def test_client_without_token_is_not_treated_as_ready(self):

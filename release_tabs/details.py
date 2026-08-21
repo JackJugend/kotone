@@ -16,7 +16,6 @@ from release_tabs.common import (
 )
 from shared import (
     ReleaseVariables,
-    aoty_score_value,
     aoty_score_or_missing,
     country_flag_emoji,
     load_release_variables,
@@ -56,12 +55,6 @@ def _ratings_url(album_url: str) -> str | None:
     if target.endswith(".php"):
         target = target[:-4]
     return f"{target}/user-reviews/?type=ratings"
-
-
-def _must_hear_url(kind: str | None) -> str | None:
-    if kind not in {"users", "critics", "both"}:
-        return None
-    return f"{_AOTY_BASE}/must-hear/{kind}/"
 
 
 def _ranking_number(value: object) -> int | None:
@@ -104,22 +97,15 @@ def _vibe_url(value: object) -> str | None:
     return f"{_AOTY_BASE}/all/releases/vibe/{quote(slug)}/" if slug else None
 
 
-def _genre_slug(value: object) -> str:
+def _label_slug(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(value or "").casefold()).strip("-")
-
-
-def _genre_url_slug(url: object) -> str:
-    """Wyciągnij slug gatunku z URL-a AOTY, np. ``39-dream-pop``."""
-
-    match = re.search(r"/genre/(?:\d+-)?([^/?#]+)/?", str(url or "").casefold())
-    return _genre_slug(match.group(1)) if match else ""
 
 
 def _label_url_slug(url: object) -> str:
     """Wyciągnij slug labelu z URL-a AOTY, np. ``74-4ad``."""
 
     match = re.search(r"/label/(?:\d+-)?([^/?#]+)/?", str(url or "").casefold())
-    return _genre_slug(match.group(1)) if match else ""
+    return _label_slug(match.group(1)) if match else ""
 
 
 def _linked_label(labels: list[str], labels_text: object, url: object) -> str:
@@ -131,58 +117,23 @@ def _linked_label(labels: list[str], labels_text: object, url: object) -> str:
         return rendered
     label_names = labels or [part.strip() for part in rendered.split(",") if part.strip()]
     target_slug = _label_url_slug(target)
-    if target_slug and any(_genre_slug(name) == target_slug for name in label_names):
+    if target_slug and any(_label_slug(name) == target_slug for name in label_names):
         return _markdown_link(rendered, target)
     return rendered
-
-
-def _linked_genres(values: list[str], urls: list[str], *, bold_first: bool = False) -> str:
-    """Linkuj gatunki po nazwie, nigdy po samej pozycji na liście.
-
-    Kolejność danych z AOTY, MusicBrainz i ręcznego wpisu może być różna.
-    Jeśli URL nie pasuje do konkretnego gatunku, pokazujemy nazwę bez linku
-    zamiast kierować użytkownika do niewłaściwej strony AOTY.
-    """
-
-    parts: list[str] = []
-    available = [str(url or "").strip() for url in urls if str(url or "").strip()]
-    for index, value in enumerate(values):
-        value_slug = _genre_slug(value)
-        matching_url = next(
-            (url for url in available if _genre_url_slug(url) == value_slug),
-            None,
-        )
-        linked = _markdown_link(value, matching_url)
-        parts.append(f"**{linked}**" if bold_first and index == 0 else linked)
-    return ", ".join(parts) if parts else MISSING_VALUE
 
 
 def _details_title(variables: ReleaseVariables) -> str:
     """Zbuduj tytuł embeda z limitem Discorda 256 znaków.
 
-    Link Markdown zawiera długi URL, dlatego przy bardzo długich nazwach
-    najpierw przechodzimy na krótszą wersję bez linków, a dopiero na końcu
-    bezpiecznie skracamy tekst. Dzięki temu pojedynczy rekord nie może
-    przerwać wysyłania całej zakładki `details`.
+    Tytuł ma jeden link ustawiony przez ``embed.url``. Discord nie renderuje
+    Markdown w tytułach, więc nie tworzymy linków dla pojedynczych fragmentów.
     """
 
     tab = status_emoji("details") or DETAILS_BUTTON
     artist_name = str(variables.display_artist or MISSING_VALUE).strip()
     album_name = str(variables.display_album or MISSING_VALUE).strip()
-    artist = _markdown_link(artist_name, variables.artist_url)
-    album = _markdown_link(album_name, variables.album_url or variables.url)
-    kind = str(variables.must_hear_kind or "").casefold()
     marker = must_hear_title_marker(variables)
-    if marker and (target := _must_hear_url(kind)):
-        marker = _markdown_link(marker, target)
-    title = f"{tab} {artist} — {marker + ' ' if marker else ''}{album}".strip()
-    if len(title) <= 256:
-        return title
-
-    # URL-e w Markdown są tylko dodatkiem; zachowaj czytelne nazwy, gdy
-    # pełna wersja nie mieści się w limicie.
-    short_marker = must_hear_title_marker(variables)
-    title = f"{tab} {artist_name} — {short_marker + ' ' if short_marker else ''}{album_name}".strip()
+    title = f"{tab} {artist_name} — {marker + ' ' if marker else ''}{album_name}".strip()
     if len(title) <= 256:
         return title
     return title[:253].rstrip() + "..."
@@ -314,20 +265,14 @@ def _genres_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="genres",
             label="Genres",
-            value=_linked_genres(
-                variables.genres,
-                variables.genre_urls,
-                bold_first=True,
-            ),
+            value=", ".join(variables.genres) if variables.genres else MISSING_VALUE,
         ),
         _detail_line(
             variables,
             section="genres",
             label="Secondary genres",
-            value=_linked_genres(
-                variables.secondary_genres,
-                variables.secondary_genre_urls,
-            ),
+            value=(", ".join(variables.secondary_genres)
+                   if variables.secondary_genres else MISSING_VALUE),
         ),
         _detail_line(
             variables,
@@ -436,17 +381,36 @@ def _identity_section(variables: ReleaseVariables) -> list[str]:
 
     musicbrainz_data = variables.source_data.get("musicbrainz") or {}
     discogs_data = variables.source_data.get("discogs") or {}
+    rym_url = str(
+        musicbrainz_data.get("rym_url")
+        or musicbrainz_data.get("rateyourmusic_url")
+        or discogs_data.get("rym_url")
+        or ""
+    ).strip()
     album_id = display_value(variables.album_id)
     discogs_id = display_value(discogs_data.get("discogs_release_id"))
     musicbrainz_release_id = display_value(musicbrainz_data.get("musicbrainz_release_id"))
     musicbrainz_group_id = display_value(
         musicbrainz_data.get("musicbrainz_release_group_id")
     )
+    discogs_url = str(
+        discogs_data.get("discogs_master_url")
+        or discogs_data.get("discogs_url")
+        or musicbrainz_data.get("discogs_master_url")
+        or musicbrainz_data.get("discogs_url")
+        or ""
+    ).strip()
+    if discogs_id == MISSING_VALUE and discogs_url:
+        match = re.search(r"/(?:release|master)/(\d+)", discogs_url)
+        if match:
+            discogs_id = match.group(1)
     return [
+        f"{source_emoji('rym')} "
+        f"{_markdown_link('RateYourMusic', rym_url) if rym_url else 'RateYourMusic: —'}",
         f"{source_emoji('aoty')} **Album ID:** "
         f"{_markdown_link(album_id, variables.album_url or variables.url)}",
         f"{source_emoji('discogs')} **Release ID:** "
-        f"{_markdown_link(discogs_id, f'https://www.discogs.com/release/{quote(discogs_id)}' if discogs_id != MISSING_VALUE else None)}",
+        f"{_markdown_link(discogs_id, discogs_url or (f'https://www.discogs.com/release/{quote(discogs_id)}' if discogs_id != MISSING_VALUE else None))}",
         f"{source_emoji('musicbrainz')} **Release ID:** "
         f"{_markdown_link(musicbrainz_release_id, f'https://musicbrainz.org/release/{quote(musicbrainz_release_id)}' if musicbrainz_release_id != MISSING_VALUE else None)}",
         f"{source_emoji('musicbrainz')} **Release Group ID:** "
@@ -489,12 +453,8 @@ def _build_release_details_embed(
 ) -> discord.Embed:
     """Zbuduj jedną stronę wspólnej zakładki szczegółów."""
 
-    title = _details_title(variables)
-    if page_count and page_count > 1 and page_number:
-        suffix = f"  •  [{page_number}/{page_count}]"
-        title = title[: 256 - len(suffix)].rstrip() + suffix
     embed = discord.Embed(
-        title=title,
+        title=_details_title(variables),
         url=variables.url or None,
         description=description,
         color=score_color(variables.score or variables.aoty_user_score),
@@ -506,6 +466,8 @@ def _build_release_details_embed(
         author_icon_url=author_icon_url,
     )
     footer = f"AOTY • {score_or_nr(variables.score)}" if username else "AOTY"
+    if page_count and page_count > 1 and page_number:
+        footer = f"{footer} • [{page_number}/{page_count}]"
     set_aoty_footer(embed, footer)
     return embed
 

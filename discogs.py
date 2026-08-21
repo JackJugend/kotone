@@ -109,21 +109,30 @@ def release_to_details(release: dict[str, Any]) -> dict[str, Any] | None:
         )
 
     total_duration = _duration(total_seconds)
-    if not tracks and not total_duration:
+    release_date = str(release.get("released") or release.get("year") or "").strip()
+    if not tracks and not total_duration and not release_date:
         return None
     release_id = str(release.get("id") or "").strip()
+    master_id = str(release.get("master_id") or "").strip()
     return {
         "tracklist": tracks,
         "duration": total_duration,
+        "release_date": release_date or None,
+        "year": release_date[:4] if len(release_date) >= 4 else None,
         "external_metadata": {
             "discogs_release_id": release_id or None,
             "discogs_url": (
                 f"https://www.discogs.com/release/{release_id}" if release_id else None
             ),
+            "discogs_master_id": master_id or None,
+            "discogs_master_url": (
+                f"https://www.discogs.com/master/{master_id}" if master_id else None
+            ),
         },
         "_section_complete": {
             "duration": bool(total_duration),
             "tracklist": bool(tracks),
+            "release_date": bool(release_date),
         },
         "source": "discogs",
     }
