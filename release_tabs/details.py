@@ -102,10 +102,34 @@ def _vibe_url(value: object) -> str | None:
     return f"{_AOTY_BASE}/all/releases/vibe/{quote(slug)}/" if slug else None
 
 
+def _genre_slug(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").casefold()).strip("-")
+
+
+def _genre_url_slug(url: object) -> str:
+    """Wyciągnij slug gatunku z URL-a AOTY, np. ``39-dream-pop``."""
+
+    match = re.search(r"/genre/(?:\d+-)?([^/?#]+)/?", str(url or "").casefold())
+    return _genre_slug(match.group(1)) if match else ""
+
+
 def _linked_genres(values: list[str], urls: list[str], *, bold_first: bool = False) -> str:
+    """Linkuj gatunki po nazwie, nigdy po samej pozycji na liście.
+
+    Kolejność danych z AOTY, MusicBrainz i ręcznego wpisu może być różna.
+    Jeśli URL nie pasuje do konkretnego gatunku, pokazujemy nazwę bez linku
+    zamiast kierować użytkownika do niewłaściwej strony AOTY.
+    """
+
     parts: list[str] = []
+    available = [str(url or "").strip() for url in urls if str(url or "").strip()]
     for index, value in enumerate(values):
-        linked = _markdown_link(value, urls[index] if index < len(urls) else None)
+        value_slug = _genre_slug(value)
+        matching_url = next(
+            (url for url in available if _genre_url_slug(url) == value_slug),
+            None,
+        )
+        linked = _markdown_link(value, matching_url)
         parts.append(f"**{linked}**" if bold_first and index == 0 else linked)
     return ", ".join(parts) if parts else MISSING_VALUE
 
