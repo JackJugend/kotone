@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from urllib.parse import quote
 
 import discord
@@ -38,6 +39,21 @@ from status_emoji_registry import status_emoji
 # ---------------------------------------------------------------------------
 
 _AOTY_BASE = "https://www.albumoftheyear.org"
+_RYM_BASE = "https://rateyourmusic.com/release"
+_RYM_FORMATS = {
+    "lp": "album",
+    "album": "album",
+    "ep": "ep",
+    "single": "single",
+    "music_video": "music-video",
+    "music video": "music-video",
+    "video": "music-video",
+    "mixtape": "mixtape",
+    "dj_mix": "dj-mix",
+    "dj mix": "dj-mix",
+    "compilation": "compilation",
+    "comp": "compilation",
+}
 
 
 def _markdown_link(text: object, url: object) -> str:
@@ -46,6 +62,27 @@ def _markdown_link(text: object, url: object) -> str:
     if not rendered or not target.startswith(("http://", "https://")):
         return rendered
     return f"[{rendered}]({target})"
+
+
+def _rym_slug(value: object) -> str:
+    """Produce the stable, human-readable path segment used by RYM URLs."""
+
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = text.encode("ascii", "ignore").decode("ascii").casefold()
+    return re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+
+
+def _rym_fallback_url(variables: ReleaseVariables) -> str | None:
+    """Build a RYM release URL only when all three route parts are known."""
+
+    release_type = _RYM_FORMATS.get(
+        str(variables.album_format or "").strip().casefold()
+    )
+    artist = _rym_slug(variables.display_artist or variables.artist)
+    album = _rym_slug(variables.display_album or variables.album)
+    if not release_type or not artist or not album:
+        return None
+    return f"{_RYM_BASE}/{release_type}/{artist}/{album}/"
 
 
 def _ratings_url(album_url: str) -> str | None:
@@ -387,6 +424,7 @@ def _identity_section(variables: ReleaseVariables) -> list[str]:
         or discogs_data.get("rym_url")
         or ""
     ).strip()
+    rym_url = rym_url or _rym_fallback_url(variables) or ""
     album_id = display_value(variables.album_id)
     discogs_id = display_value(discogs_data.get("discogs_release_id"))
     musicbrainz_release_id = display_value(musicbrainz_data.get("musicbrainz_release_id"))
