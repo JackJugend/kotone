@@ -247,6 +247,13 @@ DISCOGS_STATE_FILE = os.path.join(
     "discogs_state.json",
 )
 
+# Parse jest płatnym fallbackiem metadanych AOTY. Limit per użytkownik
+# chroni kredyty: najwyżej jeden album dziennie dla każdego konta Kotone.
+PARSE_REQUEST_TIMEOUT = _runtime_float("parse_request_timeout", 15.0, 3.0)
+PARSE_USER_DAILY_INTERVAL = _runtime_int(
+    "parse_user_daily_interval", 24 * 60 * 60, 60 * 60
+)
+
 
 # ---------------------------------------------------------------------------
 # Last.fm

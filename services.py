@@ -21,6 +21,7 @@ import aoty
 import discogs
 import lastfm
 import musicbrainz
+import parsebot
 from database import DB
 from display_utils import display_genres
 from formats import RATING_FORMATS
@@ -51,6 +52,8 @@ from settings import (
     QUICK_SPECIAL_CHECK_INTERVAL,
     QUICK_RATING_LIMIT_PER_FORMAT,
     MUSICBRAINZ_FALLBACK_ENABLED,
+    PARSE_API_ENABLED,
+    PARSE_USER_DAILY_INTERVAL,
     MUSICBRAINZ_FALLBACK_RETRY_INTERVAL,
     RATING_DETAIL_TTL,
     RATING_FETCH_LIMITS,
@@ -87,6 +90,7 @@ class DataService:
         self._artist_metadata_cursor: dict[str, int] = {}
         self._next_quick_special_check: dict[str, float] = {}
         self._quick_special_cursor: dict[str, int] = {}
+        self._parse_next_by_user: dict[str, float] = {}
 
     @staticmethod
     def _value_present(value) -> bool:
@@ -169,6 +173,34 @@ class DataService:
         """
         if not MUSICBRAINZ_FALLBACK_ENABLED or not SOURCES.enabled("musicbrainz"):
             return None
+
+    async def _persist_parse_release_fallback(
+        self,
+        username: str,
+        item: dict,
+        *,
+        priority: int,
+    ) -> bool:
+        """Use one Parse credit/day/user only while direct AOTY is unavailable."""
+
+        if not PARSE_API_ENABLED:
+            return False
+        key = str(username or "").casefold()
+        now = time.time()
+        if now < self._parse_next_by_user.get(key, 0.0):
+            return False
+        album_id = str(item.get("album_id") or "").strip()
+        if not album_id or not item.get("url"):
+            return False
+        # Reserve before the request so an invalid response cannot burn the
+        # credit again in the next worker pass.
+        self._parse_next_by_user[key] = now + PARSE_USER_DAILY_INTERVAL
+        try:
+            details = await _thread_call(priority, parsebot.PARSE.lookup_album, item["url"])
+        except (parsebot.ParseUnavailable, requests.RequestException) as exc:
+            print(f"[PARSE] fallback: {type(exc).__name__}: {exc}")
+            return False
+        return bool(details and DB.save_parse_fallback(album_id, details))
         if self._musicbrainz_is_blocked():
             return None
         try:
@@ -1039,15 +1071,16 @@ class DataService:
         username: str,
         *,
         full: bool,
+        include_special: bool = True,
         priority: int = PRIORITY_BACKGROUND,
     ) -> list[dict]:
         """Fetch monitor input with two very different cost profiles.
 
-        Quick cycles use AOTY's combined recent route (+ Single/Music Video),
-        so a normal 20-minute check is roughly three requests instead of one
-        request for every enabled format. Full cycles still use explicit
-        format routes because they are responsible for detecting edits to old
-        ratings outside the recent window.
+        Quick cycles inspect only the newest item from AOTY's combined route.
+        This is enough for /last and a new-rating notification while keeping
+        the regular monitor to one small request. Full cycles still use
+        explicit format routes because they are responsible for repairing
+        older cached data outside the recent window.
         """
         if full:
             ratings = await _thread_call(
@@ -1063,11 +1096,15 @@ class DataService:
                 )
             return ratings
 
-        recent_count = min(
-            50,
-            max(20, QUICK_RATING_LIMIT_PER_FORMAT * 2),
+        # The monitoring path deliberately tracks just the newest rating.
+        # Commands read their history from SQLite, not from this request.
+        recent_count = 1
+        # Wywołanie bez ``include_special`` pozostaje jedną główną stroną
+        # ocen. Osobne trasy Singles/Music Video mogą być użyte wyłącznie
+        # przez spokojne zadanie archiwizacji, gdy jawnie je włączy.
+        special_format = (
+            self._due_quick_special_format(username) if include_special else None
         )
-        special_format = self._due_quick_special_format(username)
         recent = await _thread_call(
             priority,
             aoty.get_recent_ratings,
@@ -1719,6 +1756,15 @@ class DataService:
                 continue
 
             if aoty_unavailable:
+                if await self._persist_parse_release_fallback(
+                    username, item, priority=priority
+                ):
+                    self._release_priority_queue.pop(album_id, None)
+                    self._release_retry_after[album_id] = (
+                        time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
+                    )
+                    release_done += 1
+                    continue
                 details = await self._musicbrainz_release_fallback(
                     item,
                     priority=priority,
@@ -1779,6 +1825,15 @@ class DataService:
                 # page do we fill public gaps from MusicBrainz, and then stop
                 # probing AOTY again for the rest of this worker pass.
                 aoty_unavailable = True
+                if await self._persist_parse_release_fallback(
+                    username, item, priority=priority
+                ):
+                    self._release_priority_queue.pop(album_id, None)
+                    self._release_retry_after[album_id] = (
+                        time.time() + MUSICBRAINZ_FALLBACK_RETRY_INTERVAL
+                    )
+                    release_done += 1
+                    continue
                 details = await self._musicbrainz_release_fallback(
                     item,
                     priority=priority,

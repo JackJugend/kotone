@@ -4933,6 +4933,46 @@ class Database:
             )
         return saved
 
+    def save_parse_fallback(self, album_id: str, details: dict) -> bool:
+        """Zapisz z Parse wyłącznie sekcje, których SQLite jeszcze nie ma.
+
+        Parse zwraca publiczne dane pochodzące z AOTY, ale nie jest oficjalnym
+        źródłem. Nie zastępuje więc danych pobranych bezpośrednio z AOTY ani
+        ręcznie wpisanych przez operatora.
+        """
+
+        album_id = str(album_id or "").strip()
+        if not album_id:
+            return False
+        incoming = dict(details or {})
+        existing = self.get_release_details(album_id)
+        complete = dict(incoming.get("_section_complete") or {})
+        if existing is not None:
+            for section, keys in {
+                "score": ("user_score", "ratings_count", "critic_score", "critic_reviews_count"),
+                "release_date": ("release_date", "year"),
+                "format": ("album_format",),
+                "labels": ("label", "labels"),
+                "genres": ("genres", "secondary_genres"),
+            }.items():
+                if any(existing.get(key) not in (None, "", [], {}) for key in keys):
+                    complete[section] = False
+            for key in ("artist", "artist_url", "album", "url", "cover"):
+                if existing.get(key) not in (None, "", [], {}):
+                    incoming[key] = None
+
+        external_metadata = dict(incoming.pop("external_metadata", {}) or {})
+        # Dane na ekranie nadal oznaczamy ikoną AOTY: Parse jest wyłącznie
+        # transportem tych publicznych metadanych, nie dodatkowym UI source.
+        incoming["source"] = "aoty"
+        incoming["_section_complete"] = complete
+        saved = self.save_release_details(album_id, incoming)
+        if saved and external_metadata:
+            self.save_release_source_data(
+                album_id, "parse", external_metadata, quality="managed-aoty-api-fallback"
+            )
+        return saved
+
     def save_lastfm_fallback(self, album_id: str, details: dict) -> bool:
         """Persist Last.fm only as a lower-priority public metadata fallback.
 
@@ -5050,7 +5090,7 @@ class Database:
 
         album_id = str(album_id or "").strip()
         source = str(source or "").strip().casefold()
-        if not album_id or source not in {"musicbrainz", "lastfm", "discogs", "manual"} or not isinstance(data, dict):
+        if not album_id or source not in {"musicbrainz", "lastfm", "discogs", "parse", "manual"} or not isinstance(data, dict):
             return False
         with self._lock, self.connection:
             if not self._release_is_in_scope_locked(album_id):

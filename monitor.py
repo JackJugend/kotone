@@ -377,13 +377,18 @@ class RatingMonitor:
             full = bool(
                 not needs_seed
                 and full_due
-                and (manual or allow_full)
+                and allow_full
+                and not manual
             )
 
             try:
                 ratings = await DATA.fetch_ratings_live(
                     username,
                     full=full,
+                    # Monitor powiadomień porównuje wyłącznie najnowszą
+                    # pozycję z głównej listy AOTY. Dodatkowe trasy formatów
+                    # obsługuje wyłącznie spokojny worker archiwizacji.
+                    include_special=False,
                     priority=PRIORITY_INTERACTIVE if manual else PRIORITY_NORMAL,
                 )
             except aoty.AOTYRateLimit as exc:
@@ -410,7 +415,7 @@ class RatingMonitor:
                 # disabled formats below.
                 DB.set_monitor_version(username, MONITOR_STATE_VERSION)
                 DB.mark_sync_success(username, full=full)
-                await self._refresh_profile_if_due(username, manual=manual)
+                await self._refresh_profile_if_due(username, manual=False)
                 DB.backup_if_due()
                 print(
                     f"[AOTY] {username}: 0 ocen w formatach monitorowanych; "
@@ -441,7 +446,7 @@ class RatingMonitor:
                 # per-format archive owns format-specific removal handling.
                 DB.set_monitor_version(username, MONITOR_STATE_VERSION)
                 DB.mark_sync_success(username, full=full)
-                await self._refresh_profile_if_due(username, manual=manual)
+                await self._refresh_profile_if_due(username, manual=False)
                 DB.backup_if_due()
                 print(
                     f"[AOTY] {username}: seed/migracja — zapisano "
@@ -544,7 +549,7 @@ class RatingMonitor:
             # Profile counters/favorites are lower-value metadata. Refresh
             # them only after the monitor has compared ratings and delivered
             # every notification, so they can never delay a new-score alert.
-            await self._refresh_profile_if_due(username, manual=manual)
+            await self._refresh_profile_if_due(username, manual=False)
 
             # Pełne archiwum i enrichment mają osobnego workera. Monitor
             # kończy szybko, więc wielostronicowy bootstrap nie przesuwa

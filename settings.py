@@ -363,6 +363,8 @@ LASTFM_API_KEY = str(os.getenv("LASTFM_API_KEY") or "").strip()
 LASTFM_API_ENABLED = bool(LASTFM_API_KEY)
 DISCOGS_TOKEN = str(os.getenv("DISCOGS_TOKEN") or "").strip()
 DISCOGS_API_ENABLED = bool(DISCOGS_TOKEN)
+PARSE_API_KEY = str(os.getenv("PARSE_API_KEY") or "").strip()
+PARSE_API_ENABLED = bool(PARSE_API_KEY)
 
 TOKEN = os.getenv("DISCORD_TOKEN") or CONFIG.get("discord_token", "")
 if not TOKEN:
