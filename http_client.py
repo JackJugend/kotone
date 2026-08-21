@@ -355,9 +355,14 @@ class ResilientHTTPClient:
                     },
                     file,
                 )
+                file.flush()
+                os.fsync(file.fileno())
             os.replace(temporary, path)
-        except OSError:
-            pass
+        except OSError as exc:
+            # Nie wyłączamy bota przy problemie dysku, ale ten komunikat jest
+            # kluczowy: bez trwałego pliku Railway nie odzyska cooldownu po
+            # deployu.
+            print(f"[AOTY] Nie zapisano stanu cooldownu {path}: {exc}")
 
     def _clear_challenge_state_locked(self) -> None:
         try:

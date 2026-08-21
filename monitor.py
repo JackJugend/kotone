@@ -391,6 +391,14 @@ class RatingMonitor:
                     include_special=False,
                     priority=PRIORITY_INTERACTIVE if manual else PRIORITY_NORMAL,
                 )
+            except aoty.AOTYChallengeCooldown as exc:
+                # The transport has just opened its global challenge state.
+                # Let the outer cycle stop before it even considers another
+                # configured account.
+                message = str(exc)
+                DB.mark_sync_error(username, message)
+                print(f"[AOTY] {username}: {message}")
+                return {"error": message, "cooldown": True}
             except aoty.AOTYRateLimit as exc:
                 message = str(exc)
                 DB.mark_sync_error(username, message)
@@ -656,6 +664,18 @@ class RatingMonitor:
 
                 if result.get("full"):
                     full_scan_used = True
+
+                # A challenge for the first account applies to the whole
+                # shared AOTY transport. Do not even enter ``check_user`` for
+                # the remaining users; this keeps logs honest and avoids
+                # needless parser/HTTP work during the persisted cooldown.
+                if result.get("cooldown") or self._challenge_remaining_seconds() > 0:
+                    self.last_success_at = time.time()
+                    self.last_error = str(
+                        result.get("error")
+                        or "AOTY cooldown aktywny; cykl zatrzymany."
+                    )
+                    break
 
                 if result.get("error"):
                     cycle_ok = False
