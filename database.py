@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import time
@@ -71,6 +72,18 @@ def _bool_int(value) -> int:
 
 def _now() -> float:
     return time.time()
+
+
+def _release_year_from_date(value: object) -> str | None:
+    """Derive the release year from the canonical release-date value.
+
+    ``releases.year`` is retained for old databases and inexpensive SQL
+    filters, but it is never an independently authored value.  This avoids a
+    manual date edit leaving a stale, contradictory year behind.
+    """
+
+    match = re.search(r"(?<!\d)((?:18|19|20|21)\d{2})(?!\d)", str(value or ""))
+    return match.group(1) if match else None
 
 
 class Database:
@@ -4506,6 +4519,16 @@ class Database:
             return False
 
         details = dict(details or {})
+        if details.get("release_date") not in (None, ""):
+            # Keep the legacy indexed column as a deterministic derivative of
+            # the one source of truth: ``release_date``.
+            details["year"] = _release_year_from_date(details["release_date"])
+        elif details.get("year") not in (None, ""):
+            # Provider payloads that know only a year use that same value as
+            # the canonical date, rather than creating two separate values.
+            canonical_year = _release_year_from_date(details["year"])
+            details["release_date"] = canonical_year
+            details["year"] = canonical_year
         details["genres"] = normalize_genres(details.get("genres") or [])
         details["secondary_genres"] = normalize_genres(
             details.get("secondary_genres") or []
@@ -5207,6 +5230,7 @@ class Database:
             metadata_sources.setdefault("tracklist", inferred_source)
         source_data = self.get_release_source_data(album_id)
 
+        canonical_year = _release_year_from_date(row["release_date"]) or row["year"]
         return {
             "album_id": album_id,
             "artist": row["artist"],
@@ -5219,7 +5243,7 @@ class Database:
             "critic_score": row["critic_score"],
             "critic_reviews_count": row["critic_reviews_count"],
             "release_date": row["release_date"],
-            "year": row["year"],
+            "year": canonical_year,
             "album_format": row["album_format"],
             "duration": row["duration"],
             "label": row["label"],

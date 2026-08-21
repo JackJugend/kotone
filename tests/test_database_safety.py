@@ -447,6 +447,37 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_manual_release_date_derives_year_without_touching_rankings(self):
+        db = self.make_db()
+        try:
+            db.manual_update_release_details(
+                "manual-date",
+                {
+                    "artist": "Artist",
+                    "album": "Album",
+                    "release_date": "31.01.2021",
+                    "year_ranking_text": "#7",
+                    "all_time_ranking": "#48",
+                    "_section_complete": {"release_date": True, "ranking": True},
+                    "_ranking_fields": ["year_ranking_text", "all_time_ranking"],
+                },
+            )
+            db.manual_update_release_details(
+                "manual-date",
+                {
+                    "release_date": "13.11.1981",
+                    "_section_complete": {"release_date": True},
+                },
+            )
+
+            details = db.get_release_details("manual-date")
+            self.assertEqual(details["release_date"], "13.11.1981")
+            self.assertEqual(details["year"], "1981")
+            self.assertEqual(details["year_ranking_text"], "#7")
+            self.assertEqual(details["all_time_ranking"], "#48")
+        finally:
+            db.close()
+
     def test_manual_aoty_links_are_persisted_with_release_metadata(self):
         db = self.make_db()
         try:
