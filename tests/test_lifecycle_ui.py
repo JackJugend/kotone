@@ -42,6 +42,7 @@ try:
     import background as background_module  # noqa: E402
     import bot as bot_module  # noqa: E402
     import health as health_module  # noqa: E402
+    import release_tabs.details as details_module  # noqa: E402
     import release_tabs.tracklist as tracklist_module  # noqa: E402
     import shared as shared_module  # noqa: E402
     import views as views_module  # noqa: E402
@@ -865,7 +866,7 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             embed = await views_module.build_release_details_embed(item)
 
         self.assertIn(
-            "<:aoty:1539095897084924004> **AOTY User Score:** 88",
+            "<:aoty:1539095897084924004> **User score:**",
             embed.description,
         )
         self.assertIn(
@@ -878,6 +879,51 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
             "<:music_brainz:1539096206083629186> **Label:** —",
             embed.description,
         )
+
+    async def test_details_rounds_critic_score_and_shows_must_hear_kind(self):
+        item = {
+            "album_id": "score-details-test",
+            "artist": "Artist",
+            "album": "Album",
+            "url": "https://example.test/release",
+        }
+        details = {
+            **item,
+            "user_score": "89",
+            "ratings_count": "1000",
+            "critic_score": "84.8",
+            "critic_reviews_count": "20",
+            "must_hear": True,
+            "must_hear_kind": "critics",
+        }
+        with (
+            patch.object(
+                views_module.DATA,
+                "release_with_cached_details",
+                return_value=item,
+            ),
+            patch.object(
+                views_module.DATA,
+                "get_release_details",
+                new=AsyncMock(return_value=details),
+            ),
+            patch.object(
+                shared_module,
+                "score_emoji",
+                side_effect=lambda score: (
+                    f"<:score_{score}:123>" if score in {84, 89} else None
+                ),
+            ),
+        ):
+            embed = await views_module.build_release_details_embed(item)
+
+        self.assertIn("**User score:** <:score_89:123>", embed.description)
+        self.assertIn("**Critic score:** <:score_84:123>", embed.description)
+        self.assertIn(
+            "**Must hear:** <:musthear_critics:1539713389557841981> critics",
+            embed.description,
+        )
+        self.assertNotIn("AOTY User Score", embed.description)
 
     async def test_tracklist_button_is_disabled_without_any_track_rows(self):
         item = {

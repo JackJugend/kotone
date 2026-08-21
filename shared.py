@@ -613,7 +613,9 @@ def build_release_variables(
         year_ranking=value("year_ranking", missing),
         year_ranking_text=value("year_ranking_text", missing),
         all_time_ranking=value("all_time_ranking", missing),
-        must_hear_kind=str(details.get("must_hear_kind") or "").casefold() or None,
+        # Zachowaj wyliczony typ także dla starszych rekordów, które mają
+        # flagę Must Hear, ale nie mają jeszcze zapisanej kolumny kind.
+        must_hear_kind=(display_must_hear_kind if must_hear else None),
         tracklist=tracklist,
         tracklist_text=details.get("tracklist_text") or missing,
         metadata_source=details.get("metadata_source"),
@@ -750,4 +752,3 @@ async def username_autocomplete(
     """Callback Discorda o wymaganej sygnaturze dla standardowych komend."""
 
     return await configured_username_autocomplete(interaction, current, limit=10)
-

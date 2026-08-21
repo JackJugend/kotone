@@ -21,10 +21,12 @@ from shared import (
     load_release_variables,
     score_color,
     score_or_nr,
+    score_or_missing,
     set_aoty_footer,
     source_emoji,
 )
 from ui_constants import DETAILS_BUTTON
+from ui_constants import MUST_HEAR_EMOJIS
 
 
 # ---------------------------------------------------------------------------
@@ -71,19 +73,22 @@ def _provider_line(source: str, label: str, value: object) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _score_section(variables: ReleaseVariables) -> list[str]:
-    # score = aoty_score_value(
-    #     variables.aoty_user_score,
-    #     variables.ratings_count,
-    # )
     aoty_score = aoty_score_or_missing(
         variables.aoty_user_score,
         variables.ratings_count,
+    )
+    critic_score = score_or_missing(variables.critic_score)
+    must_hear_kind = str(variables.must_hear_kind or "").casefold()
+    must_hear_value = (
+        f"{MUST_HEAR_EMOJIS[must_hear_kind]} {must_hear_kind}"
+        if variables.must_hear and must_hear_kind in MUST_HEAR_EMOJIS
+        else MISSING_VALUE
     )
     return [
         _detail_line(
             variables,
             section="score",
-            label="AOTY User Score",
+            label="User score",
             value=aoty_score,
         ),
         _detail_line(
@@ -97,7 +102,7 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="score",
             label="Critic score",
-            value=variables.critic_score,
+            value=critic_score,
         ),
         _detail_line(
             variables,
@@ -109,7 +114,7 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="score",
             label="Must hear",
-            value=variables.must_hear_kind,
+            value=must_hear_value,
         ),
     ]
 
@@ -119,7 +124,7 @@ def _genres_section(variables: ReleaseVariables) -> list[str]:
         _detail_line(
             variables,
             section="genres",
-            label="Genre",
+            label="Genres",
             value=variables.genres_text,
         ),
         _detail_line(
