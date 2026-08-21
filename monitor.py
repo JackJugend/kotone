@@ -35,11 +35,15 @@ from settings import (
     USERS,
 )
 from shared import (
+    aoty_score_or_missing,
     load_release_variables,
     must_hear_title_marker,
     rating_flags_text,
+    release_year_suffix,
     score_color,
     score_icon,
+    score_or_nr,
+    set_aoty_footer,
 )
 from views import SingleRatingView
 
@@ -128,14 +132,25 @@ class RatingMonitor:
         variables = await load_release_variables(item, username=username)
         flags = rating_flags_text(item)
         flags_text = f"  •  {flags}" if flags else ""
+        must_hear = must_hear_title_marker(variables)
+        release_title = (
+            f"{variables.display_artist} — "
+            f"{must_hear + ' ' if must_hear else ''}"
+            f"**{variables.display_album}**"
+            f"{release_year_suffix(variables.year)}"
+        )
+        description_lines = [f"# {score_or_nr(variables.score)}{flags_text}"]
+        if variables.genres:
+            description_lines.append(variables.all_genres_text.title())
+        if variables.secondary_genres:
+            description_lines.append(
+                f"*{variables.secondary_genres_text.title()}*"
+            )
+        if variables.vibes:
+            description_lines.append(f"-# {variables.vibes_text}")
 
         embed = discord.Embed(
-            title=(
-                f"{score_icon(variables.score)} "
-                f"{variables.display_artist} — {must_hear_title_marker(variables)} "
-                f"**{variables.display_album}**"
-                f"{release_year_suffix(variables.year)}"
-            ),
+            title=f"{score_icon(variables.score)} {release_title}",
             url=variables.url,
             description="\n".join(description_lines),
             color=score_color(variables.score),
@@ -150,7 +165,7 @@ class RatingMonitor:
             inline=True,
         )
         embed.add_field(
-            name=f"\🏆 **{variables.year_ranking_text}**",
+            name=f"🏆 **{variables.year_ranking_text}**",
             value=f"for **{variables.year}**",
             inline=True,
         )
@@ -170,7 +185,7 @@ class RatingMonitor:
         set_aoty_footer(
             embed,
             f"{variables.album_format}  •  {variables.release_date}  •  "
-            f"{variables.labels_text}{footer_flags}",
+            f"{variables.labels_text}{flags_text}",
         )
 
         view = SingleRatingView(
