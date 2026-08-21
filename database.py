@@ -3314,7 +3314,7 @@ class Database:
                     FROM change_history
                     WHERE username = ?
                       AND entity_type = 'rating'
-                      AND source = 'monitor'
+                      AND source IN ('monitor', 'monitor_import_delivery')
                       AND album_id IS NOT NULL
                     """,
                     (canonical,),
@@ -3508,11 +3508,16 @@ class Database:
                     or (not old_format and bool(new_format))
                     or existing["sort_timestamp"] is None
                 )
-                # CSV nie może ponownie ogłaszać pozycji, która już była w
-                # SQLite. Zmiany istniejącej oceny pozostają w historii, ale
-                # nie tworzą importowego spamu.
-                queue_notification = False
                 pending_before = bool(existing["notify_pending"])
+                # Naprawiamy także import wykonany przed wprowadzeniem kolejki
+                # powiadomień: jeśli pozycja ma świeżą datę oceny i nigdy nie
+                # została wysłana przez monitor, następny import ją odzyska.
+                # Historia ``monitor`` / ``monitor_import_delivery`` jest
+                # trwałym zabezpieczeniem przed duplikatem.
+                queue_notification = (
+                    not pending_before
+                    and should_queue_new_import(record, album_id)
+                )
                 pending_after = pending_before or queue_notification
                 self.connection.execute(
                     """
