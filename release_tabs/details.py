@@ -113,6 +113,27 @@ def _genre_url_slug(url: object) -> str:
     return _genre_slug(match.group(1)) if match else ""
 
 
+def _label_url_slug(url: object) -> str:
+    """Wyciągnij slug labelu z URL-a AOTY, np. ``74-4ad``."""
+
+    match = re.search(r"/label/(?:\d+-)?([^/?#]+)/?", str(url or "").casefold())
+    return _genre_slug(match.group(1)) if match else ""
+
+
+def _linked_label(labels: list[str], labels_text: object, url: object) -> str:
+    """Linkuj label tylko wtedy, gdy URL wskazuje właśnie na ten label."""
+
+    rendered = str(labels_text or "").strip()
+    target = str(url or "").strip()
+    if not rendered or not target.startswith(("http://", "https://")):
+        return rendered
+    label_names = labels or [part.strip() for part in rendered.split(",") if part.strip()]
+    target_slug = _label_url_slug(target)
+    if target_slug and any(_genre_slug(name) == target_slug for name in label_names):
+        return _markdown_link(rendered, target)
+    return rendered
+
+
 def _linked_genres(values: list[str], urls: list[str], *, bold_first: bool = False) -> str:
     """Linkuj gatunki po nazwie, nigdy po samej pozycji na liście.
 
@@ -327,6 +348,11 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
     musicbrainz_data = variables.source_data.get("musicbrainz") or {}
     country_code = musicbrainz_data.get("release_country")
     country = country_flag_emoji(country_code) or display_value(country_code)
+    country_line = (
+        f"{source_emoji('musicbrainz')} **Country:** {country}"
+        if country != MISSING_VALUE
+        else "**Country:** —"
+    )
     return [
         _detail_line(
             variables,
@@ -353,14 +379,13 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="labels",
             label="Label",
-            value=_markdown_link(variables.labels_text, variables.label_url),
+            value=_linked_label(
+                variables.labels,
+                variables.labels_text,
+                variables.label_url,
+            ),
         ),
-        _detail_line(
-            variables,
-            section="country",
-            label="Country",
-            value=country,
-        )
+        country_line,
     ]
 
 
