@@ -14,10 +14,27 @@ os.environ.setdefault("DISCORD_TOKEN", "test-token")
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="kotone-dbmanual-runtime-"))
 sys.path.insert(0, str(ROOT))
 
-from commands.dbmanual import _parse_tracklist  # noqa: E402
+from commands.dbmanual import _parse_aoty_links, _parse_tracklist  # noqa: E402
 
 
 class DBManualTracklistTests(unittest.TestCase):
+    def test_aoty_links_are_parsed_into_persistent_release_fields(self):
+        self.assertEqual(
+            _parse_aoty_links(
+                "label=https://example.test/label;"
+                "genres=https://example.test/genre/1, https://example.test/genre/2;"
+                "secondary=https://example.test/genre/3"
+            ),
+            {
+                "label_url": "https://example.test/label",
+                "genre_urls": [
+                    "https://example.test/genre/1",
+                    "https://example.test/genre/2",
+                ],
+                "secondary_genre_urls": ["https://example.test/genre/3"],
+            },
+        )
+
     def test_aoty_rows_are_saved_as_tracks_with_scores_separate_from_titles(self):
         tracks = _parse_tracklist(
             "1\t[She Looked Like Me!](https://example.test/song/1)3:13\t89\n"

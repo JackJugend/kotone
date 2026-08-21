@@ -447,6 +447,36 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_manual_aoty_links_are_persisted_with_release_metadata(self):
+        db = self.make_db()
+        try:
+            db.manual_update_release_details(
+                "manual-links",
+                {
+                    "artist": "Artist",
+                    "album": "Album",
+                    "label": "Example",
+                    "label_url": "https://example.test/label",
+                    "genres": ["Dream Pop"],
+                    "genre_urls": ["https://example.test/genre/39-dream-pop"],
+                    "secondary_genres": ["Ambient"],
+                    "secondary_genre_urls": ["https://example.test/genre/ambient"],
+                    "_section_complete": {"labels": True, "genres": True},
+                },
+            )
+            details = db.get_release_details("manual-links")
+            self.assertEqual(details["label_url"], "https://example.test/label")
+            self.assertEqual(
+                details["genre_urls"],
+                ["https://example.test/genre/39-dream-pop"],
+            )
+            self.assertEqual(
+                details["secondary_genre_urls"],
+                ["https://example.test/genre/ambient"],
+            )
+        finally:
+            db.close()
+
     def test_manual_personal_track_scores_keep_review_and_like(self):
         db = self.make_db()
         try:

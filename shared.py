@@ -286,10 +286,12 @@ class ReleaseVariables:
     label: Any = None
     labels: list[str] = field(default_factory=list)
     labels_text: Any = None
+    label_url: str | None = None
 
     # Primary genres.
     genres: list[str] = field(default_factory=list)
     genres_text: Any = None
+    genre_urls: list[str] = field(default_factory=list)
     main_genre: Any = None
     other_genres: Any = None
     other_genres_text: Any = None
@@ -298,6 +300,7 @@ class ReleaseVariables:
     # Secondary genres.
     secondary_genres: list[str] = field(default_factory=list)
     secondary_genres_text: Any = None
+    secondary_genre_urls: list[str] = field(default_factory=list)
 
     # Vibes.
     vibes: list[str] = field(default_factory=list)
@@ -597,8 +600,10 @@ def build_release_variables(
         label=value("label", missing),
         labels=labels,
         labels_text=value("labels_text", ", ".join(labels) if labels else missing),
+        label_url=str(details.get("label_url") or "").strip() or None,
         genres=genres,
         genres_text=", ".join(genres) if genres else missing,
+        genre_urls=list(details.get("genre_urls") or []),
         main_genre=main_genre,
         other_genres=other_genres,
         other_genres_text=other_genres_text,
@@ -607,6 +612,7 @@ def build_release_variables(
         secondary_genres_text=(
             ", ".join(secondary_genres) if secondary_genres else missing
         ),
+        secondary_genre_urls=list(details.get("secondary_genre_urls") or []),
         vibes=vibes,
         vibes_text=value("vibes_text", ", ".join(vibes) if vibes else missing),
         ranking_year=value("ranking_year", missing),

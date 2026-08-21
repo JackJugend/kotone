@@ -21,6 +21,30 @@ def _split_values(value: str | None) -> list[str]:
     ]
 
 
+def _parse_aoty_links(value: str | None) -> dict[str, object]:
+    """Parse optional persistent AOTY links from one slash-command field.
+
+    Example: ``label=https://...;genres=https://...,https://...``.
+    """
+
+    result: dict[str, object] = {}
+    for part in re.split(r"\s*;\s*", str(value or "")):
+        if "=" not in part:
+            continue
+        key, raw = part.split("=", 1)
+        key = key.strip().casefold().replace("-", "_")
+        raw = raw.strip()
+        if not raw:
+            continue
+        if key in {"label", "label_url"}:
+            result["label_url"] = raw
+        elif key in {"genres", "genre_urls"}:
+            result["genre_urls"] = _split_values(raw)
+        elif key in {"secondary", "secondary_genres", "secondary_genre_urls"}:
+            result["secondary_genre_urls"] = _split_values(raw)
+    return result
+
+
 def _parse_track_scores(value: str | None) -> list[str]:
     """Return optional AOTY track scores in the exact supplied order."""
 
@@ -166,10 +190,18 @@ def _section_complete(payload: dict) -> dict[str, bool]:
         ),
         "release_date": payload.get("release_date") not in (None, ""),
         "format": payload.get("album_format") not in (None, ""),
-        "labels": any(payload.get(key) not in (None, "", [], {}) for key in ("label", "labels")),
+        "labels": any(
+            payload.get(key) not in (None, "", [], {})
+            for key in ("label", "labels", "label_url")
+        ),
         "genres": any(
             payload.get(key) not in (None, "", [], {})
-            for key in ("genres", "secondary_genres")
+            for key in (
+                "genres",
+                "genre_urls",
+                "secondary_genres",
+                "secondary_genre_urls",
+            )
         ),
         "vibes": payload.get("vibes") not in (None, "", [], {}),
         "ranking": any(
@@ -266,6 +298,9 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         label="Main label",
         genres="Gatunki po przecinku",
         secondary_genres="Secondary gatunki po przecinku",
+        aoty_links=(
+            "Opcjonalnie: label=URL;genres=URL1,URL2;secondary=URL1,URL2"
+        ),
         aoty_score="AOTY User score",
         ratings_count="AOTY ratings count",
         critic_score="AOTY Critic Score",
@@ -312,6 +347,7 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         label: str | None = None,
         genres: str | None = None,
         secondary_genres: str | None = None,
+        aoty_links: str | None = None,
         aoty_score: str | None = None,
         ratings_count: str | None = None,
         critic_score: str | None = None,
@@ -422,6 +458,7 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
                 "must_hear_kind": must_hear,
                 "tracklist": parsed_tracklist,
             }
+            release_payload.update(_parse_aoty_links(aoty_links))
             release_payload = {
                 key: value
                 for key, value in release_payload.items()

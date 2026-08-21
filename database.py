@@ -884,8 +884,11 @@ class Database:
                     duration TEXT,
                     label TEXT,
                     labels_json TEXT,
+                    label_url TEXT,
                     genres_json TEXT,
+                    genre_urls_json TEXT,
                     secondary_genres_json TEXT,
+                    secondary_genre_urls_json TEXT,
                     vibes_json TEXT,
                     ranking_year TEXT,
                     year_ranking TEXT,
@@ -908,6 +911,9 @@ class Database:
             self._ensure_column("releases", "must_hear_kind", "TEXT")
             self._ensure_column("releases", "all_time_ranking", "TEXT")
             self._ensure_column("releases", "duration", "TEXT")
+            self._ensure_column("releases", "label_url", "TEXT")
+            self._ensure_column("releases", "genre_urls_json", "TEXT")
+            self._ensure_column("releases", "secondary_genre_urls_json", "TEXT")
 
             self.connection.execute(
                 """
@@ -4595,9 +4601,14 @@ class Database:
                     metadata_sources.setdefault("format", inferred_source)
                 if raw_present("duration"):
                     metadata_sources.setdefault("duration", inferred_source)
-                if raw_present("label", "labels_json"):
+                if raw_present("label", "labels_json", "label_url"):
                     metadata_sources.setdefault("labels", inferred_source)
-                if raw_present("genres_json", "secondary_genres_json"):
+                if raw_present(
+                    "genres_json",
+                    "genre_urls_json",
+                    "secondary_genres_json",
+                    "secondary_genre_urls_json",
+                ):
                     metadata_sources.setdefault("genres", inferred_source)
                 if raw_present("vibes_json"):
                     metadata_sources.setdefault("vibes", "aoty")
@@ -4622,8 +4633,13 @@ class Database:
                 ),
                 "release_date": ("release_date", "year"),
                 "format": ("album_format",),
-                "labels": ("label", "labels"),
-                "genres": ("genres", "secondary_genres"),
+                "labels": ("label", "labels", "label_url"),
+                "genres": (
+                    "genres",
+                    "genre_urls",
+                    "secondary_genres",
+                    "secondary_genre_urls",
+                ),
                 "vibes": ("vibes",),
                 "ranking": (
                     "ranking_year",
@@ -4649,12 +4665,18 @@ class Database:
                     album_id, artist, artist_url, album, url, cover_url,
                     user_score, ratings_count, critic_score,
                     critic_reviews_count, release_date, year,
-                    album_format, duration, label, labels_json, genres_json,
-                    secondary_genres_json, vibes_json, ranking_year,
+                    album_format, duration, label, labels_json, label_url,
+                    genres_json, genre_urls_json, secondary_genres_json,
+                    secondary_genre_urls_json, vibes_json, ranking_year,
                     year_ranking, year_ranking_text, all_time_ranking,
                     must_hear, must_hear_kind, metadata_source,
                     metadata_sources_json, fetched_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?
+                )
                 ON CONFLICT(album_id) DO UPDATE SET
                     artist = COALESCE(excluded.artist, releases.artist),
                     artist_url = COALESCE(excluded.artist_url, releases.artist_url),
@@ -4690,11 +4712,25 @@ class Database:
                     label = CASE WHEN ? THEN excluded.label ELSE releases.label END,
                     labels_json = CASE WHEN ? THEN
                         excluded.labels_json ELSE releases.labels_json END,
+                    label_url = CASE WHEN ? THEN
+                        COALESCE(excluded.label_url, releases.label_url)
+                        ELSE releases.label_url END,
                     genres_json = CASE WHEN ? THEN
                         excluded.genres_json ELSE releases.genres_json END,
+                    genre_urls_json = CASE WHEN ? THEN
+                        COALESCE(
+                            NULLIF(excluded.genre_urls_json, '[]'),
+                            releases.genre_urls_json
+                        ) ELSE releases.genre_urls_json END,
                     secondary_genres_json = CASE WHEN ? THEN
                         excluded.secondary_genres_json
                         ELSE releases.secondary_genres_json END,
+                    secondary_genre_urls_json = CASE WHEN ? THEN
+                        COALESCE(
+                            NULLIF(excluded.secondary_genre_urls_json, '[]'),
+                            releases.secondary_genre_urls_json
+                        )
+                        ELSE releases.secondary_genre_urls_json END,
                     vibes_json = CASE WHEN ? THEN
                         excluded.vibes_json ELSE releases.vibes_json END,
                     ranking_year = CASE WHEN ? THEN
@@ -4735,8 +4771,11 @@ class Database:
                     details.get("duration"),
                     details.get("label"),
                     _json_dump(list(details.get("labels") or [])),
+                    details.get("label_url"),
                     _json_dump(list(details.get("genres") or [])),
+                    _json_dump(list(details.get("genre_urls") or [])),
                     _json_dump(list(details.get("secondary_genres") or [])),
+                    _json_dump(list(details.get("secondary_genre_urls") or [])),
                     _json_dump(list(details.get("vibes") or [])),
                     details.get("ranking_year"),
                     details.get("year_ranking"),
@@ -4757,6 +4796,9 @@ class Database:
                     section_complete("duration"),
                     section_complete("labels"),
                     section_complete("labels"),
+                    section_complete("labels"),
+                    section_complete("genres"),
+                    section_complete("genres"),
                     section_complete("genres"),
                     section_complete("genres"),
                     section_complete("vibes"),
@@ -5163,10 +5205,15 @@ class Database:
             "label": row["label"],
             "labels": labels,
             "labels_text": ", ".join(labels) if labels else None,
+            "label_url": row["label_url"],
             "genres": genres,
             "genres_text": ", ".join(genres) if genres else None,
+            "genre_urls": _json_load(row["genre_urls_json"], []),
             "secondary_genres": secondary,
             "secondary_genres_text": ", ".join(secondary) if secondary else None,
+            "secondary_genre_urls": _json_load(
+                row["secondary_genre_urls_json"], []
+            ),
             "vibes": vibes,
             "vibes_text": ", ".join(vibes) if vibes else None,
             "ranking_year": row["ranking_year"],

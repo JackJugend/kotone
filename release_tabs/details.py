@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
+from urllib.parse import quote
 
 import discord
 
@@ -11,7 +13,6 @@ from release_tabs.common import (
     apply_release_identity,
     display_value,
     paginate_description_lines,
-    release_tab_title,
 )
 from shared import (
     ReleaseVariables,
@@ -24,14 +25,100 @@ from shared import (
     score_or_missing,
     set_aoty_footer,
     source_emoji,
+    must_hear_title_marker,
 )
 from ui_constants import DETAILS_BUTTON
 from ui_constants import MUST_HEAR_EMOJIS
+from status_emoji_registry import status_emoji
 
 
 # ---------------------------------------------------------------------------
 # Formatowanie pojedynczych wierszy
 # ---------------------------------------------------------------------------
+
+_AOTY_BASE = "https://www.albumoftheyear.org"
+
+
+def _markdown_link(text: object, url: object) -> str:
+    rendered = str(text or "").strip()
+    target = str(url or "").strip()
+    if not rendered or not target.startswith(("http://", "https://")):
+        return rendered
+    return f"[{rendered}]({target})"
+
+
+def _ratings_url(album_url: str) -> str | None:
+    target = str(album_url or "").strip().rstrip("/")
+    if not target or "albumoftheyear.org/album/" not in target:
+        return None
+    if target.endswith(".php"):
+        target = target[:-4]
+    return f"{target}/user-reviews/?type=ratings"
+
+
+def _must_hear_url(kind: str | None) -> str | None:
+    if kind not in {"users", "critics", "both"}:
+        return None
+    return f"{_AOTY_BASE}/must-hear/{kind}/"
+
+
+def _ranking_number(value: object) -> int | None:
+    match = re.search(r"\d+", str(value or ""))
+    return int(match.group()) if match else None
+
+
+def _ranking_url(value: object, *, year: object = None, all_time: bool = False) -> str | None:
+    rank = _ranking_number(value)
+    if rank is None:
+        return None
+    if all_time:
+        page = ((rank - 1) // 25) + 1
+        return f"{_AOTY_BASE}/ratings/user-highest-rated/all/{page}/#rank-{rank}"
+    year_text = str(year or "").strip()
+    if not re.fullmatch(r"\d{4}", year_text):
+        return None
+    return f"{_AOTY_BASE}/ratings/user-highest-rated/{year_text}/#rank-{rank}"
+
+
+def _release_month_url(value: object) -> str | None:
+    match = re.fullmatch(r"(\d{2})\.(\d{2})\.(\d{4})", str(value or "").strip())
+    if not match:
+        return None
+    _, month, year = match.groups()
+    month_names = (
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    )
+    month_index = int(month) - 1
+    if not 0 <= month_index < len(month_names):
+        return None
+    month_name = month_names[month_index]
+    return f"{_AOTY_BASE}/{year}/releases/{month_name}-{month}/"
+
+
+def _vibe_url(value: object) -> str | None:
+    text = str(value or "").strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")
+    return f"{_AOTY_BASE}/all/releases/vibe/{quote(slug)}/" if slug else None
+
+
+def _linked_genres(values: list[str], urls: list[str], *, bold_first: bool = False) -> str:
+    parts: list[str] = []
+    for index, value in enumerate(values):
+        linked = _markdown_link(value, urls[index] if index < len(urls) else None)
+        parts.append(f"**{linked}**" if bold_first and index == 0 else linked)
+    return ", ".join(parts) if parts else MISSING_VALUE
+
+
+def _details_title(variables: ReleaseVariables) -> str:
+    tab = status_emoji("details") or DETAILS_BUTTON
+    artist = _markdown_link(variables.display_artist, variables.artist_url)
+    album = _markdown_link(variables.display_album, variables.album_url or variables.url)
+    kind = str(variables.must_hear_kind or "").casefold()
+    marker = must_hear_title_marker(variables)
+    if marker and (target := _must_hear_url(kind)):
+        marker = _markdown_link(marker, target)
+    return f"{tab} {artist} — {marker + ' ' if marker else ''}{album}".strip()
 
 def _source_prefix(
     variables: ReleaseVariables,
@@ -95,7 +182,10 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="score",
             label="Ratings",
-            value=variables.ratings_count,
+            value=_markdown_link(
+                variables.ratings_count,
+                _ratings_url(variables.album_url or variables.url),
+            ),
         ),
 
         _detail_line(
@@ -128,7 +218,13 @@ def _ranking_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="ranking",
             label=label,
-            value=variables.year_ranking_text,
+            value=_markdown_link(
+                variables.year_ranking_text,
+                _ranking_url(
+                    variables.year_ranking_text,
+                    year=variables.ranking_year or variables.year,
+                ),
+            ),
         )
     ]
     if display_value(variables.all_time_ranking) != MISSING_VALUE:
@@ -137,7 +233,10 @@ def _ranking_section(variables: ReleaseVariables) -> list[str]:
                 variables,
                 section="ranking",
                 label="All-time ratings",
-                value=variables.all_time_ranking,
+                value=_markdown_link(
+                    variables.all_time_ranking,
+                    _ranking_url(variables.all_time_ranking, all_time=True),
+                ),
             )
         )
     return lines
@@ -149,32 +248,50 @@ def _genres_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="genres",
             label="Genres",
-            value=variables.genres_text,
+            value=_linked_genres(
+                variables.genres,
+                variables.genre_urls,
+                bold_first=True,
+            ),
         ),
         _detail_line(
             variables,
             section="genres",
             label="Secondary genres",
-            value=variables.secondary_genres_text,
+            value=_linked_genres(
+                variables.secondary_genres,
+                variables.secondary_genre_urls,
+            ),
         ),
         _detail_line(
             variables,
             section="vibes",
             label="Vibes",
-            value=variables.vibes_text,
+            value=(
+                ", ".join(
+                    _markdown_link(value, _vibe_url(value))
+                    for value in variables.vibes
+                )
+                if variables.vibes
+                else MISSING_VALUE
+            ),
         ),
     ]
 
 
 def _release_section(variables: ReleaseVariables) -> list[str]:
-    country_code = source_data.get("release_country")
+    musicbrainz_data = variables.source_data.get("musicbrainz") or {}
+    country_code = musicbrainz_data.get("release_country")
     country = country_flag_emoji(country_code) or display_value(country_code)
     return [
         _detail_line(
             variables,
             section="release_date",
             label="Release date",
-            value=variables.release_date,
+            value=_markdown_link(
+                variables.release_date,
+                _release_month_url(variables.release_date),
+            ),
         ),
         _detail_line(
             variables,
@@ -192,7 +309,7 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="labels",
             label="Label",
-            value=variables.labels_text,
+            value=_markdown_link(variables.labels_text, variables.label_url),
         ),
         _detail_line(
             variables,
@@ -281,7 +398,7 @@ def _build_release_details_embed(
 ) -> discord.Embed:
     """Zbuduj jedną stronę wspólnej zakładki szczegółów."""
 
-    title = release_tab_title(DETAILS_BUTTON, variables)
+    title = _details_title(variables)
     if page_count and page_count > 1 and page_number:
         title = f"{title}  •  [{page_number}/{page_count}]"
     embed = discord.Embed(

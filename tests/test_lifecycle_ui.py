@@ -871,7 +871,7 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(
             "<:music_brainz:1539096206083629186> "
-            "**Release date:** 01.12.1996",
+            "**Release date:** [01.12.1996](https://www.albumoftheyear.org/1996/releases/december-12/)",
             embed.description,
         )
         self.assertIn("**Label:** —", embed.description)
