@@ -447,6 +447,23 @@ def source_emoji(source: str) -> str:
 # Jedno źródło zmiennych wydania
 # ---------------------------------------------------------------------------
 
+def _release_url_or_id_route(item: dict, details: dict, album_id: str) -> str:
+    """Return a stored AOTY URL or its stable ID-only fallback route.
+
+    Manual/CSV records may know an AOTY album ID before the scraper has saved
+    a canonical slug.  The ID-only public route is valid and lets every
+    command retain a working embed title link instead of silently dropping it.
+    """
+
+    for value in (item.get("url"), item.get("album_url"), details.get("url")):
+        url = str(value or "").strip()
+        if url and url.casefold() not in {"none", "null", "—"}:
+            return url
+    if str(album_id).isdigit():
+        return f"https://www.albumoftheyear.org/album/{album_id}/"
+    return ""
+
+
 def build_release_variables(
     item: dict | None,
     details: dict | None = None,
@@ -502,6 +519,7 @@ def build_release_variables(
     critic_score = value("critic_score", missing)
     critic_reviews_count = value("critic_reviews_count", missing)
     album_id = str(item.get("album_id") or details.get("album_id") or "")
+    release_url = _release_url_or_id_route(item, details, album_id)
     # Prefer the durable release cover, but preserve a compact rating-card URL
     # when it is the only known artwork. The badge endpoint receives that URL
     # explicitly, so every tab can use the same Must Hear cover even before a
@@ -567,7 +585,7 @@ def build_release_variables(
         display_artist=display_romanized_name(artist),
         display_album=display_romanized_name(album),
         date=str(item.get("date") or missing),
-        url=str(item.get("url") or details.get("url") or ""),
+        url=release_url,
         raw_cover=raw_cover,
         cover=display_cover,
         release_format=item.get("release_format") or details.get("album_format"),
@@ -577,11 +595,7 @@ def build_release_variables(
             or details.get("artist_url")
             or ""
         ),
-        album_url=str(
-            item.get("url")
-            or details.get("url")
-            or ""
-        ),
+        album_url=release_url,
         user_score=user_score,
         aoty_user_score=user_score,
         ratings_count=ratings_count,

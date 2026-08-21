@@ -24,7 +24,7 @@
       "lastfm_username": "Gan5672"
     }
   },
-    "check_interval": 1800,
+    "check_interval": 3600,
     "rating_fetch_limits": {
         "lp": 500,
         "ep": 300,
@@ -48,11 +48,12 @@
     },
     "album_lookup_fallback_limit": 1000,
     "runtime": {
-        "profile_sync_interval": 1800,
-        "full_sync_interval": 21600,
+        "profile_sync_interval": 21600,
+        "full_sync_interval": 86400,
         "quick_rating_limit_per_format": 20,
-        "detail_enrich_per_cycle": 2,
-        "release_enrich_per_cycle": 2,
+        "quick_special_check_interval": 3600,
+        "detail_enrich_per_cycle": 1,
+        "release_enrich_per_cycle": 1,
         "aoty_min_request_interval": 4.0,
         "aoty_max_retries": 0,
         "aoty_circuit_failures": 2,
@@ -61,19 +62,19 @@
         "aoty_cache_max_entries": 512,
         "aoty_connect_timeout": 8,
         "aoty_read_timeout": 25,
-        "rating_detail_ttl": 3600,
-        "release_detail_ttl": 43200,
+        "rating_detail_ttl": 604800,
+        "release_detail_ttl": 604800,
         "local_database_backup_interval": 86400,
         "profile_rating_archive_interval": 86400,
         "profile_rating_archive_formats_per_cycle": 1,
         "profile_rating_archive_limit_per_format": 0,
         "archive_worker_start_delay": 15,
-        "archive_worker_rest_seconds": 4,
+        "archive_worker_rest_seconds": 15,
         "archive_worker_error_sleep": 300,
         "archive_worker_idle_seconds": 300,
         "aoty_archive_max_pages": 500,
-        "aoty_maintenance_min_request_interval": 8.0,
-        "enrich_worker_rest_seconds": 12,
-        "detail_change_scan_interval": 43200
+        "aoty_maintenance_min_request_interval": 15.0,
+        "enrich_worker_rest_seconds": 30,
+        "detail_change_scan_interval": 604800
     }
 }

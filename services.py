@@ -48,6 +48,7 @@ from settings import (
     PROFILE_RATING_ARCHIVE_FORMATS_PER_CYCLE,
     PROFILE_RATING_ARCHIVE_INTERVAL,
     PROFILE_RATING_ARCHIVE_LIMIT_PER_FORMAT,
+    QUICK_SPECIAL_CHECK_INTERVAL,
     QUICK_RATING_LIMIT_PER_FORMAT,
     MUSICBRAINZ_FALLBACK_ENABLED,
     MUSICBRAINZ_FALLBACK_RETRY_INTERVAL,
@@ -84,6 +85,8 @@ class DataService:
         self._discogs_last_error: str | None = None
         self._lastfm_release_retry_after: dict[str, float] = {}
         self._artist_metadata_cursor: dict[str, int] = {}
+        self._next_quick_special_check: dict[str, float] = {}
+        self._quick_special_cursor: dict[str, int] = {}
 
     @staticmethod
     def _value_present(value) -> bool:
@@ -1012,6 +1015,25 @@ class DataService:
             )
         return limits
 
+    def _due_quick_special_format(self, username: str) -> str | None:
+        """Return one due special AOTY route instead of both every cycle."""
+
+        enabled = [
+            key
+            for key in ("single", "music_video")
+            if int(RATING_FETCH_LIMITS.get(key, 0) or 0) > 0
+        ]
+        if not enabled:
+            return None
+        key = str(username).casefold()
+        now = time.time()
+        if now < self._next_quick_special_check.get(key, 0.0):
+            return None
+        index = self._quick_special_cursor.get(key, 0) % len(enabled)
+        self._quick_special_cursor[key] = (index + 1) % len(enabled)
+        self._next_quick_special_check[key] = now + QUICK_SPECIAL_CHECK_INTERVAL
+        return enabled[index]
+
     async def fetch_ratings_live(
         self,
         username: str,
@@ -1045,12 +1067,14 @@ class DataService:
             50,
             max(20, QUICK_RATING_LIMIT_PER_FORMAT * 2),
         )
+        special_format = self._due_quick_special_format(username)
         recent = await _thread_call(
             priority,
             aoty.get_recent_ratings,
             username,
             recent_count,
             "all",
+            special_format=special_format,
         )
 
         if getattr(recent, "stale", False):

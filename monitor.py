@@ -24,7 +24,7 @@ import requests
 import aoty
 from avatar_emojis import AvatarEmojiSynchronizer
 from database import DB
-from http_client import PRIORITY_BACKGROUND, PRIORITY_INTERACTIVE
+from http_client import PRIORITY_INTERACTIVE, PRIORITY_NORMAL
 from services import DATA
 from settings import (
     CHANNEL_ID,
@@ -360,8 +360,6 @@ class RatingMonitor:
 
             print(f"[{prefix}] Sprawdzam {username}...")
 
-            await self._refresh_profile_if_due(username, manual=manual)
-
             stamps = DB.sync_timestamps(username)
             first_sync = not stamps.get("ratings_synced_at")
             monitor_version = DB.get_monitor_version(username)
@@ -386,7 +384,7 @@ class RatingMonitor:
                 ratings = await DATA.fetch_ratings_live(
                     username,
                     full=full,
-                    priority=PRIORITY_INTERACTIVE if manual else PRIORITY_BACKGROUND,
+                    priority=PRIORITY_INTERACTIVE if manual else PRIORITY_NORMAL,
                 )
             except aoty.AOTYRateLimit as exc:
                 message = str(exc)
@@ -412,6 +410,7 @@ class RatingMonitor:
                 # disabled formats below.
                 DB.set_monitor_version(username, MONITOR_STATE_VERSION)
                 DB.mark_sync_success(username, full=full)
+                await self._refresh_profile_if_due(username, manual=manual)
                 DB.backup_if_due()
                 print(
                     f"[AOTY] {username}: 0 ocen w formatach monitorowanych; "
@@ -442,6 +441,7 @@ class RatingMonitor:
                 # per-format archive owns format-specific removal handling.
                 DB.set_monitor_version(username, MONITOR_STATE_VERSION)
                 DB.mark_sync_success(username, full=full)
+                await self._refresh_profile_if_due(username, manual=manual)
                 DB.backup_if_due()
                 print(
                     f"[AOTY] {username}: seed/migracja — zapisano "
@@ -540,6 +540,11 @@ class RatingMonitor:
 
             DB.set_monitor_version(username, MONITOR_STATE_VERSION)
             DB.mark_sync_success(username, full=full)
+
+            # Profile counters/favorites are lower-value metadata. Refresh
+            # them only after the monitor has compared ratings and delivered
+            # every notification, so they can never delay a new-score alert.
+            await self._refresh_profile_if_due(username, manual=manual)
 
             # Pełne archiwum i enrichment mają osobnego workera. Monitor
             # kończy szybko, więc wielostronicowy bootstrap nie przesuwa

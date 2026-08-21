@@ -512,7 +512,9 @@ def _build_release_details_embed(
         username=username,
         author_icon_url=author_icon_url,
     )
-    footer = f"AOTY • {score_or_nr(variables.score)}" if username else "AOTY"
+    # Ocena jest już widoczna w treści zakładki; nie powtarzaj jej jako
+    # custom emoji w stopce.
+    footer = "AOTY"
     if page_count and page_count > 1 and page_number:
         footer = f"{footer} • [{page_number}/{page_count}]"
     set_aoty_footer(embed, footer)

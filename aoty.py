@@ -3366,6 +3366,8 @@ def get_recent_ratings(
     username: str,
     count: int = 20,
     format_key: str = "all",
+    *,
+    special_format: str | None = None,
 ) -> list[dict]:
     try:
         count = max(1, min(50, int(count)))
@@ -3375,9 +3377,24 @@ def get_recent_ratings(
     if format_key and format_key != "all":
         return get_ratings_for_format(username, format_key, count)[:count]
 
-    # The root ratings route contains album-like formats. Single and Music
-    # Video live behind their own AOTY filters, so merge those separately.
+    # The root route contains all album-like formats.  Singles and music
+    # videos are separate routes.  Normal callers retain the complete legacy
+    # result, while the frequent monitor may request just one rotating special
+    # route to avoid tripling AOTY traffic every cycle.
     album_like = _get_ratings_from_route(username, slug=None, limit=count)
+    special_key = str(special_format or "").strip().casefold()
+    if special_key:
+        special_info = RATING_FORMATS.get(special_key)
+        if special_info:
+            special = _get_ratings_from_route(
+                username,
+                slug=special_info["slug"],
+                limit=count,
+                forced_format=special_info["label"],
+            )
+            return _merge_rating_lists(album_like, special)[:count]
+        return album_like[:count]
+
     singles = _get_ratings_from_route(
         username,
         slug="single",
@@ -3390,7 +3407,6 @@ def get_recent_ratings(
         limit=count,
         forced_format="Music Video",
     )
-
     return _merge_rating_lists(album_like, singles, music_videos)[:count]
 
 

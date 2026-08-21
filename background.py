@@ -157,9 +157,31 @@ class BackgroundWorker:
             self.last_error = "AOTY challenge active; MusicBrainz fallback idle."
             return ARCHIVE_WORKER_IDLE_SECONDS
 
-        # Phase 1: ratings first. Exactly one configured user's bounded format
-        # batch per pass keeps pressure predictable, while the short rest means
-        # first bootstrap no longer waits 20 minutes for every next format.
+        # Phase 1: fill missing SQLite data before crawling already known
+        # rating-format pages.  ``enrich_user`` orders incomplete personal
+        # details and partial public releases ahead of stale maintenance, so
+        # a useful gap is repaired before any historical AOTY archive request.
+        for username in self._ordered_users_from(self._enrich_cursor):
+            try:
+                result = await self._enrich_one_user(username)
+            except Exception:
+                self._enrich_cursor = self._cursor_after(username)
+                raise
+
+            if result.get("errors"):
+                self._enrich_cursor = self._cursor_after(username)
+                self.last_error = "enrichment error"
+                return ARCHIVE_WORKER_ERROR_SLEEP
+
+            if result.get("releases") or result.get("details"):
+                self._enrich_cursor = self._cursor_after(username)
+                self.last_success_at = time.time()
+                self.last_error = None
+                return ENRICH_WORKER_REST_SECONDS
+
+        # Phase 2: one bounded historical format batch. It stays strictly
+        # below monitor priority and runs only after there was no obvious gap
+        # to fill in the durable cache.
         for username in self._ordered_users_from(self._cursor):
             try:
                 result = await DATA.archive_profile_ratings(
@@ -190,7 +212,7 @@ class BackgroundWorker:
             self.last_error = None
             return ARCHIVE_WORKER_REST_SECONDS
 
-        # Phase 2: every format is complete/not due. Fill public album data,
+        # Phase 3: format archive is idle. Repair stale public album data,
         # reviews and Track Ratings a few rows at a time. This may take longer
         # than the initial rating bootstrap, but never blocks the monitor.
         for username in self._ordered_users_from(self._enrich_cursor):

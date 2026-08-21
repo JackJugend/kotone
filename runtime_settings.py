@@ -56,6 +56,14 @@ QUICK_RATING_LIMIT_PER_FORMAT = _runtime_int(
     20,
     5,
 )
+# The root AOTY ratings route covers album-like formats. Singles and music
+# videos live behind separate routes, therefore checking both on every monitor
+# cycle triples traffic.  They are rotated by the monitor on this cadence.
+QUICK_SPECIAL_CHECK_INTERVAL = _runtime_int(
+    "quick_special_check_interval",
+    60 * 60,
+    5 * 60,
+)
 
 DETAIL_ENRICH_PER_CYCLE = _runtime_int("detail_enrich_per_cycle", 2, 0)
 RELEASE_ENRICH_PER_CYCLE = _runtime_int("release_enrich_per_cycle", 2, 0)
