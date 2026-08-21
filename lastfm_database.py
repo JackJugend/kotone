@@ -508,12 +508,14 @@ class LastFMDatabase:
                     WHERE profile_key = ? AND aoty_album_id = ?""",
                     (key, aoty_id),
                 ).fetchone()
-            else:
-                row = self.connection.execute(
-                    """SELECT COUNT(*) AS count FROM scrobbles
-                    WHERE profile_key = ? AND album_key = ?""",
-                    (key, identity),
-                ).fetchone()
+                count = int(row["count"] or 0)
+                if count:
+                    return count
+            row = self.connection.execute(
+                """SELECT COUNT(*) AS count FROM scrobbles
+                WHERE profile_key = ? AND album_key = ?""",
+                (key, identity),
+            ).fetchone()
         return int(row["count"] or 0)
 
 

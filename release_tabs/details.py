@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import re
 from urllib.parse import quote
 
 import discord
 
+from lastfm_globals import LASTFM_DB
 from release_tabs.common import (
     MISSING_VALUE,
     apply_release_identity,
@@ -26,7 +26,9 @@ from shared import (
     set_aoty_footer,
     source_emoji,
     must_hear_title_marker,
+    user_avatar_emoji,
 )
+from settings import KOTONE_USERS
 from ui_constants import DETAILS_BUTTON
 from ui_constants import MUST_HEAR_EMOJIS
 from status_emoji_registry import status_emoji
@@ -265,6 +267,7 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
             label="Critic reviews",
             value=variables.critic_reviews_count,
         ),
+        *_ranking_section(variables),
         _detail_line(
             variables,
             section="score",
@@ -274,11 +277,13 @@ def _score_section(variables: ReleaseVariables) -> list[str]:
     ]
 
 def _ranking_section(variables: ReleaseVariables) -> list[str]:
+    """Rankingi należą do bloku ocen, bez osobnego nagłówka."""
+
     ranking_year = display_value(variables.ranking_year)
     if ranking_year == MISSING_VALUE:
         ranking_year = display_value(variables.year)
     label = f"{ranking_year} ratings" if ranking_year != MISSING_VALUE else "Year ratings"
-    lines = [
+    return [
         _detail_line(
             variables,
             section="ranking",
@@ -290,21 +295,17 @@ def _ranking_section(variables: ReleaseVariables) -> list[str]:
                     year=variables.ranking_year or variables.year,
                 ),
             ),
-        )
+        ),
+        _detail_line(
+            variables,
+            section="ranking",
+            label="All-time ratings",
+            value=_markdown_link(
+                variables.all_time_ranking,
+                _ranking_url(variables.all_time_ranking, all_time=True),
+            ),
+        ),
     ]
-    if display_value(variables.all_time_ranking) != MISSING_VALUE:
-        lines.append(
-            _detail_line(
-                variables,
-                section="ranking",
-                label="All-time ratings",
-                value=_markdown_link(
-                    variables.all_time_ranking,
-                    _ranking_url(variables.all_time_ranking, all_time=True),
-                ),
-            )
-        )
-    return lines
 
 
 def _genres_section(variables: ReleaseVariables) -> list[str]:
@@ -389,57 +390,78 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
     ]
 
 
-def _musicbrainz_section(source_data: Mapping[str, object]) -> list[str]:
-    rows = (
-        ("MusicBrainz release ID", source_data.get("musicbrainz_release_id")),
-        (
-            "MusicBrainz release-group ID",
-            source_data.get("musicbrainz_release_group_id"),
-        ),
-        # ("Release country", country),
-    )
-    return [
-        line
-        for label, value in rows
-        if (line := _provider_line("musicbrainz", label, value))
-    ]
+def _lastfm_section(variables: ReleaseVariables) -> list[str]:
+    """Pokaż tylko faktycznie posiadane dane Last.fm i liczniki Kotone."""
 
-
-def _lastfm_section(source_data: Mapping[str, object]) -> list[str]:
+    source_data = variables.source_data.get("lastfm") or {}
     rows = (
         ("Listeners", source_data.get("listeners_count")),
         ("Scrobbles", source_data.get("playcount")),
     )
-    return [
+    lines = [
         line
         for label, value in rows
         if (line := _provider_line("lastfm", label, value))
     ]
 
-
-def _discogs_section(source_data: Mapping[str, object]) -> list[str]:
-    """Show only durable Discogs identity, not a redundant source summary."""
-
-    return [
-        line
-        for label, value in (
-            ("Discogs release ID", source_data.get("discogs_release_id")),
+    musicbrainz_data = variables.source_data.get("musicbrainz") or {}
+    for name, profile in KOTONE_USERS.items():
+        lastfm_username = str(profile.get("lastfm_username") or "").strip()
+        if not lastfm_username:
+            continue
+        # Nie pokazujemy fikcyjnego zera przed pierwszym zapisem profilu lub
+        # historii. Zero pozostaje prawidłową wartością, gdy archiwum istnieje.
+        profile_data = LASTFM_DB.get_profile(lastfm_username)
+        progress = LASTFM_DB.archive_progress(lastfm_username)
+        if profile_data is None and not int(progress.get("scrobbles") or 0):
+            continue
+        count = LASTFM_DB.album_scrobble_count(
+            lastfm_username,
+            variables.album,
+            artist=variables.artist,
+            album_mbid=musicbrainz_data.get("musicbrainz_release_group_id"),
+            aoty_album_id=variables.album_id,
         )
-        if (line := _provider_line("discogs", label, value))
+        avatar_key = str(profile.get("aoty_username") or name)
+        avatar = user_avatar_emoji(avatar_key)
+        prefix = " ".join(
+            part for part in (source_emoji("lastfm"), avatar, str(name)) if part
+        )
+        lines.append(f"{prefix} **scrobbles:** {count}")
+    return lines
+
+
+def _identity_section(variables: ReleaseVariables) -> list[str]:
+    """Zawsze ostatnia strona: trwałe identyfikatory providerów."""
+
+    musicbrainz_data = variables.source_data.get("musicbrainz") or {}
+    discogs_data = variables.source_data.get("discogs") or {}
+    album_id = display_value(variables.album_id)
+    discogs_id = display_value(discogs_data.get("discogs_release_id"))
+    musicbrainz_release_id = display_value(musicbrainz_data.get("musicbrainz_release_id"))
+    musicbrainz_group_id = display_value(
+        musicbrainz_data.get("musicbrainz_release_group_id")
+    )
+    return [
+        f"{source_emoji('aoty')} **Album ID:** "
+        f"{_markdown_link(album_id, variables.album_url or variables.url)}",
+        f"{source_emoji('discogs')} **Release ID:** "
+        f"{_markdown_link(discogs_id, f'https://www.discogs.com/release/{quote(discogs_id)}' if discogs_id != MISSING_VALUE else None)}",
+        f"{source_emoji('musicbrainz')} **Release ID:** "
+        f"{_markdown_link(musicbrainz_release_id, f'https://musicbrainz.org/release/{quote(musicbrainz_release_id)}' if musicbrainz_release_id != MISSING_VALUE else None)}",
+        f"{source_emoji('musicbrainz')} **Release Group ID:** "
+        f"{_markdown_link(musicbrainz_group_id, f'https://musicbrainz.org/release-group/{quote(musicbrainz_group_id)}' if musicbrainz_group_id != MISSING_VALUE else None)}",
     ]
 
 
-def _description_lines(variables: ReleaseVariables) -> list[str]:
-    """Złożyć sekcje w jednym, czytelnym miejscu i stałej kolejności."""
+def _content_description_lines(variables: ReleaseVariables) -> list[str]:
+    """Główne sekcje details, bez identyfikatorów z końcowej strony."""
 
     sections = [
         _score_section(variables),
         _genres_section(variables),
         _release_section(variables),
-        _ranking_section(variables),
-        _musicbrainz_section(variables.source_data.get("musicbrainz") or {}),
-        _lastfm_section(variables.source_data.get("lastfm") or {}),
-        _discogs_section(variables.source_data.get("discogs") or {}),
+        _lastfm_section(variables),
     ]
 
     lines: list[str] = []
@@ -469,7 +491,8 @@ def _build_release_details_embed(
 
     title = _details_title(variables)
     if page_count and page_count > 1 and page_number:
-        title = f"{title}  •  [{page_number}/{page_count}]"
+        suffix = f"  •  [{page_number}/{page_count}]"
+        title = title[: 256 - len(suffix)].rstrip() + suffix
     embed = discord.Embed(
         title=title,
         url=variables.url or None,
@@ -500,7 +523,10 @@ async def build_release_details_embeds(
         username=username,
         missing=MISSING_VALUE,
     )
-    descriptions = paginate_description_lines(_description_lines(variables))
+    descriptions = paginate_description_lines(_content_description_lines(variables))
+    # Identyfikatory są zawsze na osobnej, ostatniej stronie — nie mieszają
+    # się z opisem wydania i nie znikają przez paginację wcześniejszych pól.
+    descriptions.append("\n".join(_identity_section(variables)))
     return [
         _build_release_details_embed(
             variables,
