@@ -43,8 +43,25 @@ def normalized_text(value) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
+def normalized_release_title(value) -> str:
+    """Return a conservative comparison key for an album title.
+
+    AOTY's export occasionally omits purely decorative wrapping characters
+    present in the release page title (for example ``<K>`` -> ``K``).  They
+    must not prevent an otherwise exact import match, but the original title
+    remains untouched everywhere it is displayed or persisted.
+    """
+
+    text = normalized_text(value)
+    if len(text) >= 2 and text[0] in "<[{(" and text[-1] in ">]})":
+        inner = text[1:-1].strip()
+        if inner:
+            return inner
+    return text
+
+
 def normalized_identity(artist, album) -> tuple[str, str]:
-    return normalized_text(artist), normalized_text(album)
+    return normalized_text(artist), normalized_release_title(album)
 
 
 def normalized_format(value) -> str:

@@ -3187,6 +3187,7 @@ class Database:
         from rating_import import (  # Local import avoids a persistence cycle.
             normalized_format,
             normalized_identity,
+            normalized_release_title,
             normalized_text,
         )
 
@@ -3255,7 +3256,7 @@ class Database:
             }
 
         def add_title_candidate(target: dict, row) -> None:
-            title_key = normalized_text(row["album"])
+            title_key = normalized_release_title(row["album"])
             if not title_key:
                 return
             identity_target: dict = {}
@@ -3395,7 +3396,7 @@ class Database:
                 pool = (
                     current_candidates.get(key)
                     or current_title_candidates.get(
-                        normalized_text(record.get("album"))
+                        normalized_release_title(record.get("album"))
                     )
                     or scoped_candidates.get(key)
                 )

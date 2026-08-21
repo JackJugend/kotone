@@ -264,6 +264,29 @@ class RatingImportDatabaseTests(unittest.TestCase):
         self.assertEqual(result["queued_notifications"], 0)
         self.assertFalse(self.db.get_rating("enso", "cached-id")["notify_pending"])
 
+    def test_import_matches_aoty_title_without_decorative_brackets(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "hee-jin-k",
+                "artist": "HeeJin",
+                "album": "<K>",
+                "score": "70",
+                "release_format": "EP",
+            },
+        )
+        record = {
+            **self._record(artist="HeeJin", album="K", score="78"),
+            "release_format": "EP",
+            "sort_timestamp": time.time(),
+        }
+
+        result = self.db.import_official_ratings("enso", [record])
+
+        self.assertEqual(result["unmatched"], [])
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(self.db.get_rating("enso", "hee-jin-k")["score"], "78")
+
     def test_changed_csv_row_keeps_old_score_for_offline_monitor_delivery(self):
         self.db.upsert_rating(
             "enso",
