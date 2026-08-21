@@ -137,6 +137,32 @@ class LastFMArchiveDatabaseTests(unittest.TestCase):
             3,
         )
 
+    def test_album_counter_falls_back_to_canonical_names_when_mbid_differs(self):
+        """A Last.fm release-group ID must not hide imported scrobbles."""
+
+        self.db.import_tracks(
+            "enso",
+            [
+                {
+                    "played_at": 100,
+                    "artist": "Cocteau Twins",
+                    "album": "Heaven or Las Vegas",
+                    "track": "Cherry-Coloured Funk",
+                    "album_mbid": "lastfm-release-group-id",
+                }
+            ],
+        )
+
+        self.assertEqual(
+            self.db.album_scrobble_count(
+                "enso",
+                "Heaven or Las Vegas",
+                artist="Cocteau Twins",
+                album_mbid="kotone-release-group-id",
+            ),
+            1,
+        )
+
     def test_offline_csv_marks_history_complete_without_a_row_source_column(self):
         self.db.import_tracks(
             "enso",

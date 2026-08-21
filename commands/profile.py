@@ -34,13 +34,39 @@ from ui_constants import (
 from views import ProfilePagerView
 
 
+def _cached_release_url(item: dict) -> str:
+    """Return a durable AOTY release URL, even for older imported rows.
+
+    Historical CSV/manual rows may have the AOTY album ID before a scraper
+    captured its canonical slug.  The ID-only route is valid on AOTY and is
+    preferable to rendering a broken Markdown link such as ``(None)``.
+    """
+
+    url = str(item.get("url") or item.get("album_url") or "").strip()
+    if url and url.casefold() not in {"none", "null", "—"}:
+        return url
+
+    album_id = str(item.get("album_id") or "").strip()
+    if album_id.isdigit():
+        return f"{aoty.BASE_URL}/album/{album_id}/"
+    return ""
+
+
+def _linked_release_text(artist: str, album: str, item: dict) -> str:
+    """Render a release with a link only when a valid URL is available."""
+
+    label = f"{artist} — {album}"
+    url = _cached_release_url(item)
+    return f"[{label}]({url})" if url else label
+
+
 def _favorite_line(item: dict) -> str:
-    url = item.get("url")
+    url = _cached_release_url(item)
     item_type = item.get("type")
 
     if item_type == "artist":
         name = display_romanized_name(item.get("name") or "Nieznany artysta")
-        return f"\⭐ **[{name}]({url})**"
+        return f"\⭐ **[{name}]({url})**" if url else f"\⭐ **{name}**"
 
     album = display_romanized_name(
         item.get("album") or item.get("name") or "Nieznane wydanie"
@@ -49,21 +75,21 @@ def _favorite_line(item: dict) -> str:
     display_artist = display_romanized_name(artist) if artist else None
 
     if display_artist:
-        return f"\💿 **[{display_artist} — {album}]({url})**"
+        return f"\💿 **{_linked_release_text(display_artist, album, item)}**"
 
-    return f"\💿 **[{album}]({url})**"
+    return f"\💿 **[{album}]({url})**" if url else f"\💿 **{album}**"
 
 
 def _recent_line(item: dict) -> str:
     artist = display_romanized_name(item.get("artist") or "Nieznany artysta")
     album = display_romanized_name(item.get("album") or "Nieznane wydanie")
     score = item.get("score") or "NR"
-    url = item.get("url")
     release_format = item.get("release_format") or "—"
     flags = rating_flags_text(item)
     flags_text = f" · {flags}" if flags else ""
 
-    return f"{score_or_nr(score)} · [{artist} — {album}]({url}) · {release_format}{flags_text}"
+    release = _linked_release_text(artist, album, item)
+    return f"{score_or_nr(score)} · {release} · {release_format}{flags_text}"
 
 
 def _lastfm_count(value: object) -> str:

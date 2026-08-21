@@ -392,13 +392,22 @@ def _lastfm_section(variables: ReleaseVariables) -> list[str]:
         if not lastfm_username:
             continue
         # Nie pokazujemy fikcyjnego zera przed pierwszym zapisem profilu lub
-        # historii. Zero pozostaje prawidłową wartością, gdy archiwum istnieje.
-        profile_data = LASTFM_DB.get_profile(lastfm_username)
-        progress = LASTFM_DB.archive_progress(lastfm_username)
+        # historii. Starsze importy mogły być zapisane pod nazwą Kotone,
+        # dlatego najpierw znajdujemy faktycznie użyty klucz archiwum.
+        archive_key = lastfm_username
+        for candidate in dict.fromkeys((lastfm_username, str(name))):
+            profile_data = LASTFM_DB.get_profile(candidate)
+            progress = LASTFM_DB.archive_progress(candidate)
+            if profile_data is not None or int(progress.get("scrobbles") or 0):
+                archive_key = candidate
+                break
+        else:
+            profile_data = LASTFM_DB.get_profile(archive_key)
+            progress = LASTFM_DB.archive_progress(archive_key)
         if profile_data is None and not int(progress.get("scrobbles") or 0):
             continue
         count = LASTFM_DB.album_scrobble_count(
-            lastfm_username,
+            archive_key,
             variables.album,
             artist=variables.artist,
             album_mbid=musicbrainz_data.get("musicbrainz_release_group_id"),

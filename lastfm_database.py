@@ -491,7 +491,15 @@ class LastFMDatabase:
         album_mbid: object = None,
         aoty_album_id: object = None,
     ) -> int:
-        """Count one album from archive, preferring AOTY then MusicBrainz IDs."""
+        """Count one album from the archive, without losing Last.fm variants.
+
+        An imported Last.fm row can contain a release-group MBID that differs
+        from the release currently selected by Kotone.  In that case the
+        stored ``album_key`` is MBID-only and an otherwise identical album
+        would incorrectly display ``0`` scrobbles.  IDs remain the preferred
+        match, with the canonical artist/title identity used only as a local
+        fallback.
+        """
 
         key = self._key(profile_key)
         aoty_id = str(aoty_album_id or "").strip()
@@ -501,6 +509,8 @@ class LastFMDatabase:
             artist_mbid=artist_mbid,
             album_mbid=album_mbid,
         )
+        text_identity = album_key(artist, album)
+        requested_mbid = str(album_mbid or "").strip().casefold()
         with self._lock:
             if aoty_id:
                 row = self.connection.execute(
@@ -511,12 +521,54 @@ class LastFMDatabase:
                 count = int(row["count"] or 0)
                 if count:
                     return count
+            if requested_mbid:
+                row = self.connection.execute(
+                    """SELECT COUNT(*) AS count FROM scrobbles
+                    WHERE profile_key = ? AND lower(COALESCE(album_mbid, '')) = ?""",
+                    (key, requested_mbid),
+                ).fetchone()
+                count = int(row["count"] or 0)
+                if count:
+                    return count
             row = self.connection.execute(
                 """SELECT COUNT(*) AS count FROM scrobbles
                 WHERE profile_key = ? AND album_key = ?""",
                 (key, identity),
             ).fetchone()
-        return int(row["count"] or 0)
+            count = int(row["count"] or 0)
+            if count:
+                return count
+
+            # Most CSV/API imports keep the same visible album title even
+            # when their MBID differs.  Restrict the fallback to that title
+            # first, so opening a details tab never loads a whole archive.
+            rows = self.connection.execute(
+                """SELECT artist, album FROM scrobbles
+                WHERE profile_key = ?
+                  AND lower(trim(COALESCE(album, ''))) = lower(trim(?))""",
+                (key, str(album or "")),
+            ).fetchall()
+        exact_title_count = sum(
+            1
+            for stored in rows
+            if album_key(stored["artist"], stored["album"]) == text_identity
+        )
+        if exact_title_count:
+            return exact_title_count
+
+        # Older CSV imports and Last.fm itself can also use a transliterated
+        # title. Compare canonical *text* identities as the final fallback;
+        # raw display names in history are intentionally kept.
+        with self._lock:
+            rows = self.connection.execute(
+                """SELECT artist, album FROM scrobbles WHERE profile_key = ?""",
+                (key,),
+            ).fetchall()
+        return sum(
+            1
+            for stored in rows
+            if album_key(stored["artist"], stored["album"]) == text_identity
+        )
 
 
 LASTFM_DB = LastFMDatabase()
