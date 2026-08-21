@@ -62,6 +62,39 @@ def _parse_track_scores(value: str | None) -> list[str]:
     return scores
 
 
+def _parse_track_score_fields(value: str | None) -> tuple[str | None, str | None]:
+    """Rozdziel wspólne pole Discorda na oceny AOTY i oceny użytkownika.
+
+    Discord pozwala na maksymalnie 25 pól opcji.  Zamiast osobnej opcji
+    ``user_track_scores`` używamy więc składni ``aoty:...;user:...``.
+    Zwykła lista bez prefiksu zachowuje dotychczasowe znaczenie i oznacza
+    oceny AOTY.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    parts = [part.strip() for part in re.split(r"\s*;\s*", raw) if part.strip()]
+    aoty: str | None = None
+    user: str | None = None
+    plain: list[str] = []
+    for part in parts:
+        match = re.match(r"^(aoty|a|user|kotone|u)\s*:\s*(.*)$", part, re.I)
+        if not match:
+            plain.append(part)
+            continue
+        target, scores = match.groups()
+        if target.casefold() in {"user", "kotone", "u"}:
+            user = scores.strip()
+        else:
+            aoty = scores.strip()
+    if plain:
+        if aoty is not None:
+            raise ValueError("track_scores: nie mieszaj listy bez prefiksu z aoty:.")
+        aoty = ";".join(plain)
+    return aoty, user
+
+
 def _looks_like_tracklist(value: str | None) -> bool:
     """Recognise pasted numbered rows before they can become fake genres."""
 
@@ -311,8 +344,9 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         tracklist=(
             "Utwory: 1. Tytuł 2. Tytuł; czas trwania opcjonalnie"
         ),
-        track_scores="Oceny AOTY utworów w kolejności, np. 89, 93, 86",
-        user_track_scores="Oceny tracklisty wskazanego kotone usera, np. 90, 89, 94",
+        track_scores=(
+            "Oceny utworów: zwykła lista=AOTY; osobno aoty:89,93;user:90,89"
+        ),
     )
     @discord.app_commands.autocomplete(
         album_id=dbmanual_album_autocomplete,
@@ -357,7 +391,6 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         must_hear: str | None = None,
         tracklist: str | None = None,
         track_scores: str | None = None,
-        user_track_scores: str | None = None,
     ) -> None:
         if interaction.guild_id != GUILD_ID:
             await interaction.response.send_message(
@@ -426,7 +459,8 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
             if not tracklist and _looks_like_tracklist(genres):
                 tracklist, genres = genres, None
                 moved_tracklist = True
-            parsed_tracklist = _parse_tracklist(tracklist, track_scores)
+            aoty_track_scores, user_track_scores = _parse_track_score_fields(track_scores)
+            parsed_tracklist = _parse_tracklist(tracklist, aoty_track_scores)
             personal_track_scores = _parse_track_scores(user_track_scores)
             if personal_track_scores and not username:
                 raise ValueError("Podaj username dla user_track_scores.")
