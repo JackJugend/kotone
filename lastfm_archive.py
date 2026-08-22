@@ -116,9 +116,10 @@ class LastFMArchive:
             )
             self.last_success_at = now
             self.last_error = None
+            mode = "odświeżono najnowsze" if refresh_only else "import historii"
             print(
-                f"[LASTFM ARCHIVE] {key}: strona {page_number}/{page['total_pages']}, "
-                f"dodano {inserted} scrobbli (najnowsze → najstarsze)."
+                f"[LASTFM ARCHIVE] {key}: {mode}, strona "
+                f"{page_number}/{page['total_pages']}, dodano {inserted} scrobbli."
             )
             return {"attempted": True, "profile": refreshed_profile, "inserted": inserted}
         except lastfm.LastFMUnavailable as exc:
@@ -201,12 +202,17 @@ class LastFMArchive:
         finally:
             self._in_progress = False
 
-    async def refresh_latest_scrobble(self, profile_key: object) -> dict:
+    async def refresh_latest_scrobble(
+        self,
+        profile_key: object,
+        *,
+        refresh_profile: bool = False,
+    ) -> dict:
         """Refresh only page one for a configured profile.
 
-        Used by ``/profile``. It never resumes the historical crawl and skips
-        the profile-summary request, so opening a profile costs at most one
-        polite Last.fm API request.
+        Used by ``/profile``. It never resumes the historical crawl. Callers
+        can additionally refresh the small profile summary when they need the
+        current Last.fm avatar (including an animated GIF URL).
         """
 
         key = str(profile_key or "").strip().casefold()
@@ -221,6 +227,13 @@ class LastFMArchive:
 
         self._in_progress = True
         try:
+            if refresh_profile:
+                summary = await asyncio.to_thread(
+                    lastfm.LASTFM.user_info,
+                    str(profile["lastfm_username"]),
+                )
+                if summary:
+                    LASTFM_DB.save_profile(key, summary)
             page = await asyncio.to_thread(
                 lastfm.LASTFM.recent_tracks,
                 str(profile["lastfm_username"]),
@@ -241,7 +254,7 @@ class LastFMArchive:
             )
             self.last_success_at = time.time()
             self.last_error = None
-            return {"inserted": inserted}
+            return {"inserted": inserted, "profile_refreshed": refresh_profile}
         except lastfm.LastFMUnavailable as exc:
             LASTFM_DB.mark_error(key, exc)
             self.last_error = f"{type(exc).__name__}: {exc}"

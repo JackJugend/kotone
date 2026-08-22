@@ -111,6 +111,28 @@ def _lastfm_timestamp(value: object) -> str:
     return f"\n<t:{timestamp}:F>  •  <t:{timestamp}:R>"
 
 
+def _lastfm_avatar_url(profile: dict[str, object]) -> str | None:
+    """Return the current Last.fm avatar with a DB-versioned cache key.
+
+    Discord caches remote images very aggressively.  Last.fm may keep the
+    same avatar address while changing it from a still PNG to an animated GIF,
+    so the timestamp saved with the Last.fm profile is appended solely to make
+    Discord fetch the current asset immediately after a profile refresh.
+    """
+
+    url = str(profile.get("avatar_url") or "").strip()
+    if not url:
+        return None
+    try:
+        version = int(float(profile.get("fetched_at") or 0))
+    except (TypeError, ValueError):
+        version = 0
+    if version:
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}kotone_avatar={version}"
+    return url
+
+
 def _set_lastfm_footer(embed: discord.Embed) -> None:
     """Apply the bundled Last.fm icon to every Last.fm profile card."""
 
@@ -167,7 +189,7 @@ def _build_lastfm_embed(
         lastfm_profile.get("profile_url")
         or f"https://www.last.fm/user/{lastfm_username}"
     )
-    avatar = str(lastfm_profile.get("avatar_url") or "").strip() or None
+    avatar = _lastfm_avatar_url(lastfm_profile)
     display_name = str(author_name or kotone_profile.get("name") or profile_key)
     embed = discord.Embed(
         title=f"{SOURCE_EMOJIS['lastfm']} {lastfm_username}",
@@ -270,9 +292,11 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         kotone_profile = resolve_kotone_profile(interaction.user.id, username)
         if kotone_profile and kotone_profile.get("lastfm_username"):
             # Refresh only the newest Last.fm page for this profile.  This
-            # never resumes the imported newest-to-oldest archive.
+            # never resumes the imported newest-to-oldest archive. The small
+            # profile response also stores the current Last.fm avatar URL.
             await LASTFM_ARCHIVE.refresh_latest_scrobble(
-                kotone_profile.get("name") or username
+                kotone_profile.get("name") or username,
+                refresh_profile=True,
             )
         if kotone_profile and not kotone_profile.get("aoty_username"):
             await interaction.followup.send(

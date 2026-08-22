@@ -1477,7 +1477,12 @@ class ProfilePagerView(TimedDisableView):
         self.selected_index = self.page_index * 5
         self._selected_extra = None
         self._rebuild_components()
-        await interaction.response.edit_message(
+        # A profile may contain a second Last.fm embed with an attachment.
+        # Acknowledge the component first; a direct edit response can exceed
+        # Discord's component deadline while it reconciles that attachment.
+        await interaction.response.defer()
+        await _edit_component_message(
+            interaction,
             embeds=self.build_message_embeds(),
             view=self,
         )
@@ -1492,7 +1497,9 @@ class ProfilePagerView(TimedDisableView):
         self.selected_index = self.page_index * 5
         self._selected_extra = None
         self._rebuild_components()
-        await interaction.response.edit_message(
+        await interaction.response.defer()
+        await _edit_component_message(
+            interaction,
             embeds=self.build_message_embeds(),
             view=self,
         )
@@ -1501,7 +1508,9 @@ class ProfilePagerView(TimedDisableView):
     async def _main(self, interaction: discord.Interaction):
         self.current_tab = HOME_BUTTON
         self._rebuild_components()
-        await interaction.response.edit_message(
+        await interaction.response.defer()
+        await _edit_component_message(
+            interaction,
             embeds=self.build_message_embeds(),
             view=self,
         )
