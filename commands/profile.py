@@ -403,8 +403,8 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
                 title=" ",
                 url=profile_url,
                 description=(
-                    f"\⭐ **{ratings_count}**"
-                    f"  •  ⌀ **{average_rating_text}**"
+                    f"\⭐ **{ratings_count}**  ⌀ **{average_rating_text}**  
+                    ✎ **{reviews_count}**  **⫶☰ {lists_count}**"
                 ),
                 color=embed_color,
             )
@@ -412,8 +412,6 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             embed.add_field(
                 name=" ",
                 value=(
-                    f"✎ **{reviews_count}**"
-                    f"  •  ⫶☰ **{lists_count}**\n"
                     f"Following: **{following_count}**\n"
                     f"Followers: **{followers_count}**"
                 ),
