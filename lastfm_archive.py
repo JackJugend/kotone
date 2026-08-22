@@ -223,7 +223,15 @@ class LastFMArchive:
         if not LASTFM_API_ENABLED or not SOURCES.enabled("lastfm"):
             return {"skipped": "source_disabled"}
         if self._in_progress:
-            return {"skipped": "busy"}
+            # A profile request needs the newest avatar and should not silently
+            # fall back to an old PNG merely because the low-priority archive
+            # is between its two small Last.fm calls.  Wait only briefly for
+            # that request to finish; the slash command has already deferred.
+            deadline = time.monotonic() + 5.0
+            while self._in_progress and time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
+            if self._in_progress:
+                return {"skipped": "busy"}
 
         self._in_progress = True
         try:

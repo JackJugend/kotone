@@ -207,7 +207,7 @@ def _build_lastfm_embed(
         inline=False,
     )
     embed.add_field(
-        name=f"{application_avatar_emoji}",
+        name=application_avatar_emoji(),
         value=(
             f"{_lastfm_archive_progress(profile_key, archive)}\n"
             f"**{_lastfm_count(archive['artists'])}** wykonawców  •  "
