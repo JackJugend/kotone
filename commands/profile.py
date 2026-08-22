@@ -8,7 +8,7 @@ import discord
 import requests
 
 import aoty
-from display_utils import display_romanized_name
+from display_utils import display_release_date, display_romanized_name
 from lastfm_archive import LASTFM_ARCHIVE
 from lastfm_database import LASTFM_DB
 from settings import (
@@ -87,11 +87,13 @@ def _recent_line(item: dict) -> str:
     album = display_romanized_name(item.get("album") or "Nieznane wydanie")
     score = item.get("score") or "NR"
     release_format = item.get("release_format") or "—"
+    rating_date = display_release_date(item.get("rating_date"))
     flags = rating_flags_text(item)
     flags_text = f" · {flags}" if flags else ""
+    date_text = f" • {rating_date}" if rating_date != "—" else ""
 
     release = _linked_release_text(artist, album, item)
-    return f"{score_or_nr(score)} · {release} · {release_format}{flags_text}"
+    return f"{score_or_nr(score)}  {release}  •  {release_format}  •  {date_text}{flags_text}"
 
 
 def _lastfm_count(value: object) -> str:
@@ -162,7 +164,10 @@ def _lastfm_archive_progress(profile_key: object, archive: dict | None = None) -
         base = f"**{_lastfm_count(saved)} / {_lastfm_count(total)}** scrobbli"
     else:
         base = f"**{_lastfm_count(saved)}** scrobbli"
-    if progress.get("complete"):
+    # A completed cursor only means that a previous crawl reached its last
+    # page.  Do not call the archive complete if the current Last.fm total is
+    # greater than the number of rows Kotone actually has saved.
+    if progress.get("complete") and (not total or saved >= int(total)):
         return f"{base} • archiwum kompletne"
     total_pages = progress.get("total_pages")
     next_page = progress.get("next_page")
@@ -376,9 +381,9 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         favorites = variables.favorites[:5]
         favorite_kind = variables.favorite_kind
         if favorite_kind == "artists":
-            favorites_field_name = "Favorite Artists"
+            favorites_field_name = "❤️ Favorite Artists"
         elif favorite_kind == "albums":
-            favorites_field_name = "Favorite Albums"
+            favorites_field_name = "❤️ Favorite Albums"
         else:
             favorites_field_name = "Favorites"
 
@@ -398,8 +403,8 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
                 title=" ",
                 url=profile_url,
                 description=(
-                    f"**{ratings_count}** ocen  •  "
-                    f"x̄ **{average_rating_text}**"
+                    f"\⭐ **{ratings_count}**"
+                    f"  •  ⌀ **{average_rating_text}**"
                 ),
                 color=embed_color,
             )
@@ -407,10 +412,10 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             embed.add_field(
                 name=" ",
                 value=(
-                    f"Reviews **{reviews_count}**  •  "
-                    f"Lists **{lists_count}**\n"
-                    f"Following **{following_count}**  •  "
-                    f"Followers **{followers_count}**"
+                    f"✎ **{reviews_count}**"
+                    f"  •  ⫶☰ **{lists_count}**\n"
+                    f"Following: **{following_count}**\n"
+                    f"Followers: **{followers_count}**"
                 ),
                 inline=False,
             )
@@ -437,7 +442,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             )
 
             embed.add_field(
-                name=f"Ostatnie 5 ocen [{page_index + 1}/{total_pages}]",
+                name=f"\⭐ Ostatnie 5 ocen  •  [{page_index + 1}/{total_pages}]",
                 value="\n".join(recent_lines) if recent_lines else "—",
                 inline=False,
             )
