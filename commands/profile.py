@@ -403,8 +403,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
                 title=" ",
                 url=profile_url,
                 description=(
-                    f"\⭐ **{ratings_count}**  ⌀ **{average_rating_text}**  
-                    ✎ **{reviews_count}**  **⫶☰ {lists_count}**"
+                    f"\⭐ **{ratings_count}**  ⌀ **{average_rating_text}**  ✎ **{reviews_count}**  **⫶☰ {lists_count}**"
                 ),
                 color=embed_color,
             )
