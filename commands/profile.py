@@ -103,7 +103,7 @@ def _set_lastfm_footer(embed: discord.Embed) -> None:
     """Apply the bundled Last.fm icon to every Last.fm profile card."""
 
     embed.set_footer(
-        text="Last.fm • dane zapisane przez Kotone",
+        text="**Last.fm**  •  dane zapisane przez kotone",
         icon_url=LASTFM_ICON_ATTACHMENT,
     )
 
@@ -243,9 +243,9 @@ async def profile_autocomplete(
 def setup_profile_command(tree: discord.app_commands.CommandTree):
     @tree.command(
         name="profile",
-        description="Pokazuje profil AOTY albo Last.fm użytkownika Kotone.",
+        description="Pokazuje profil AOTY albo Last.fm użytkownika kotone.",
     )
-    @discord.app_commands.describe(username="Użytkownik AOTY lub Kotone")
+    @discord.app_commands.describe(username="Użytkownik AOTY lub kotone")
     @discord.app_commands.autocomplete(username=profile_autocomplete)
     async def profile_command(
         interaction: discord.Interaction,
@@ -400,9 +400,9 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             set_aoty_footer(
                 embed,
                 (
-                    f"SQLite • średnia z {sqlite_average_count} zapisanych ocen"
+                    f"**AOTY.org**  •  średnia wyliczona przez **kotone**"
                     if sqlite_average is not None
-                    else "AOTY.org • średnia jest przybliżona z Rating Distribution"
+                    else "**AOTY.org** • średnia jest przybliżona z Rating Distribution"
                 ),
             )
             return embed

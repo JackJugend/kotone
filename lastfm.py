@@ -53,7 +53,13 @@ def artist_lookup_candidates(value: object) -> list[str]:
 
 
 def _image_url(images: object) -> str | None:
-    """Choose the largest non-placeholder image returned by Last.fm."""
+    """Choose a non-placeholder Last.fm image without flattening GIFs.
+
+    Last.fm often returns several size variants.  A static large PNG/JPG can
+    appear after the original animated avatar, so prefer an explicit GIF
+    wherever it is available.  Discord then receives the original animated
+    URL for the profile author icon and thumbnail.
+    """
 
     preferred: str | None = None
     for image in images or []:
@@ -63,6 +69,9 @@ def _image_url(images: object) -> str | None:
         if not url or "2a96cbd8b46e442fc41c2b86b821562f" in url.casefold():
             continue
         if url.startswith("https://"):
+            clean_url = url.split("?", 1)[0].casefold()
+            if clean_url.endswith(".gif"):
+                return url
             preferred = url
     return preferred
 
