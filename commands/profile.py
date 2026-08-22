@@ -93,7 +93,7 @@ def _recent_line(item: dict) -> str:
     date_text = f" • {rating_date}" if rating_date != "—" else ""
 
     release = _linked_release_text(artist, album, item)
-    return f"{score_or_nr(score)}  {release}  •  {release_format}  •  {date_text}{flags_text}"
+    return f"{score_or_nr(score)}\u2002{release}\u2002•\u2002{release_format}\u2002•\u2002{date_text}\u2002{flags_text}"
 
 
 def _lastfm_count(value: object) -> str:
@@ -204,9 +204,9 @@ def _build_lastfm_embed(
     embed.add_field(
         name=f" ",
         value=(
-            f"**{_lastfm_count(lastfm_profile.get('total_scrobbles'))}** scrobbli  •  "
+            f"**{_lastfm_count(lastfm_profile.get('total_scrobbles'))}** scrobbli\u2002•\u2002"
             f"**{_lastfm_count(lastfm_profile.get('artist_count'))}** wykonawców\n"
-            f"**{_lastfm_count(lastfm_profile.get('album_count'))}** albumów  •  "
+            f"**{_lastfm_count(lastfm_profile.get('album_count'))}** albumów\u2002•\u2002"
             f"**{_lastfm_count(lastfm_profile.get('track_count'))}** utworów"
         ),
         inline=False,
@@ -215,8 +215,8 @@ def _build_lastfm_embed(
         name=application_avatar_emoji(),
         value=(
             f"{_lastfm_archive_progress(profile_key, archive)}\n"
-            f"**{_lastfm_count(archive['artists'])}** wykonawców  •  "
-            f"**{_lastfm_count(archive['albums'])}** albumów  •  "
+            f"**{_lastfm_count(archive['artists'])}** wykonawców\u2002•\u2002"
+            f"**{_lastfm_count(archive['albums'])}** albumów\u2002•\u2002"
             f"**{_lastfm_count(archive['tracks'])}** utworów"
         ),
         inline=False,
@@ -403,7 +403,8 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
                 title=" ",
                 url=profile_url,
                 description=(
-                    f"\⭐ **{ratings_count}**  ⌀ **{average_rating_text}**  ✎ **{reviews_count}**  **⫶☰ {lists_count}**"
+                    f"\⭐ **{ratings_count}**\u2002⌀ **{average_rating_text}**\u2002"
+                    f"✎ **{reviews_count}**\u2002**⫶☰ {lists_count}**"
                 ),
                 color=embed_color,
             )
@@ -439,7 +440,7 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             )
 
             embed.add_field(
-                name=f"\⭐ Ostatnie 5 ocen  •  [{page_index + 1}/{total_pages}]",
+                name=f"\⭐ Ostatnie oceny\u2002•\u2002[{page_index + 1}/{total_pages}]",
                 value="\n".join(recent_lines) if recent_lines else "—",
                 inline=False,
             )
