@@ -135,7 +135,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             if file is None:
                 await interaction.response.send_message(
                     "Dla importu Last.fm załącz `.csv`, `.csv.gz` albo `.zip` z CSV. Eksport możesz "
-                    "pobrać z <https://lastfm.ghan.nl/export/> z ustawieniem scrobbles."
+                    "pobrać z <https://lastfm.ghan.nl/export/> z ustawieniem scrobbles.",
                     ephemeral=True,
                 )
                 return
