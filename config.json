@@ -75,6 +75,7 @@
         "aoty_archive_max_pages": 500,
         "aoty_maintenance_min_request_interval": 15.0,
         "enrich_worker_rest_seconds": 30,
-        "detail_change_scan_interval": 604800
+        "detail_change_scan_interval": 604800,
+        "lastfm_newest_scrobble_interval": 1800
     }
 }

@@ -9,6 +9,7 @@ import requests
 
 import aoty
 from display_utils import display_romanized_name
+from lastfm_archive import LASTFM_ARCHIVE
 from lastfm_database import LASTFM_DB
 from settings import (
     KOTONE_USERS,
@@ -97,6 +98,16 @@ def _lastfm_count(value: object) -> str:
         return f"{int(value):,}".replace(",", " ")
     except (TypeError, ValueError):
         return "—"
+
+
+def _lastfm_timestamp(value: object) -> str:
+    """Render the archived Unix scrobble time as Discord timestamps."""
+
+    try:
+        timestamp = int(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"\n<t:{timestamp}:F>  •  <t:{timestamp}:R>"
 
 
 def _set_lastfm_footer(embed: discord.Embed) -> None:
@@ -189,18 +200,21 @@ def _build_lastfm_embed(
             value=(
                 f"**{latest.get('artist') or '—'} — "
                 f"{latest.get('track') or '—'}**{album}"
+                f"{_lastfm_timestamp(latest.get('played_at'))}"
             ),
             inline=False,
     )
-    source_avatar = str(author_icon_url or avatar or "").strip()
+    # This is a Last.fm card, so its author always links to and uses the
+    # Last.fm profile rather than the corresponding AOTY account.
+    source_avatar = avatar
     if source_avatar:
         embed.set_author(
             name=display_name,
-            url=str(author_url or profile_url),
+            url=profile_url,
             icon_url=source_avatar,
         )
     else:
-        embed.set_author(name=display_name, url=str(author_url or profile_url))
+        embed.set_author(name=display_name, url=profile_url)
     if avatar:
         embed.set_thumbnail(url=avatar)
     _set_lastfm_footer(embed)
@@ -253,6 +267,12 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
     ):
         await interaction.response.defer()
         kotone_profile = resolve_kotone_profile(interaction.user.id, username)
+        if kotone_profile and kotone_profile.get("lastfm_username"):
+            # Refresh only the newest Last.fm page for this profile.  This
+            # never resumes the imported newest-to-oldest archive.
+            await LASTFM_ARCHIVE.refresh_latest_scrobble(
+                kotone_profile.get("name") or username
+            )
         if kotone_profile and not kotone_profile.get("aoty_username"):
             await interaction.followup.send(
                 embed=_build_lastfm_embed(kotone_profile),

@@ -401,6 +401,11 @@ def setup_dbmanual_command(tree: discord.app_commands.CommandTree) -> None:
         try:
             await asyncio.to_thread(DB.backup_if_due, force=True)
             album_id = str(album_id or "").strip()
+            # Operators may paste a complete AOTY link. Persist its stable
+            # numeric ID instead of creating a release keyed by the URL.
+            album_id_match = re.search(r"/album/(\d+)(?:[-/]|$)", album_id)
+            if album_id_match:
+                album_id = album_id_match.group(1)
             if not album_id:
                 raise ValueError("Podaj album_id.")
 

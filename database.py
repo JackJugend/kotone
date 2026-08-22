@@ -2444,11 +2444,13 @@ class Database:
         return sorted(normalize_genres(raw_genres), key=str.casefold)
 
     def cached_artists(self) -> list[dict]:
-        """Artists already present in configured users' durable ratings.
+        """Artists from configured-user ratings and explicit manual releases.
 
         The database is intentionally the first autocomplete source.  This
         keeps artist lookup usable while AOTY is rate-limited or presenting a
-        challenge page, without expanding the config-only persistence scope.
+        challenge page. ``/dbmanual`` is the explicit operator exception: a
+        manually seeded release must be usable immediately, even before a
+        configured user assigns it an AOTY score.
         """
 
         with self._lock:
@@ -2456,11 +2458,19 @@ class Database:
                 """
                 SELECT
                     artist,
-                    MAX(NULLIF(TRIM(COALESCE(artist_url, '')), '')) AS artist_url,
+                    MAX(artist_url) AS artist_url,
                     COUNT(DISTINCT album_id) AS release_count
-                FROM ratings
-                WHERE active = 1
-                  AND NULLIF(TRIM(COALESCE(artist, '')), '') IS NOT NULL
+                FROM (
+                    SELECT artist, artist_url, album_id
+                    FROM ratings
+                    WHERE active = 1
+                    UNION ALL
+                    SELECT artist, artist_url, album_id
+                    FROM releases
+                    WHERE COALESCE(metadata_source, '') = 'manual'
+                ) AS known_release
+                WHERE NULLIF(TRIM(COALESCE(artist, '')), '') IS NOT NULL
+                  AND artist != 'Nieznany artysta'
                 GROUP BY artist COLLATE NOCASE
                 ORDER BY artist COLLATE NOCASE
                 """
@@ -2538,6 +2548,37 @@ class Database:
                 """,
                 (artist,),
             ).fetchall()
+            manual_rows = self.connection.execute(
+                """
+                SELECT
+                    rel.album_id,
+                    rel.artist,
+                    rel.artist_url,
+                    rel.album,
+                    rel.url,
+                    rel.cover_url AS cover,
+                    rel.user_score,
+                    rel.ratings_count,
+                    rel.critic_score,
+                    rel.critic_reviews_count,
+                    rel.release_date,
+                    rel.year,
+                    rel.genres_json,
+                    rel.album_format,
+                    0 AS cache_order
+                FROM releases AS rel
+                WHERE COALESCE(rel.metadata_source, '') = 'manual'
+                  AND rel.artist = ? COLLATE NOCASE
+                  AND NULLIF(TRIM(COALESCE(rel.album, '')), '') IS NOT NULL
+                  AND NOT EXISTS(
+                      SELECT 1 FROM ratings AS rated
+                      WHERE rated.album_id = rel.album_id AND rated.active = 1
+                  )
+                """,
+                (artist,),
+            ).fetchall()
+
+        rows = [*rows, *manual_rows]
 
         return [
             {

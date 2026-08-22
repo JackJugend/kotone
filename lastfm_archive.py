@@ -201,5 +201,57 @@ class LastFMArchive:
         finally:
             self._in_progress = False
 
+    async def refresh_latest_scrobble(self, profile_key: object) -> dict:
+        """Refresh only page one for a configured profile.
+
+        Used by ``/profile``. It never resumes the historical crawl and skips
+        the profile-summary request, so opening a profile costs at most one
+        polite Last.fm API request.
+        """
+
+        key = str(profile_key or "").strip().casefold()
+        profiles = dict(self._profiles())
+        profile = profiles.get(key)
+        if profile is None:
+            return {"skipped": "missing_profile"}
+        if not LASTFM_API_ENABLED or not SOURCES.enabled("lastfm"):
+            return {"skipped": "source_disabled"}
+        if self._in_progress:
+            return {"skipped": "busy"}
+
+        self._in_progress = True
+        try:
+            page = await asyncio.to_thread(
+                lastfm.LASTFM.recent_tracks,
+                str(profile["lastfm_username"]),
+                page=1,
+                limit=LASTFM_HISTORY_PAGE_SIZE,
+            )
+            if page is None:
+                raise lastfm.LastFMUnavailable("Last.fm nie zwrócił historii scrobbli.")
+            page["tracks"] = await asyncio.to_thread(
+                DB.link_lastfm_tracks_to_releases,
+                list(page.get("tracks") or []),
+            )
+            state = LASTFM_DB.state(key)
+            inserted = (
+                LASTFM_DB.refresh_newest_page(key, page)
+                if state.get("total_pages") is not None
+                else LASTFM_DB.import_page(key, page)
+            )
+            self.last_success_at = time.time()
+            self.last_error = None
+            return {"inserted": inserted}
+        except lastfm.LastFMUnavailable as exc:
+            LASTFM_DB.mark_error(key, exc)
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return {"error": self.last_error}
+        except Exception as exc:
+            LASTFM_DB.mark_error(key, exc)
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return {"error": self.last_error}
+        finally:
+            self._in_progress = False
+
 
 LASTFM_ARCHIVE = LastFMArchive()
