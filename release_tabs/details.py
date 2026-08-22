@@ -336,6 +336,8 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
         if country != MISSING_VALUE
         else "**Country:** —"
     )
+    duration = display_value(variables.duration)
+    duration_value = f"`{duration}`" if duration != MISSING_VALUE else MISSING_VALUE
     return [
         _detail_line(
             variables,
@@ -350,7 +352,10 @@ def _release_section(variables: ReleaseVariables) -> list[str]:
             variables,
             section="duration",
             label="Duration",
-            value=f"`{variables.duration}`",
+            # Do not wrap a missing value in a code span: `` `—` `` is no
+            # longer recognised as missing by _source_prefix and wrongly
+            # displays the metadata-source emoji.
+            value=duration_value,
         ),
         _detail_line(
             variables,
