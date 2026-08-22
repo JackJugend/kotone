@@ -57,7 +57,7 @@ async def _kotone_user_autocomplete(
 def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
     @tree.command(
         name="import",
-        description="Importuje dane AOTY lub Last.fm do Kotone.",
+        description="Importuje dane AOTY lub Last.fm do kotone.",
     )
     @discord.app_commands.describe(
         source="Źródło importu",
@@ -97,7 +97,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         actor_key = str((actor_profile or {}).get("name") or "").casefold()
         if requested_key and not is_operator and requested_key != actor_key:
             await interaction.response.send_message(
-                "Tylko operator może importować dane innego użytkownika Kotone.",
+                "Tylko operator może importować dane innego użytkownika kotone.",
                 ephemeral=True,
             )
             return
@@ -105,7 +105,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
         kotone_profile = KOTONE_USERS.get(profile_key)
         if kotone_profile is None:
             await interaction.response.send_message(
-                "Wybierz użytkownika Kotone z config.json.",
+                "Wybierz użytkownika kotone.",
                 ephemeral=True,
             )
             return
@@ -135,8 +135,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
             if file is None:
                 await interaction.response.send_message(
                     "Dla importu Last.fm załącz `.csv`, `.csv.gz` albo `.zip` z CSV. Eksport możesz "
-                    "pobrać z <https://lastfm.ghan.nl/export/>. Ręczne pobranie "
-                    "najnowszych danych z API jest dostępne dla operatorów w `/check`.",
+                    "pobrać z <https://lastfm.ghan.nl/export/> z ustawieniem scrobbles."
                     ephemeral=True,
                 )
                 return
@@ -194,7 +193,7 @@ def setup_rating_import_command(tree: discord.app_commands.CommandTree) -> None:
                 f"• dodane scrobble: **{inserted}**\n"
                 f"• duplikaty w pliku: **{parsed['duplicates']}**\n"
                 f"• odrzucone wiersze: **{len(parsed['rejected'])}**\n"
-                f"• archiwum Kotone: **{stats['scrobbles']}** scrobbli · "
+                f"• archiwum kotone: **{stats['scrobbles']}** scrobbli · "
                 f"**{stats['artists']}** wykonawców · **{stats['albums']}** albumów · "
                 f"**{stats['tracks']}** utworów",
                 ephemeral=True,

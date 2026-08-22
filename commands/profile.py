@@ -24,6 +24,7 @@ from shared import (
     score_or_nr,
     set_aoty_footer,
     username_autocomplete,
+    application_avatar_emoji,
 )
 from services import DATA
 from ui_constants import (
@@ -114,7 +115,7 @@ def _set_lastfm_footer(embed: discord.Embed) -> None:
     """Apply the bundled Last.fm icon to every Last.fm profile card."""
 
     embed.set_footer(
-        text="**Last.fm**  •  dane zapisane przez kotone",
+        text="Last.fm  •  dane zapisane w kotone",
         icon_url=LASTFM_ICON_ATTACHMENT,
     )
 
@@ -169,12 +170,12 @@ def _build_lastfm_embed(
     avatar = str(lastfm_profile.get("avatar_url") or "").strip() or None
     display_name = str(author_name or kotone_profile.get("name") or profile_key)
     embed = discord.Embed(
-        title=f"{SOURCE_EMOJIS['lastfm']} Last.fm — @{lastfm_username}",
+        title=f"{SOURCE_EMOJIS['lastfm']} {lastfm_username}",
         url=profile_url,
         color=discord.Color.from_rgb(206, 69, 69),
     )
     embed.add_field(
-        name="Konto Last.fm",
+        name=f" ",
         value=(
             f"**{_lastfm_count(lastfm_profile.get('total_scrobbles'))}** scrobbli  •  "
             f"**{_lastfm_count(lastfm_profile.get('artist_count'))}** wykonawców\n"
@@ -184,7 +185,7 @@ def _build_lastfm_embed(
         inline=False,
     )
     embed.add_field(
-        name="Historia odsłuchów w Kotone",
+        name=f"{application_avatar_emoji}",
         value=(
             f"{_lastfm_archive_progress(profile_key, archive)}\n"
             f"**{_lastfm_count(archive['artists'])}** wykonawców  •  "
@@ -420,9 +421,9 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
             set_aoty_footer(
                 embed,
                 (
-                    f"**AOTY.org**  •  średnia wyliczona przez **kotone**"
+                    f"AOTY.org  •  średnia wyliczona przez kotone"
                     if sqlite_average is not None
-                    else "**AOTY.org** • średnia jest przybliżona z Rating Distribution"
+                    else "AOTY.org  •  średnia jest przybliżona z Rating Distribution"
                 ),
             )
             return embed
