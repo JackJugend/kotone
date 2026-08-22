@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import discord
 import requests
@@ -87,13 +88,31 @@ def _recent_line(item: dict) -> str:
     album = display_romanized_name(item.get("album") or "Nieznane wydanie")
     score = item.get("score") or "NR"
     release_format = item.get("release_format") or "—"
-    rating_date = display_release_date(item.get("rating_date"))
+    rating_date = _rating_date_text(item)
     flags = rating_flags_text(item)
     flags_text = f" · {flags}" if flags else ""
-    date_text = f" • {rating_date}" if rating_date != "—" else ""
+    date_text = f"\u2002•\u2002{rating_date}" if rating_date != "—" else ""
 
     release = _linked_release_text(artist, album, item)
-    return f"{score_or_nr(score)}\u2002{release}\u2002•\u2002{release_format}\u2002•\u2002{date_text}\u2002{flags_text}"
+    return f"{score_or_nr(score)}\u2002{release}\u2002•\u2002{release_format}{date_text}{flags_text}"
+
+
+def _rating_date_text(item: dict) -> str:
+    """Return the persisted rating date or AOTY's persisted list timestamp."""
+
+    for key in ("rating_date", "date", "rated_at"):
+        rendered = display_release_date(item.get(key))
+        if rendered != "—":
+            return rendered
+    try:
+        timestamp = float(item.get("sort_timestamp") or 0)
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000
+        if timestamp > 946_684_800:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%d.%m.%Y")
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
+    return "—"
 
 
 def _lastfm_count(value: object) -> str:
