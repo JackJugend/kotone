@@ -29,8 +29,9 @@ JAK UZYWAC
 3. Wrzuc zapisany plik .html do odpowiedniego folderu.
 4. Uruchom run_exporter.cmd.
 
-Eksporter odczyta wszystko lokalnie, zapisze CSV w "0. GOTOWE CSV" i usunie
-TYLKO te HTML, ktore zostaly poprawnie przetworzone. Nieudane pliki zostaja
+Eksporter odczyta wszystko lokalnie, zapisze CSV w "0. GOTOWE CSV", utworzy
+obok plik "0. GOTOWE CSV.zip" i usunie TYLKO te HTML, ktore zostaly poprawnie
+przetworzone. Nieudane pliki zostaja
 w swoim folderze wraz z opisem bledu w oknie programu.
 
 PROFILE
@@ -41,8 +42,8 @@ dla enso/kulkien. Wynik ma nazwe np. profile-enso-ratings.csv.
 
 IMPORT DO KOTONE
 ----------------
-1. Spakuj ZAWARTOSC folderu "0. GOTOWE CSV" do jednego pliku ZIP.
-2. Na Discordzie uzyj /dbimport i zalacz ten ZIP.
+1. Na Discordzie uzyj /dbimport i zalacz plik "0. GOTOWE CSV.zip".
+   Jest tworzony automatycznie po kazdym poprawnym uruchomieniu.
 3. /dbimport obsluguje jednoczesnie CSV profili, stron albumow, tracklist
    oraz stron artystow. Jest tylko dla operatorow Kotone.
 

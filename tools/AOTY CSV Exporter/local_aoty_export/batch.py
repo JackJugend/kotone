@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import zipfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -16,6 +17,7 @@ PROFILE_FOLDER = "1. profile"
 ALBUM_FOLDER = "2. album"
 ARTIST_FOLDER = "3. artist"
 OUTPUT_FOLDER = "0. GOTOWE CSV"
+OUTPUT_ZIP_NAME = "0. GOTOWE CSV.zip"
 FOLDER_NAMES = (PROFILE_FOLDER, ALBUM_FOLDER, ARTIST_FOLDER, OUTPUT_FOLDER)
 
 
@@ -134,6 +136,23 @@ def _run_artists(root: Path, output: Path) -> tuple[int, list[str]]:
     return len(rows), problems
 
 
+def _write_output_zip(root: Path, output: Path) -> Path | None:
+    """Create one portable archive containing every generated CSV."""
+
+    csv_paths = sorted(path for path in output.glob("*.csv") if path.is_file())
+    if not csv_paths:
+        return None
+    destination = root / OUTPUT_ZIP_NAME
+    temporary = root / f".{OUTPUT_ZIP_NAME}.tmp"
+    # Write to a temporary file so a failed run never replaces an older,
+    # complete archive. Only base names are included in the ZIP.
+    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in csv_paths:
+            archive.write(path, arcname=path.name)
+    temporary.replace(destination)
+    return destination
+
+
 def run_batch() -> int:
     root = Path(__file__).resolve().parent.parent
     for name in FOLDER_NAMES:
@@ -158,6 +177,9 @@ def run_batch() -> int:
         )
     else:
         print(f"Gotowe CSV: {output}")
+    archive = _write_output_zip(root, output)
+    if archive is not None:
+        print(f"ZIP do /dbimport: {archive}")
     if problems:
         print("\nPliki pozostawione do poprawy:")
         for item in problems:

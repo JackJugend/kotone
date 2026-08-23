@@ -144,7 +144,11 @@ def _import_metadata(rows: list[dict[str, str]]) -> tuple[int, int]:
         if not album_id.isdecimal():
             skipped += 1
             continue
-        if DB.save_release_details(album_id, _metadata_payload(row)):
+        if DB.save_release_details(
+            album_id,
+            _metadata_payload(row),
+            allow_unscoped_import=True,
+        ):
             saved += 1
         else:
             skipped += 1
@@ -177,6 +181,7 @@ def _import_tracks(rows: list[dict[str, str]]) -> tuple[int, int]:
                 "tracklist": tracks,
                 "_section_complete": {"tracklist": True},
             },
+            allow_unscoped_import=True,
         ):
             saved += len(tracks)
         else:
@@ -195,7 +200,11 @@ def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
         if artist:
             by_artist[artist].extend(_list_value(row, "Aliases"))
         album_id = _value(row, "Album ID")
-        if album_id.isdecimal() and DB.save_release_details(album_id, _metadata_payload(row)):
+        if album_id.isdecimal() and DB.save_release_details(
+            album_id,
+            _metadata_payload(row),
+            allow_unscoped_import=True,
+        ):
             releases_saved += 1
     for artist, aliases in by_artist.items():
         if DB.save_artist_aliases(artist, aliases, source="aoty"):
@@ -234,8 +243,8 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
             profile_results: list[tuple[str, dict]] = []
             skipped: list[str] = []
 
-            # Profile ratings go first: this makes album/track data in the
-            # same bundle in-scope without broadening Kotone persistence.
+            # Profile ratings go first.  Album pages explicitly packed by an
+            # operator may also create their own release cache entries.
             for name, payload in bundle.items():
                 if not re.fullmatch(r"profile-.+?-ratings\.csv", name, re.I):
                     continue
@@ -281,9 +290,9 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
                 f"{result['queued_notifications']} powiadomień"
             )
         if metadata_rows:
-            lines.append(f"• albumy: {metadata_saved} zapisanych · {metadata_skipped} poza zakresem")
+            lines.append(f"• albumy: {metadata_saved} zapisanych · {metadata_skipped} pominiętych")
         if track_rows:
-            lines.append(f"• tracklista: {tracks_saved} utworów · {tracks_skipped} poza zakresem")
+            lines.append(f"• tracklista: {tracks_saved} utworów · {tracks_skipped} pominiętych")
         if artist_rows:
             lines.append(f"• artyści: {artist_releases} wydań · {artist_aliases} aliasów")
         if skipped:

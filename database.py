@@ -4594,6 +4594,7 @@ class Database:
         details: dict,
         *,
         allow_unscoped_manual: bool = False,
+        allow_unscoped_import: bool = False,
     ) -> bool:
         album_id = str(album_id or "").strip()
         if not album_id:
@@ -4659,12 +4660,18 @@ class Database:
 
         with self._lock, self.connection:
             # Scrapers still write only data connected to a configured Kotone
-            # user. /dbmanual is the deliberate exception: an operator may
-            # prepare one release before anyone rates it.
+            # user. /dbmanual and /dbimport are deliberate operator-only
+            # exceptions: they persist pages explicitly chosen by the owner,
+            # without widening ordinary background collection.
             can_save_unscoped_manual = (
                 allow_unscoped_manual and source == "manual"
             )
-            if not self._release_is_in_scope_locked(album_id) and not can_save_unscoped_manual:
+            can_save_unscoped_import = allow_unscoped_import and source == "aoty"
+            if (
+                not self._release_is_in_scope_locked(album_id)
+                and not can_save_unscoped_manual
+                and not can_save_unscoped_import
+            ):
                 return False
 
             existing = self.connection.execute(
