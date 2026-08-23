@@ -363,6 +363,33 @@ class DatabaseStartupSafetyTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_operator_manual_artist_data_survives_cache_cleanup(self):
+        """Artist metadata imported from saved HTML is durable operator data."""
+
+        db = self.make_db()
+        try:
+            self.assertTrue(
+                db.save_artist_source_data(
+                    "Manual Artist",
+                    "manual",
+                    {
+                        "artist_user_score": "83",
+                        "artist_ratings_count": "3310",
+                        "artist_followers": "149",
+                    },
+                    quality="operator_html",
+                    allow_unscoped_manual=True,
+                )
+            )
+            with db._lock, db.connection:
+                db._cleanup_orphan_release_cache_locked()
+            cached = db.get_artist_source_data("Manual Artist").get("manual") or {}
+            self.assertEqual(cached.get("artist_user_score"), "83")
+            self.assertEqual(cached.get("artist_ratings_count"), "3310")
+            self.assertEqual(cached.get("artist_followers"), "149")
+        finally:
+            db.close()
+
     def test_manual_metadata_keeps_known_identity_and_supports_all_badges(self):
         """Partial /dbmanual edits must not leave an Album #id title behind."""
 

@@ -5505,7 +5505,8 @@ class Database:
         self.connection.execute(
             """
             DELETE FROM artist_source_cache
-            WHERE NOT EXISTS(
+            WHERE source != 'manual'
+              AND NOT EXISTS(
                 SELECT 1 FROM ratings r
                 WHERE r.active = 1
                   AND r.artist = artist_source_cache.artist COLLATE NOCASE
