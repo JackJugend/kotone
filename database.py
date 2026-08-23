@@ -5423,6 +5423,64 @@ class Database:
             "fetched_at": row["fetched_at"],
         }
 
+    def clear_malformed_manual_release_genres(self, album_id: str) -> bool:
+        """Remove only impossible genre text written by an old HTML import.
+
+        Early versions of the offline artist-page importer accidentally read
+        AOTY's navigation as one gigantic genre value.  This guard is narrow:
+        it touches manual metadata only when a known navigation fragment or an
+        implausibly long single genre is present.
+        """
+
+        album_id = str(album_id or "").strip()
+        if not album_id:
+            return False
+        suspicious_fragments = (
+            "submit correction",
+            "add tag",
+            "profile feed",
+            "filter release",
+            "recommendations",
+            "sign out",
+        )
+        with self._lock, self.connection:
+            row = self.connection.execute(
+                """
+                SELECT metadata_source, metadata_sources_json, genres_json,
+                       genre_urls_json, secondary_genres_json,
+                       secondary_genre_urls_json
+                FROM releases WHERE album_id = ?
+                """,
+                (album_id,),
+            ).fetchone()
+            if row is None or str(row["metadata_source"] or "").casefold() != "manual":
+                return False
+            values = [
+                *(_json_load(row["genres_json"], []) or []),
+                *(_json_load(row["secondary_genres_json"], []) or []),
+            ]
+            text = " ".join(str(value) for value in values).casefold()
+            if not text or (
+                len(text) < 240
+                and not any(fragment in text for fragment in suspicious_fragments)
+            ):
+                return False
+            sources = _json_load(row["metadata_sources_json"], {})
+            if not isinstance(sources, dict):
+                sources = {}
+            sources.pop("genres", None)
+            self.connection.execute(
+                """
+                UPDATE releases
+                SET genres_json = '[]', genre_urls_json = '[]',
+                    secondary_genres_json = '[]', secondary_genre_urls_json = '[]',
+                    metadata_sources_json = ?, fetched_at = ?
+                WHERE album_id = ?
+                """,
+                (_json_dump(sources), _now(), album_id),
+            )
+            return True
+
     def _cleanup_orphan_release_cache_locked(self) -> None:
         self.connection.execute(
             """

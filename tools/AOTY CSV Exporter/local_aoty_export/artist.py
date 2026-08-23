@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,56 +20,89 @@ class ArtistPage:
     rows: list[dict]
 
 
+def _detail_values(soup, label: str) -> list[str]:
+    """Read one row from the artist-details box only.
+
+    AOTY pages include navigation, filter controls and the logged-in user's
+    menu in the document.  Looking through the whole page makes labels such
+    as ``Genre`` and ``Aliases`` swallow that UI text, so this intentionally
+    accepts values only from the compact artist header details box.
+    """
+
+    wanted = label.casefold()
+    for row in soup.select(".artistHeader .artistTopBox.info .detailRow"):
+        marker_tag = row.select_one("span")
+        marker = clean_text(
+            marker_tag.get_text(" ", strip=True) if marker_tag is not None else ""
+        )
+        if wanted not in marker.casefold():
+            continue
+        values = [
+            clean_text(link.get_text(" ", strip=True))
+            for link in row.select("a")
+            if clean_text(link.get_text(" ", strip=True))
+        ]
+        if values:
+            return values
+        direct_text = " ".join(
+            clean_text(part)
+            for part in row.find_all(string=True, recursive=False)
+            if clean_text(part)
+        )
+        return split_values(direct_text)
+    return []
+
+
+def _release_cards(soup):
+    """Return only actual discography cards, never navigation album links."""
+
+    return soup.select("#albumOutput .albumBlock")
+
+
 def parse_artist_page(path: Path) -> ArtistPage:
     soup = soup_from_path(path)
     artist_url = page_url_from_file(soup, path)
-    heading = soup.select_one("h1")
+    heading = soup.select_one(".artistHeader h1.artistHeadline") or soup.select_one("h1")
     artist = clean_text(heading.get_text(" ", strip=True)) if heading else ""
     if not artist:
         meta = soup.select_one('meta[property="og:title"]')
         artist = clean_text(meta.get("content")) if meta else ""
     if not artist:
         raise ValueError("nie znaleziono nazwy artysty")
-    text = clean_text(soup.get_text(" ", strip=True))
-    genre_match = re.search(r"(?:genre|genres)\s*[:]?\s*([^|•]+)", text, re.I)
-    aliases_match = re.search(r"(?:also known as|aliases)\s*[:]?\s*([^|•]+)", text, re.I)
-    member_match = re.search(r"(?:members?)\s*[:]?\s*([^|•]+)", text, re.I)
-    country_match = re.search(r"(?:origin|country)\s*[:]?\s*([^|•]+)", text, re.I)
-    date_match = re.search(r"(?:founded|born|birthdate)\s*[:]?\s*([^|•]+)", text, re.I)
     common = {
         "Artist": artist,
         "Artist URL": artist_url,
         "Image URL": image_url(soup),
-        "Genres": ", ".join(split_values(genre_match.group(1) if genre_match else "")),
-        "Aliases": ", ".join(split_values(aliases_match.group(1) if aliases_match else "")),
-        "Members": clean_text(member_match.group(1) if member_match else ""),
-        "Origin Country": clean_text(country_match.group(1) if country_match else ""),
-        "Founded/Birthdate": clean_text(date_match.group(1) if date_match else ""),
+        "Genres": ", ".join(_detail_values(soup, "genre")),
+        "Aliases": ", ".join(_detail_values(soup, "also known as")),
+        "Members": ", ".join(_detail_values(soup, "member")),
+        "Origin Country": ", ".join(_detail_values(soup, "origin")),
+        "Founded/Birthdate": ", ".join(
+            _detail_values(soup, "founded") or _detail_values(soup, "born")
+        ),
     }
     rows: list[dict] = []
     seen: set[str] = set()
-    for link in soup.select('a[href*="/album/"]'):
+    for card in _release_cards(soup):
+        link = card.select_one('a[href*="/album/"]')
+        if link is None:
+            continue
         album_url = absolute_url(link.get("href"))
         album_id = aoty_album_id(album_url)
-        album = clean_text(link.get_text(" ", strip=True))
+        title = card.select_one(".albumTitle")
+        album = clean_text(title.get_text(" ", strip=True)) if title else clean_text(link.get_text(" ", strip=True))
         if not album_id or not album or album_id in seen:
             continue
-        parent = link
-        for _ in range(4):
-            parent = parent.parent
-            if parent is None:
-                break
-        card_text = clean_text(parent.get_text(" ", strip=True)) if parent else album
-        year = re.search(r"\b((?:19|20)\d{2})\b", card_text)
-        release_format = re.search(r"\b(LP|EP|Single|Mixtape|Compilation|Reissue|Music Video|DJ Mix)\b", card_text, re.I)
-        cover = parent.select_one("img[src]") if parent else None
+        year = clean_text((card.select_one(".type") or "").get_text(" ", strip=True))
+        year = year if year.isdecimal() and len(year) == 4 else ""
+        cover = card.select_one(".image img[src]")
         rows.append({
             **common,
             "Album ID": album_id,
             "Album": album,
             "Album URL": album_url,
-            "Year": year.group(1) if year else "",
-            "Format": release_format.group(1) if release_format else "",
+            "Year": year,
+            "Format": "",
             "Cover URL": absolute_url(cover.get("src")) if cover else "",
         })
         seen.add(album_id)

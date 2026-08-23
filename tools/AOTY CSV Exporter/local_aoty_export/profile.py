@@ -29,21 +29,51 @@ class ProfilePage:
     rows: list[dict]
 
 
-def _ancestor_with_context(tag):
-    node = tag
-    for _ in range(6):
-        if node is None:
-            break
-        text = clean_text(node.get_text(" ", strip=True))
-        if len(text) >= 8:
-            return node
-        node = node.parent
-    return tag.parent
-
-
 def _first_number(text: str, pattern: str) -> str:
     match = re.search(pattern, text, re.I)
     return match.group(1) if match else ""
+
+
+def _rating_cards(soup):
+    """Select real release cards, never AOTY's header, menu or footer links."""
+
+    selectors = (
+        "#albumOutput .albumBlock",
+        ".ratings .albumBlock",
+        ".profileRatings .albumBlock",
+        ".albumList .albumBlock",
+    )
+    cards = []
+    seen: set[int] = set()
+    for selector in selectors:
+        for card in soup.select(selector):
+            marker = id(card)
+            if marker not in seen:
+                cards.append(card)
+                seen.add(marker)
+    return cards
+
+
+def _card_score(card, text: str) -> str:
+    for selector in (".rating[data-btx-orig-score]", ".rating", ".userScore", ".score"):
+        tag = card.select_one(selector)
+        if tag is None:
+            continue
+        value = _first_number(clean_text(tag.get_text(" ", strip=True)), r"(100|[1-9]?\d)(?!\d)")
+        if value:
+            return value
+    return _first_number(text, r"(?:my\s+score|rating|score)\s*[:]?\s*(100|[1-9]?\d)(?!\d)")
+
+
+def _card_date(card, text: str) -> str:
+    for selector in ("time[datetime]", ".ratingDate", ".date", ".ratedDate"):
+        tag = card.select_one(selector)
+        if tag is None:
+            continue
+        value = date_yyyy_mm_dd(tag.get("datetime") or tag.get_text(" ", strip=True))
+        if value:
+            return value
+    return date_yyyy_mm_dd(text)
 
 
 def parse_profile_page(path: Path) -> ProfilePage:
@@ -60,27 +90,27 @@ def parse_profile_page(path: Path) -> ProfilePage:
 
     seen: set[str] = set()
     rows: list[dict] = []
-    for album_link in soup.select('a[href*="/album/"]'):
+    for context in _rating_cards(soup):
+        album_link = context.select_one('a[href*="/album/"]')
+        if album_link is None:
+            continue
         album_url = absolute_url(album_link.get("href"))
         album_id = aoty_album_id(album_url)
-        album = clean_text(album_link.get_text(" ", strip=True))
+        title = context.select_one(".albumTitle")
+        album = clean_text(title.get_text(" ", strip=True)) if title else clean_text(album_link.get_text(" ", strip=True))
         if not album_id or not album or album_id in seen:
             continue
-        context = _ancestor_with_context(album_link)
         text = clean_text(context.get_text(" ", strip=True))
+        artist_tag = context.select_one(".artistTitle")
         artist_link = context.find("a", href=re.compile(r"/artist/", re.I))
-        artist = clean_text(artist_link.get_text(" ", strip=True)) if artist_link else ""
+        artist = clean_text(artist_tag.get_text(" ", strip=True)) if artist_tag else ""
+        if not artist and artist_link is not None:
+            artist = clean_text(artist_link.get_text(" ", strip=True))
         artist_url = absolute_url(artist_link.get("href")) if artist_link else ""
-        if not artist:
-            before = clean_text(text.split(album, 1)[0])
-            artist = re.sub(r"\b(?:rated|rating|score)\b.*$", "", before, flags=re.I).strip(" -–—")
-        score = _first_number(text, r"(?:rating|score)\s*[:]?\s*(100|[1-9]?\d)(?!\d)")
-        if not score:
-            score_tag = context.select_one(".rating, .score, .userScore, .ratingValue")
-            score = _first_number(clean_text(score_tag.get_text(" ", strip=True)) if score_tag else "", r"(100|[1-9]?\d)(?!\d)")
+        score = _card_score(context, text)
         year = _first_number(text, r"\b((?:19|20)\d{2})\b")
         release_type = _first_number(text, r"\b(LP|EP|Single|Mixtape|Compilation|Reissue|Music Video|DJ Mix)\b")
-        date = date_yyyy_mm_dd(text)
+        date = _card_date(context, text)
         image = context.select_one("img[src]")
         if artist and score and date:
             rows.append({
@@ -97,5 +127,9 @@ def parse_profile_page(path: Path) -> ProfilePage:
             })
             seen.add(album_id)
     if not rows:
-        raise ValueError("nie znaleziono pełnych rekordów ocen z datą")
+        raise ValueError(
+            "nie znaleziono kart ocen z datą — zapisz stronę "
+            f"https://www.albumoftheyear.org/user/{username}/ratings/ "
+            "(nie zwykłą stronę profilu)"
+        )
     return ProfilePage(username=username, rows=rows)

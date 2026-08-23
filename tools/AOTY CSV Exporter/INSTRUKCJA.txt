@@ -36,7 +36,10 @@ w swoim folderze wraz z opisem bledu w oknie programu.
 
 PROFILE
 --------
-Do 1. profile\ wrzuc kolejne strony ocen dowolnego profilu. Nazwa uzytkownika
+Do 1. profile\ wrzuc strony OCEN profilu, czyli adres w rodzaju:
+https://www.albumoftheyear.org/user/enso/ratings/
+Nie zapisuj zwyklej strony https://www.albumoftheyear.org/user/enso/ — zawiera
+profil, ale nie ma kompletnych rekordow ocen wraz z data. Nazwa uzytkownika
 jest odczytywana z adresu zapisanego w HTML, wiec nie musisz tworzyc folderow
 dla enso/kulkien. Wynik ma nazwe np. profile-enso-ratings.csv.
 

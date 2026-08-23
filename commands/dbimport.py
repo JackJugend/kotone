@@ -193,7 +193,11 @@ def _import_tracks(rows: list[dict[str, str]]) -> tuple[int, int]:
 
 
 def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
-    """Persist aliases and compact discography rows only when in Kotone scope."""
+    """Persist aliases and compact discography rows only when in Kotone scope.
+
+    Artist pages describe the artist as a whole.  Their genres and aliases
+    must never be copied onto every release in that artist's discography.
+    """
 
     aliases_saved = 0
     releases_saved = 0
@@ -203,9 +207,32 @@ def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
         if artist:
             by_artist[artist].extend(_list_value(row, "Aliases"))
         album_id = _value(row, "Album ID")
+        year = _value(row, "Year")
+        release_payload = {
+            "artist": artist or None,
+            "artist_url": _value(row, "Artist URL") or None,
+            "album": _value(row, "Album") or None,
+            "url": _value(row, "Album URL") or None,
+            "cover": _value(row, "Cover URL") or None,
+            "release_date": year or None,
+            "album_format": _value(row, "Format") or None,
+            "source": "manual",
+            "_section_complete": {
+                "release_date": bool(year),
+                "format": bool(_value(row, "Format")),
+            },
+        }
+        release_payload = {
+            key: value for key, value in release_payload.items()
+            if value not in (None, "")
+        }
+        # Repair only the very specific navigation-text corruption produced by
+        # earlier artist HTML exports before saving the clean discography row.
+        if album_id.isdecimal():
+            DB.clear_malformed_manual_release_genres(album_id)
         if album_id.isdecimal() and DB.save_release_details(
             album_id,
-            _metadata_payload(row),
+            release_payload,
             allow_unscoped_manual=True,
         ):
             releases_saved += 1
