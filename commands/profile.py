@@ -387,6 +387,8 @@ def setup_profile_command(tree: discord.app_commands.CommandTree):
         # in place of the exact SQLite average.
         sqlite_average = profile.get("sqlite_average_rating")
         sqlite_average_count = int(profile.get("sqlite_average_count") or 0)
+        if sqlite_average_count:
+            ratings_count = str(sqlite_average_count)
         average_rating = (
             float(sqlite_average)
             if sqlite_average is not None

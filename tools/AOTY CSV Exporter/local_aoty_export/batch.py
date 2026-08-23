@@ -205,6 +205,20 @@ def _write_output_zip(root: Path, output: Path) -> Path | None:
     return destination
 
 
+def _remove_packaged_csv(output: Path, archive: Path, problems: list[str]) -> None:
+    """Remove working CSV files only after the final ZIP exists."""
+
+    if not archive.is_file():
+        return
+    for path in output.glob("*.csv"):
+        if not path.is_file():
+            continue
+        try:
+            path.unlink()
+        except OSError as exc:
+            problems.append(f"nie usunieto roboczego CSV {path.name}: {exc}")
+
+
 def run_batch() -> int:
     root = Path(__file__).resolve().parent.parent
     for name in FOLDER_NAMES:
@@ -234,6 +248,7 @@ def run_batch() -> int:
     archive = _write_output_zip(root, output)
     if archive is not None:
         print(f"ZIP do /dbimport: {archive}")
+        _remove_packaged_csv(output, archive, problems)
     if problems:
         print("\nPliki pozostawione do poprawy:")
         for item in problems:

@@ -204,19 +204,11 @@ def _artist_header_text(discography):
 
     score = score_or_missing(discography.get("artist_user_score"))
 
-    ratings_count = (
-        discography.get(
-            "artist_ratings_count"
-        )
-        or "0"
-    )
+    ratings_value = discography.get("artist_ratings_count")
+    ratings_count = "—" if ratings_value in (None, "") else str(ratings_value)
 
-    followers = (
-        discography.get(
-            "artist_followers"
-        )
-        or "0"
-    )
+    followers_value = discography.get("artist_followers")
+    followers = "—" if followers_value in (None, "") else str(followers_value)
 
     lines = [
         (
