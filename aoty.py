@@ -1251,6 +1251,12 @@ def _extract_artist_user_score(
     soup: BeautifulSoup,
 ) -> str | None:
     """Read the headline User Score from an AOTY artist page."""
+    direct = soup.select_one(".artistUserScore")
+    if direct is not None:
+        value = " ".join(direct.get_text(" ", strip=True).split())
+        if re.fullmatch(r"100|\d{1,2}|NR", value, flags=re.IGNORECASE):
+            return value.upper()
+
     for string in soup.find_all(string=True):
         if " ".join(
             str(string).split()
@@ -1296,6 +1302,12 @@ def _extract_artist_ratings_count(
         r"\s+ratings\b",
         flags=re.IGNORECASE,
     )
+
+    direct = soup.select_one(".artistUserScoreBox .text")
+    if direct is not None:
+        match = pattern.search(" ".join(direct.get_text(" ", strip=True).split()))
+        if match:
+            return re.sub(r"\s+", "", match.group(1))
 
     for string in soup.find_all(string=True):
         if " ".join(
@@ -1388,6 +1400,14 @@ def _extract_artist_followers(
         r"^\s*([\d][\d,.]*(?:\s*[KM])?)\s+Followers\s*$",
         flags=re.IGNORECASE,
     )
+
+    direct = soup.select_one(".artistTopBox .followCount")
+    if direct is not None:
+        match = followers_pattern.fullmatch(
+            " ".join(direct.get_text(" ", strip=True).replace("\xa0", " ").split())
+        )
+        if match:
+            return re.sub(r"\s+", "", match.group(1))
 
     # 1. Strongest path: find the Follow control and inspect nearby text.
     for string in soup.find_all(string=True):

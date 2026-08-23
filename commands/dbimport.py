@@ -226,10 +226,27 @@ def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
     aliases_saved = 0
     releases_saved = 0
     by_artist: dict[str, list[str]] = defaultdict(list)
+    artist_data: dict[str, dict] = {}
     for row in rows:
         artist = _value(row, "Artist")
         if artist:
             by_artist[artist].extend(_list_value(row, "Aliases"))
+            current = artist_data.setdefault(artist, {})
+            candidates = {
+                "url": _value(row, "Artist URL"),
+                "image_url": _value(row, "Image URL"),
+                "genres": _list_value(row, "Genres"),
+                "aliases": _list_value(row, "Aliases"),
+                "members": _list_value(row, "Members"),
+                "origin_country": _value(row, "Origin Country"),
+                "founded_birthdate": _value(row, "Founded/Birthdate"),
+                "artist_user_score": _score_value(row, "AOTY User Score"),
+                "artist_ratings_count": _count_value(row, "AOTY Ratings"),
+                "artist_followers": _count_value(row, "AOTY Followers"),
+            }
+            for key, value in candidates.items():
+                if value not in (None, "", []) and key not in current:
+                    current[key] = value
         album_id = _value(row, "Album ID")
         year = _value(row, "Year")
         release_payload = {
@@ -268,6 +285,15 @@ def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
             allow_unscoped_manual=True,
         ):
             aliases_saved += 1
+        data = artist_data.get(artist) or {}
+        if data:
+            DB.save_artist_source_data(
+                artist,
+                "manual",
+                data,
+                quality="operator_html",
+                allow_unscoped_manual=True,
+            )
     return releases_saved, aliases_saved
 
 
@@ -329,9 +355,12 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
                 elif not re.fullmatch(r"profile-.+?-ratings\.csv", name, re.I):
                     skipped.append(f"{name}: nierozpoznany typ CSV")
 
+            # Najpierw ogólna dyskografia (często zna tylko rok), potem pełna
+            # strona albumu. Dzięki temu dokładna data i pozostałe szczegóły
+            # zawsze wygrywają i nie są cofane do samego roku.
+            artist_releases, artist_aliases = await asyncio.to_thread(_import_artists, artist_rows)
             metadata_saved, metadata_skipped = await asyncio.to_thread(_import_metadata, metadata_rows)
             tracks_saved, tracks_skipped = await asyncio.to_thread(_import_tracks, track_rows)
-            artist_releases, artist_aliases = await asyncio.to_thread(_import_artists, artist_rows)
         except (BundleImportError, RatingImportError, ValueError) as exc:
             await interaction.followup.send(f"❌ `/dbimport` zatrzymany: {exc}", ephemeral=True)
             return

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,6 +53,14 @@ def _rating_cards(soup):
             if marker not in seen:
                 cards.append(card)
                 seen.add(marker)
+    # Zwykła strona /user/<nazwa>/ nie ma kontenera ``profileRatings``, ale
+    # pokazuje sekcje „Recently Rated” i „Best of …”. Bierzemy z niej tylko
+    # karty, które rzeczywiście zawierają ocenę; ulubione albumy odpadają.
+    for card in soup.select(".albumBlock"):
+        marker = id(card)
+        if marker not in seen and card.select_one(".rating") is not None:
+            cards.append(card)
+            seen.add(marker)
     return cards
 
 
@@ -66,12 +75,43 @@ def _card_score(card, text: str) -> str:
     return _first_number(text, r"(?:my\s+score|rating|score)\s*[:]?\s*(100|[1-9]?\d)(?!\d)")
 
 
-def _card_date(card, text: str) -> str:
+def _partial_card_date(raw: str, reference_date: date) -> str:
+    raw = clean_text(raw)
+    if not raw:
+        return ""
+    exact = date_yyyy_mm_dd(raw)
+    if exact:
+        return exact
+    if re.fullmatch(r"(?:today|\d+\s*[hm]\s+ago)", raw, re.I):
+        return reference_date.isoformat()
+    match = re.fullmatch(r"([A-Za-z]{3,9})\s+(\d{1,2})", raw)
+    if not match:
+        return ""
+    for fmt in ("%b %d %Y", "%B %d %Y"):
+        try:
+            parsed = datetime.strptime(f"{raw} {reference_date.year}", fmt).date()
+            if parsed > reference_date + timedelta(days=7):
+                parsed = parsed.replace(year=parsed.year - 1)
+            return parsed.isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
+def _card_date(card, text: str, reference_date: date) -> str:
     for selector in ("time[datetime]", ".ratingDate", ".date", ".ratedDate"):
         tag = card.select_one(selector)
         if tag is None:
             continue
         value = date_yyyy_mm_dd(tag.get("datetime") or tag.get_text(" ", strip=True))
+        if value:
+            return value
+    rating_text = card.select_one(".ratingText[data-btx-original-score]")
+    if rating_text is not None:
+        value = _partial_card_date(
+            str(rating_text.get("data-btx-original-score") or ""),
+            reference_date,
+        )
         if value:
             return value
     return date_yyyy_mm_dd(text)
@@ -89,6 +129,7 @@ def parse_profile_page(path: Path) -> ProfilePage:
     if not username:
         raise ValueError("nie znaleziono nazwy profilu AOTY w zapisanym HTML")
 
+    reference_date = datetime.fromtimestamp(path.stat().st_mtime).date()
     seen: set[str] = set()
     rows: list[dict] = []
     for context in _rating_cards(soup):
@@ -111,16 +152,16 @@ def parse_profile_page(path: Path) -> ProfilePage:
         score = _card_score(context, text)
         year = _first_number(text, r"\b((?:19|20)\d{2})\b")
         release_type = _first_number(text, r"\b(LP|EP|Single|Mixtape|Compilation|Reissue|Music Video|DJ Mix)\b")
-        date = _card_date(context, text)
+        rated_date = _card_date(context, text, reference_date)
         image = context.select_one("img[src]")
-        if artist and score and date:
+        if artist and score and rated_date:
             rows.append({
                 "Artist": artist,
                 "Album": album,
                 "Year": year,
                 "Type": release_type or "LP",
                 "Rating": score,
-                "Date Rated": date,
+                "Date Rated": rated_date,
                 "Album ID": album_id,
                 "Album URL": album_url,
                 "Artist URL": artist_url,
@@ -128,9 +169,5 @@ def parse_profile_page(path: Path) -> ProfilePage:
             })
             seen.add(album_id)
     if not rows:
-        raise ValueError(
-            "nie znaleziono kart ocen z datą — zapisz stronę "
-            f"https://www.albumoftheyear.org/user/{username}/ratings/ "
-            "(nie zwykłą stronę profilu)"
-        )
+        raise ValueError("nie znaleziono na zapisanej stronie żadnych kart ocen z datą")
     return ProfilePage(username=username, rows=rows)

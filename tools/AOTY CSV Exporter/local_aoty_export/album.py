@@ -112,11 +112,29 @@ def _rankings(user_box) -> tuple[str, str]:
         text = _node_text(node)
         year_match = re.search(r"((?:19|20)\d{2})\s+Ratings:\s*#(\d+)", text, re.I)
         if year_match:
-            year_ranking = f"{year_match.group(1)}:#{year_match.group(2)}"
+            # The release year is stored separately by Kotone.  Keeping only
+            # the rank avoids rendering e.g. ``2026 ratings: 2026:#6``.
+            year_ranking = f"#{year_match.group(2)}"
         all_time_match = re.search(r"All\s+Time:\s*#(\d+)", text, re.I)
         if all_time_match:
             all_time_ranking = f"#{all_time_match.group(1)}"
     return year_ranking, all_time_ranking
+
+
+def _tracklist_duration(tracks: list[dict]) -> str:
+    total_seconds = 0
+    found = False
+    for track in tracks:
+        match = re.fullmatch(r"(\d{1,2}):(\d{2})", str(track.get("Duration") or ""))
+        if not match:
+            continue
+        total_seconds += int(match.group(1)) * 60 + int(match.group(2))
+        found = True
+    if not found:
+        return ""
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
 
 
 def parse_album_page(path: Path) -> AlbumPage:
@@ -193,4 +211,5 @@ def parse_album_page(path: Path) -> AlbumPage:
             "AOTY Score": score_match.group(1) if score_match else "",
             "URL": absolute_url(title_link.get("href")),
         })
+    metadata["Duration"] = _tracklist_duration(tracks) or duration
     return AlbumPage(metadata=metadata, tracks=tracks)

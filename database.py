@@ -2845,6 +2845,7 @@ class Database:
         *,
         quality: str,
         retry_after: float = 0.0,
+        allow_unscoped_manual: bool = False,
     ) -> bool:
         """Store non-AOTY artist metadata only for configured-user artists."""
 
@@ -2861,7 +2862,7 @@ class Database:
                 """,
                 (name,),
             ).fetchone()
-            if in_scope is None:
+            if in_scope is None and not (source == "manual" and allow_unscoped_manual):
                 return False
             self.connection.execute(
                 """

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,8 +11,9 @@ from .common import absolute_url, aoty_album_id, clean_text, image_url, page_url
 
 ARTIST_HEADERS = (
     "Artist", "Artist URL", "Image URL", "Genres", "Aliases", "Members",
-    "Origin Country", "Founded/Birthdate", "Album ID", "Album", "Album URL",
-    "Year", "Format", "Cover URL",
+    "Origin Country", "Founded/Birthdate", "AOTY User Score", "AOTY Ratings",
+    "AOTY Followers", "Album ID", "Album", "Album URL", "Year", "Format",
+    "Cover URL",
 )
 
 
@@ -59,6 +61,18 @@ def _release_cards(soup):
     return soup.select("#albumOutput .albumBlock")
 
 
+def _artist_summary(soup) -> tuple[str, str, str]:
+    score_tag = soup.select_one(".artistUserScore")
+    ratings_tag = soup.select_one(".artistUserScoreBox .text")
+    followers_tag = soup.select_one(".artistTopBox .followCount")
+    score = clean_text(score_tag.get_text(" ", strip=True)) if score_tag else ""
+    ratings_text = clean_text(ratings_tag.get_text(" ", strip=True)) if ratings_tag else ""
+    followers_text = clean_text(followers_tag.get_text(" ", strip=True)) if followers_tag else ""
+    ratings = re.sub(r"\D", "", ratings_text)
+    followers = re.sub(r"\D", "", followers_text)
+    return score if re.fullmatch(r"100|\d{1,2}", score) else "", ratings, followers
+
+
 def parse_artist_page(path: Path) -> ArtistPage:
     soup = soup_from_path(path)
     artist_url = page_url_from_file(soup, path)
@@ -69,6 +83,7 @@ def parse_artist_page(path: Path) -> ArtistPage:
         artist = clean_text(meta.get("content")) if meta else ""
     if not artist:
         raise ValueError("nie znaleziono nazwy artysty")
+    user_score, ratings_count, followers_count = _artist_summary(soup)
     common = {
         "Artist": artist,
         "Artist URL": artist_url,
@@ -80,6 +95,9 @@ def parse_artist_page(path: Path) -> ArtistPage:
         "Founded/Birthdate": ", ".join(
             _detail_values(soup, "founded") or _detail_values(soup, "born")
         ),
+        "AOTY User Score": user_score,
+        "AOTY Ratings": ratings_count,
+        "AOTY Followers": followers_count,
     }
     rows: list[dict] = []
     seen: set[str] = set()

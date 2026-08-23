@@ -560,6 +560,7 @@ class DataService:
         artist_url = artist_info.get("url") or releases[0].get("artist_url")
         artist_info["url"] = artist_url
         artist_info["source_data"] = DB.get_artist_source_data(artist_info["name"])
+        manual_data = dict(artist_info["source_data"].get("manual") or {})
         cached_genres = sorted(
             {
                 genre
@@ -588,11 +589,17 @@ class DataService:
         return artist_info, {
             "artist": artist_info["name"],
             "url": artist_url,
-            "image": None,
+            "image": manual_data.get("image_url"),
             "releases": releases,
-            "genres_text": ", ".join(cached_genres[:10]) or None,
+            "genres": display_genres(manual_data.get("genres") or []) or cached_genres,
+            "genres_text": ", ".join(
+                display_genres(manual_data.get("genres") or []) or cached_genres[:10]
+            ) or None,
             "akas": aliases,
             "akas_text": ", ".join(aliases[:10]) or None,
+            "artist_user_score": manual_data.get("artist_user_score"),
+            "artist_ratings_count": manual_data.get("artist_ratings_count"),
+            "artist_followers": manual_data.get("artist_followers"),
             "source_data": dict(artist_info["source_data"]),
             "source": "SQLite cache",
         }
