@@ -13,7 +13,9 @@ def main() -> int:
     # Make the drag-and-drop folders visible even on a new Windows setup that
     # still needs the one-off BeautifulSoup installation.
     root = Path(__file__).resolve().parent
-    for name in ("1. profile", "2. album", "3. artist", "0. GOTOWE CSV"):
+    for name in (
+        "1. profile", "2. album", "3. artist", "4. rankings", "0. GOTOWE CSV",
+    ):
         (root / name).mkdir(parents=True, exist_ok=True)
     try:
         from local_aoty_export.batch import run_batch

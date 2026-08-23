@@ -421,12 +421,15 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
                 like_results.append((username, result))
 
             metadata_rows: list[dict[str, str]] = []
+            ranking_rows: list[dict[str, str]] = []
             track_rows: list[dict[str, str]] = []
             artist_rows: list[dict[str, str]] = []
             for name, payload in bundle.items():
                 lowered = name.casefold()
                 if lowered == "album-metadata.csv":
                     metadata_rows.extend(await asyncio.to_thread(_csv_rows, payload, name))
+                elif lowered == "ranking-albums.csv":
+                    ranking_rows.extend(await asyncio.to_thread(_csv_rows, payload, name))
                 elif lowered == "album-tracklist.csv":
                     track_rows.extend(await asyncio.to_thread(_csv_rows, payload, name))
                 elif lowered == "artist-discography.csv":
@@ -438,6 +441,7 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
             # strona albumu. Dzięki temu dokładna data i pozostałe szczegóły
             # zawsze wygrywają i nie są cofane do samego roku.
             artist_releases, artist_aliases = await asyncio.to_thread(_import_artists, artist_rows)
+            ranking_saved, ranking_skipped = await asyncio.to_thread(_import_metadata, ranking_rows)
             metadata_saved, metadata_skipped = await asyncio.to_thread(_import_metadata, metadata_rows)
             tracks_saved, tracks_skipped = await asyncio.to_thread(_import_tracks, track_rows)
         except (BundleImportError, RatingImportError, ValueError) as exc:
@@ -463,6 +467,8 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
             )
         if metadata_rows:
             lines.append(f"• albumy: {metadata_saved} zapisanych · {metadata_skipped} pominiętych")
+        if ranking_rows:
+            lines.append(f"• rankingi: {ranking_saved} zapisanych · {ranking_skipped} pominiętych")
         if track_rows:
             lines.append(f"• tracklista: {tracks_saved} utworów · {tracks_skipped} pominiętych")
         if artist_rows:

@@ -20,6 +20,7 @@ Po pierwszym uruchomieniu pojawia sie:
   1. profile\       - zapisane strony ocen profili AOTY
   2. album\         - zapisane strony konkretnych wydan AOTY
   3. artist\        - zapisane strony artystow AOTY
+  4. rankings\      - zapisane strony rankingow AOTY
   0. GOTOWE CSV\    - tutaj trafia wynik
 
 JAK UZYWAC
@@ -28,6 +29,14 @@ JAK UZYWAC
 2. Zapisz strone przez Ctrl+S jako "Strona internetowa, kompletna" albo HTML.
 3. Wrzuc zapisany plik .html do odpowiedniego folderu.
 4. Uruchom run_exporter.cmd.
+
+RANKINGI
+---------
+Do 4. rankings\ wrzucaj zapisane strony rankingow, np. rankingu all-time,
+konkretnego roku albo rankingu filtrowanego gatunkiem. Eksporter zapisuje
+pozycje i wszystkie dane obecne w wierszach rankingu. Do pol rankingu albumu
+w bazie trafiaja tylko niefiltrowane rankingi all-time i konkretnego roku;
+pozycje z filtrow gatunku, dekady lub formatu nie nadpisuja tych wartosci.
 
 Eksporter zapisze w folderze "0. GOTOWE CSV" CSV oraz ZIP nazwany data i czasem utworzenia,
 np. "2026-08-23_05-20-30.zip". Usunie TYLKO te HTML i foldery "*_files", ktore

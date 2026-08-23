@@ -13,14 +13,18 @@ from .album import ALBUM_HEADERS, TRACK_HEADERS, parse_album_page
 from .artist import ARTIST_HEADERS, parse_artist_page
 from .common import all_html_files, read_csv, write_csv
 from .profile import PROFILE_HEADERS, PROFILE_LIKE_HEADERS, parse_profile_page
+from .ranking import RANKING_HEADERS, parse_ranking_page
 
 
 PROFILE_FOLDER = "1. profile"
 ALBUM_FOLDER = "2. album"
 ARTIST_FOLDER = "3. artist"
+RANKING_FOLDER = "4. rankings"
 OUTPUT_FOLDER = "0. GOTOWE CSV"
 LEGACY_OUTPUT_ZIP_NAME = "0. GOTOWE CSV.zip"
-FOLDER_NAMES = (PROFILE_FOLDER, ALBUM_FOLDER, ARTIST_FOLDER, OUTPUT_FOLDER)
+FOLDER_NAMES = (
+    PROFILE_FOLDER, ALBUM_FOLDER, ARTIST_FOLDER, RANKING_FOLDER, OUTPUT_FOLDER,
+)
 
 
 def _merge_rows(path: Path, headers: tuple[str, ...], rows: list[dict], key_fields: tuple[str, ...]) -> int:
@@ -56,7 +60,7 @@ def _remove_saved_page_assets(path: Path, problems: list[str]) -> None:
 def _remove_orphaned_asset_directories(root: Path, problems: list[str]) -> None:
     """Remove old Ctrl+S ``*_files`` folders after their HTML is gone."""
 
-    for folder_name in (PROFILE_FOLDER, ALBUM_FOLDER, ARTIST_FOLDER):
+    for folder_name in (PROFILE_FOLDER, ALBUM_FOLDER, ARTIST_FOLDER, RANKING_FOLDER):
         folder = root / folder_name
         if not folder.is_dir():
             continue
@@ -189,6 +193,40 @@ def _run_artists(root: Path, output: Path) -> tuple[int, list[str]]:
     return len(rows), problems
 
 
+def _run_rankings(root: Path, output: Path) -> tuple[int, list[str]]:
+    """Convert saved ranking pages without mixing them with album pages."""
+
+    rows: list[dict] = []
+    processed: list[Path] = []
+    problems: list[str] = []
+    for path in all_html_files(root / RANKING_FOLDER):
+        try:
+            page = parse_ranking_page(path)
+            rows.extend(page.rows)
+            processed.append(path)
+        except Exception as exc:
+            problems.append(f"{RANKING_FOLDER}/{path.name}: {exc}")
+    if not processed:
+        return 0, problems
+    try:
+        count = _merge_rows(
+            output / "ranking-albums.csv",
+            RANKING_HEADERS,
+            rows,
+            ("Ranking Key", "Album ID"),
+        )
+    except Exception as exc:
+        return 0, [*problems, f"{OUTPUT_FOLDER}/ranking-albums.csv: {exc}"]
+    for path in processed:
+        try:
+            path.unlink()
+            _remove_saved_page_assets(path, problems)
+        except OSError as exc:
+            problems.append(f"nie usunieto {path.name}: {exc}")
+    print(f"[RANKING] {len(processed)} stron, {len(rows)} nowych, razem {count} rekordow.")
+    return len(rows), problems
+
+
 def _write_output_zip(root: Path, output: Path) -> Path | None:
     """Create one portable archive containing every generated CSV."""
 
@@ -232,18 +270,21 @@ def run_batch() -> int:
         profile_count, profile_problems = _run_profiles(root, output)
         album_count, album_problems = _run_albums(root, output)
         artist_count, artist_problems = _run_artists(root, output)
+        ranking_count, ranking_problems = _run_rankings(root, output)
     except ModuleNotFoundError as exc:
         if exc.name == "bs4":
             print("Brakuje BeautifulSoup. Wpisz: py -m pip install -r requirements.txt")
             return 2
         raise
-    problems = [*profile_problems, *album_problems, *artist_problems]
+    problems = [
+        *profile_problems, *album_problems, *artist_problems, *ranking_problems,
+    ]
     _remove_orphaned_asset_directories(root, problems)
     _remove_legacy_output_zip(root, problems)
-    if not any((profile_count, album_count, artist_count)):
+    if not any((profile_count, album_count, artist_count, ranking_count)):
         print(
             "Nie znaleziono nowych poprawnych HTML. Wrzuc pliki do "
-            f"{PROFILE_FOLDER}, {ALBUM_FOLDER} albo {ARTIST_FOLDER}."
+            f"{PROFILE_FOLDER}, {ALBUM_FOLDER}, {ARTIST_FOLDER} albo {RANKING_FOLDER}."
         )
     else:
         print(f"Gotowe CSV: {output}")
