@@ -74,7 +74,7 @@ def _read_bundle(filename: str, payload: bytes) -> dict[str, bytes]:
 
 
 def _target_profile_from_filename(filename: str) -> tuple[str | None, str | None]:
-    match = re.fullmatch(r"profile-(.+?)-ratings\.csv", filename, re.I)
+    match = re.fullmatch(r"profile-(.+?)-(?:ratings|likes)\.csv", filename, re.I)
     if not match:
         return None, "niepoprawna nazwa pliku profilu"
     wanted = match.group(1).strip().casefold()
@@ -216,6 +216,52 @@ def _import_tracks(rows: list[dict[str, str]]) -> tuple[int, int]:
     return saved, skipped
 
 
+def _import_profile_likes(username: str, rows: list[dict[str, str]]) -> dict:
+    """Import positive like flags from a manually saved AOTY Likes page."""
+
+    records: list[dict] = []
+    rejected = 0
+    for row in rows:
+        album_id = _value(row, "Album ID")
+        artist = _value(row, "Artist")
+        album = _value(row, "Album")
+        if not album_id.isdecimal() or not artist or not album:
+            rejected += 1
+            continue
+        release_format = _value(row, "Type") or "LP"
+        record = {
+            "album_id": album_id,
+            "artist": artist,
+            "artist_url": _value(row, "Artist URL") or None,
+            "album": album,
+            "url": _value(row, "Album URL") or None,
+            "cover": _value(row, "Cover URL") or None,
+            "release_format": release_format,
+        }
+        DB.save_release_details(
+            album_id,
+            {
+                "artist": artist,
+                "artist_url": record["artist_url"],
+                "album": album,
+                "url": record["url"],
+                "cover": record["cover"],
+                "release_date": _value(row, "Year") or None,
+                "album_format": release_format,
+                "source": "manual",
+                "_section_complete": {
+                    "release_date": bool(_value(row, "Year")),
+                    "format": bool(release_format),
+                },
+            },
+            allow_unscoped_manual=True,
+        )
+        records.append(record)
+    result = DB.import_profile_likes(username, records)
+    result["rejected"] = rejected
+    return result
+
+
 def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
     """Persist aliases and compact discography rows only when in Kotone scope.
 
@@ -326,6 +372,7 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
             )
             await asyncio.to_thread(DB.backup_if_due, force=True)
             profile_results: list[tuple[str, dict]] = []
+            like_results: list[tuple[str, dict]] = []
             skipped: list[str] = []
 
             # Profile ratings go first.  Album pages explicitly packed by an
@@ -341,6 +388,17 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
                 result = await asyncio.to_thread(DB.import_official_ratings, username, parsed["rows"])
                 profile_results.append((username, result))
 
+            for name, payload in bundle.items():
+                if not re.fullmatch(r"profile-.+?-likes\.csv", name, re.I):
+                    continue
+                username, reason = _target_profile_from_filename(name)
+                if username is None:
+                    skipped.append(f"{name}: {reason}")
+                    continue
+                rows = await asyncio.to_thread(_csv_rows, payload, name)
+                result = await asyncio.to_thread(_import_profile_likes, username, rows)
+                like_results.append((username, result))
+
             metadata_rows: list[dict[str, str]] = []
             track_rows: list[dict[str, str]] = []
             artist_rows: list[dict[str, str]] = []
@@ -352,7 +410,7 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
                     track_rows.extend(await asyncio.to_thread(_csv_rows, payload, name))
                 elif lowered == "artist-discography.csv":
                     artist_rows.extend(await asyncio.to_thread(_csv_rows, payload, name))
-                elif not re.fullmatch(r"profile-.+?-ratings\.csv", name, re.I):
+                elif not re.fullmatch(r"profile-.+?-(?:ratings|likes)\.csv", name, re.I):
                     skipped.append(f"{name}: nierozpoznany typ CSV")
 
             # Najpierw ogólna dyskografia (często zna tylko rok), potem pełna
@@ -376,6 +434,11 @@ def setup_dbimport_command(tree: discord.app_commands.CommandTree) -> None:
             lines.append(
                 f"• {username}: {result['added']} nowych · {result['updated']} zmian · "
                 f"{result['queued_notifications']} powiadomień"
+            )
+        for username, result in like_results:
+            lines.append(
+                f"• {username} likes: {result['added']} nowych · "
+                f"{result['updated']} ustawionych · {result['unchanged']} bez zmian"
             )
         if metadata_rows:
             lines.append(f"• albumy: {metadata_saved} zapisanych · {metadata_skipped} pominiętych")

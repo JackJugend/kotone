@@ -24,10 +24,16 @@ PROFILE_HEADERS = (
     "Album ID", "Album URL", "Artist URL", "Cover URL",
 )
 
+PROFILE_LIKE_HEADERS = (
+    "Artist", "Album", "Year", "Type", "Liked",
+    "Album ID", "Album URL", "Artist URL", "Cover URL",
+)
+
 
 @dataclass(frozen=True)
 class ProfilePage:
     username: str
+    kind: str
     rows: list[dict]
 
 
@@ -69,7 +75,8 @@ def _card_score(card, text: str) -> str:
         tag = card.select_one(selector)
         if tag is None:
             continue
-        value = _first_number(clean_text(tag.get_text(" ", strip=True)), r"(100|[1-9]?\d)(?!\d)")
+        raw = tag.get("data-btx-orig-score") or tag.get_text(" ", strip=True)
+        value = _first_number(clean_text(raw), r"(100|[1-9]?\d)(?!\d)")
         if value:
             return value
     return _first_number(text, r"(?:my\s+score|rating|score)\s*[:]?\s*(100|[1-9]?\d)(?!\d)")
@@ -129,10 +136,26 @@ def parse_profile_page(path: Path) -> ProfilePage:
     if not username:
         raise ValueError("nie znaleziono nazwy profilu AOTY w zapisanym HTML")
 
+    selected_tab = soup.select_one(".selectRow .selected")
+    selected_text = clean_text(
+        selected_tab.get_text(" ", strip=True) if selected_tab is not None else ""
+    )
+    title_text = clean_text(soup.title.get_text(" ", strip=True) if soup.title else "")
+    is_likes_page = bool(
+        re.search(r"/user/[^/]+/(?:liked/albums|likes)(?:/|$)", page_url, re.I)
+        or selected_text.casefold() == "liked"
+        or "liked albums" in title_text.casefold()
+    )
+
     reference_date = datetime.fromtimestamp(path.stat().st_mtime).date()
     seen: set[str] = set()
     rows: list[dict] = []
-    for context in _rating_cards(soup):
+    contexts = (
+        soup.select("#centerContent .albumBlock")
+        if is_likes_page
+        else _rating_cards(soup)
+    )
+    for context in contexts:
         album_link = context.select_one('a[href*="/album/"]')
         if album_link is None:
             continue
@@ -154,7 +177,20 @@ def parse_profile_page(path: Path) -> ProfilePage:
         release_type = _first_number(text, r"\b(LP|EP|Single|Mixtape|Compilation|Reissue|Music Video|DJ Mix)\b")
         rated_date = _card_date(context, text, reference_date)
         image = context.select_one("img[src]")
-        if artist and score and rated_date:
+        if is_likes_page and artist:
+            rows.append({
+                "Artist": artist,
+                "Album": album,
+                "Year": year,
+                "Type": release_type or "LP",
+                "Liked": "1",
+                "Album ID": album_id,
+                "Album URL": album_url,
+                "Artist URL": artist_url,
+                "Cover URL": tag_image_url(image),
+            })
+            seen.add(album_id)
+        elif artist and score and rated_date:
             rows.append({
                 "Artist": artist,
                 "Album": album,
@@ -169,5 +205,10 @@ def parse_profile_page(path: Path) -> ProfilePage:
             })
             seen.add(album_id)
     if not rows:
-        raise ValueError("nie znaleziono na zapisanej stronie żadnych kart ocen z datą")
-    return ProfilePage(username=username, rows=rows)
+        kind_text = "polubionych albumów" if is_likes_page else "ocen z datą"
+        raise ValueError(f"nie znaleziono na zapisanej stronie żadnych kart {kind_text}")
+    return ProfilePage(
+        username=username,
+        kind="likes" if is_likes_page else "ratings",
+        rows=rows,
+    )

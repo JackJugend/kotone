@@ -12,7 +12,7 @@ from shutil import rmtree
 from .album import ALBUM_HEADERS, TRACK_HEADERS, parse_album_page
 from .artist import ARTIST_HEADERS, parse_artist_page
 from .common import all_html_files, read_csv, write_csv
-from .profile import PROFILE_HEADERS, parse_profile_page
+from .profile import PROFILE_HEADERS, PROFILE_LIKE_HEADERS, parse_profile_page
 
 
 PROFILE_FOLDER = "1. profile"
@@ -86,35 +86,37 @@ def _remove_legacy_output_zip(root: Path, problems: list[str]) -> None:
 
 
 def _run_profiles(root: Path, output: Path) -> tuple[int, list[str]]:
-    groups: dict[str, list[dict]] = defaultdict(list)
-    processed: list[Path] = []
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    processed: list[tuple[Path, tuple[str, str]]] = []
     problems: list[str] = []
     for path in all_html_files(root / PROFILE_FOLDER):
         try:
             page = parse_profile_page(path)
-            groups[page.username.casefold()].extend(page.rows)
-            processed.append(path)
+            key = (page.username.casefold(), page.kind)
+            groups[key].extend(page.rows)
+            processed.append((path, key))
         except Exception as exc:
             problems.append(f"{PROFILE_FOLDER}/{path.name}: {exc}")
     written = 0
-    successfully_written: set[str] = set()
-    for username, rows in groups.items():
+    successfully_written: set[tuple[str, str]] = set()
+    for (username, kind), rows in groups.items():
         try:
+            is_likes = kind == "likes"
             count = _merge_rows(
-                output / f"profile-{username}-ratings.csv",
-                PROFILE_HEADERS,
+                output / f"profile-{username}-{kind}.csv",
+                PROFILE_LIKE_HEADERS if is_likes else PROFILE_HEADERS,
                 rows,
+                ("Album ID", "Artist", "Album") if is_likes else
                 ("Album ID", "Artist", "Album", "Date Rated"),
             )
             written += count
-            successfully_written.add(username)
-            print(f"[PROFILE] {username}: {len(rows)} nowych rekordow, razem {count}.")
+            successfully_written.add((username, kind))
+            print(f"[PROFILE/{kind.upper()}] {username}: {len(rows)} nowych rekordow, razem {count}.")
         except Exception as exc:
-            problems.append(f"{OUTPUT_FOLDER}/profile-{username}-ratings.csv: {exc}")
-    for path in processed:
+            problems.append(f"{OUTPUT_FOLDER}/profile-{username}-{kind}.csv: {exc}")
+    for path, key in processed:
         try:
-            username = parse_profile_page(path).username.casefold()
-            if username in successfully_written:
+            if key in successfully_written:
                 path.unlink()
                 _remove_saved_page_assets(path, problems)
         except OSError as exc:

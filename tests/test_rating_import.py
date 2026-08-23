@@ -162,6 +162,43 @@ class RatingImportDatabaseTests(unittest.TestCase):
         self.assertTrue(detail["liked"])
         self.assertEqual(detail["track_ratings"][0]["score"], "99")
 
+    def test_likes_page_import_preserves_existing_score(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "10",
+                "artist": "Akute",
+                "album": "Dzievački i kosmas",
+                "score": "85",
+                "date": "15.08.2026",
+                "release_format": "LP",
+                "liked": False,
+            },
+        )
+        result = self.db.import_profile_likes(
+            "enso",
+            [{"album_id": "10", "artist": "Akute", "album": "Dzievački i kosmas"}],
+        )
+        row = self.db.get_rating("enso", "10")
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(row["score"], "85")
+        self.assertTrue(row["liked"])
+
+    def test_likes_page_import_can_seed_unrated_liked_album(self):
+        result = self.db.import_profile_likes(
+            "enso",
+            [{
+                "album_id": "11",
+                "artist": "Artist",
+                "album": "Liked but unrated",
+                "release_format": "EP",
+            }],
+        )
+        row = self.db.get_rating("enso", "11")
+        self.assertEqual(result["added"], 1)
+        self.assertTrue(row["liked"])
+        self.assertIn(row["score"], (None, ""))
+
     def test_unique_config_scoped_album_id_can_add_other_config_user(self):
         self.db.upsert_rating(
             "enso",

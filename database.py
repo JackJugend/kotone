@@ -3668,6 +3668,93 @@ class Database:
             self.save_release_details(album_id, details)
         return summary
 
+    def import_profile_likes(self, username: str, records: list[dict]) -> dict:
+        """Persist likes from a user-saved AOTY Likes page without clearing scores.
+
+        A liked-albums page is positive evidence only: releases missing from a
+        single saved page are never unliked because the page may be paginated.
+        Existing score, date, review and Track Ratings data remain untouched.
+        """
+
+        canonical = self._require_monitored(username)
+        summary = {"added": 0, "updated": 0, "unchanged": 0}
+        now = _now()
+        with self._lock, self.connection:
+            for item in records:
+                album_id = str(item.get("album_id") or "").strip()
+                if not album_id:
+                    continue
+                existing = self.connection.execute(
+                    "SELECT liked FROM ratings WHERE username = ? AND album_id = ?",
+                    (canonical, album_id),
+                ).fetchone()
+                if existing is None:
+                    self._upsert_rating_locked(
+                        canonical,
+                        {
+                            **item,
+                            "score": None,
+                            "date": None,
+                            "sort_timestamp": None,
+                            "has_review": False,
+                            "has_track_ratings": False,
+                            "liked": True,
+                        },
+                        record_history=False,
+                        active=True,
+                        record_changes=False,
+                        source="manual_html_import",
+                        record_new_change=False,
+                    )
+                    summary["added"] += 1
+                    continue
+
+                if bool(existing["liked"]):
+                    summary["unchanged"] += 1
+                    continue
+                self.connection.execute(
+                    """
+                    UPDATE ratings
+                    SET liked = 1,
+                        artist = COALESCE(NULLIF(artist, ''), ?),
+                        artist_url = COALESCE(NULLIF(artist_url, ''), ?),
+                        album = COALESCE(NULLIF(album, ''), ?),
+                        album_url = COALESCE(NULLIF(album_url, ''), ?),
+                        cover_url = COALESCE(NULLIF(cover_url, ''), ?),
+                        release_format = COALESCE(NULLIF(release_format, ''), ?),
+                        last_seen_at = ?, active = 1
+                    WHERE username = ? AND album_id = ?
+                    """,
+                    (
+                        item.get("artist"),
+                        item.get("artist_url"),
+                        item.get("album"),
+                        item.get("url"),
+                        item.get("cover"),
+                        item.get("release_format"),
+                        now,
+                        canonical,
+                        album_id,
+                    ),
+                )
+                self._record_change_locked(
+                    canonical,
+                    entity_type="like",
+                    event_type="like_added",
+                    album_id=album_id,
+                    field_name="liked",
+                    old_value=False,
+                    new_value=True,
+                    source="manual_html_import",
+                    detected_at=now,
+                )
+                summary["updated"] += 1
+            self.connection.execute(
+                "UPDATE users SET updated_at = ? WHERE username = ?",
+                (now, canonical),
+            )
+        return summary
+
     def manual_update_rating_detail(
         self,
         username: str,

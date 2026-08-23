@@ -61,6 +61,64 @@ def _release_cards(soup):
     return soup.select("#albumOutput .albumBlock")
 
 
+def _release_year_and_format(card) -> tuple[str, str]:
+    """Read the ``YEAR • FORMAT`` line used by every artist release card.
+
+    The ``?type=all`` view includes every AOTY release kind and sometimes a
+    third segment containing featured artists.  The former parser accepted
+    only a bare four-digit ``.type`` value, so it discarded both fields on
+    real pages such as ``2024 • Reissue``.  ``data-type`` is the most stable
+    format source; the visible line remains a safe fallback for saved pages.
+    """
+
+    type_tag = card.select_one(".type")
+    type_text = clean_text(type_tag.get_text(" ", strip=True)) if type_tag else ""
+    year_match = re.search(r"(?<!\d)((?:19|20)\d{2})(?!\d)", type_text)
+    year = year_match.group(1) if year_match else ""
+
+    release_format = clean_text(card.get("data-type"))
+    if not release_format:
+        parts = [clean_text(part) for part in type_text.split("•") if clean_text(part)]
+        release_format = parts[1] if len(parts) > 1 else ""
+    if not release_format:
+        # The default/Featured artist page groups cards under headings such as
+        # Albums, Mixtapes and EPs. Those cards deliberately have an empty
+        # ``data-type`` and show only the year, so the nearest preceding
+        # section heading is the authoritative format. Without this fallback
+        # every release could inherit a caller/default format such as EP.
+        heading = card.find_previous("h2", class_="subHeadline")
+        section = clean_text(heading.get_text(" ", strip=True)).casefold() if heading else ""
+        # Some headings contain a nested ``View All`` link, which is UI text
+        # rather than part of the release category.
+        section = re.sub(r"\s+view all$", "", section).strip()
+        section_formats = {
+            "albums": "LP",
+            "lps": "LP",
+            "eps": "EP",
+            "mixtapes": "Mixtape",
+            "singles": "Single",
+            "compilations": "Compilation",
+            "reissues": "Reissue",
+            "remixes": "Remix",
+            "demos": "Demo",
+            "live albums": "Live",
+            "soundtracks": "Soundtrack",
+            "box sets": "Box Set",
+            "music videos": "Music Video",
+        }
+        release_format = section_formats.get(section, "")
+    format_labels = {
+        "lp": "LP",
+        "ep": "EP",
+        "dj mix": "DJ Mix",
+    }
+    release_format = format_labels.get(
+        release_format.casefold(),
+        release_format.title(),
+    )
+    return year, release_format
+
+
 def _artist_summary(soup) -> tuple[str, str, str]:
     user_box = soup.select_one(".artistHeader .artistUserScoreBox")
     score_tag = user_box.select_one(".artistUserScore") if user_box else None
@@ -133,8 +191,7 @@ def parse_artist_page(path: Path) -> ArtistPage:
         album = clean_text(title.get_text(" ", strip=True)) if title else clean_text(link.get_text(" ", strip=True))
         if not album_id or not album or album_id in seen:
             continue
-        year = clean_text((card.select_one(".type") or "").get_text(" ", strip=True))
-        year = year if year.isdecimal() and len(year) == 4 else ""
+        year, release_format = _release_year_and_format(card)
         cover = card.select_one(".image img[src]")
         rows.append({
             **common,
@@ -142,7 +199,7 @@ def parse_artist_page(path: Path) -> ArtistPage:
             "Album": album,
             "Album URL": album_url,
             "Year": year,
-            "Format": "",
+            "Format": release_format,
             "Cover URL": tag_image_url(cover),
         })
         seen.add(album_id)
