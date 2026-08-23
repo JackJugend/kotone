@@ -62,10 +62,32 @@ def _release_cards(soup):
 
 
 def _artist_summary(soup) -> tuple[str, str, str]:
-    score_tag = soup.select_one(".artistUserScore")
-    ratings_tag = soup.select_one(".artistUserScoreBox .text")
+    user_box = soup.select_one(".artistHeader .artistUserScoreBox")
+    score_tag = user_box.select_one(".artistUserScore") if user_box else None
+    ratings_tag = user_box.select_one(".text") if user_box else None
     followers_tag = soup.select_one(".artistTopBox .followCount")
     score = clean_text(score_tag.get_text(" ", strip=True)) if score_tag else ""
+    score_match = re.search(r"(?<!\d)(100|\d{1,2})(?!\d)", score)
+    score = score_match.group(1) if score_match else ""
+
+    # Some browser extensions replace the visible score with an image/custom
+    # element before the page is saved.  AOTY's own rating bar still carries
+    # the exact score as ``width:79%``, so use it only inside the artist's
+    # User Score box when the normal text is absent.
+    if not score and user_box is not None:
+        rating_value = user_box.select_one('[itemprop="ratingValue"]')
+        if rating_value is not None:
+            value_text = clean_text(
+                rating_value.get("content") or rating_value.get_text(" ", strip=True)
+            )
+            value_match = re.search(r"(?<!\d)(100|\d{1,2})(?!\d)", value_text)
+            score = value_match.group(1) if value_match else ""
+    if not score and user_box is not None:
+        bar = user_box.select_one(".ratingBar [style*='width']")
+        style = str(bar.get("style") or "") if bar is not None else ""
+        width_match = re.search(r"width\s*:\s*(100|\d{1,2})(?:\.0+)?%", style, re.I)
+        score = width_match.group(1) if width_match else ""
+
     ratings_text = clean_text(ratings_tag.get_text(" ", strip=True)) if ratings_tag else ""
     followers_text = clean_text(followers_tag.get_text(" ", strip=True)) if followers_tag else ""
     ratings = re.sub(r"\D", "", ratings_text)
