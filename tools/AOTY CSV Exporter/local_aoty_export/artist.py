@@ -13,7 +13,8 @@ ARTIST_HEADERS = (
     "Artist", "Artist URL", "Image URL", "Genres", "Aliases", "Members",
     "Origin Country", "Founded/Birthdate", "AOTY User Score", "AOTY Ratings",
     "AOTY Followers", "Album ID", "Album", "Album URL", "Year", "Format",
-    "Cover URL",
+    "Cover URL", "Album Genres", "Album AOTY User Score", "Album AOTY Ratings",
+    "Album Critic Score", "Album Critic Reviews",
 )
 
 
@@ -119,6 +120,91 @@ def _release_year_and_format(card) -> tuple[str, str]:
     return year, release_format
 
 
+def _release_scores(card) -> tuple[str, str, str, str]:
+    """Return album user/critic scores and their counts from one card.
+
+    A logged-in AOTY card may additionally contain ``My Score``.  Matching
+    the preserved semantic label keeps that personal score separate from the
+    public album User Score imported into Kotone.
+    """
+
+    result = {
+        "user_score": "",
+        "user_ratings": "",
+        "critic_score": "",
+        "critic_reviews": "",
+    }
+    for row in card.select(".ratingRow"):
+        label = ""
+        for tag in row.select(".ratingText"):
+            candidate = clean_text(
+                tag.get("data-btx-original-score") or tag.get_text(" ", strip=True)
+            ).casefold()
+            if candidate in {"user score", "critic score"}:
+                label = candidate
+                break
+        if not label:
+            continue
+
+        score_tag = row.select_one(".rating[data-btx-orig-score]") or row.select_one(".rating")
+        score_text = clean_text(
+            (score_tag.get("data-btx-orig-score") if score_tag else "")
+            or (score_tag.get_text(" ", strip=True) if score_tag else "")
+        )
+        score_match = re.search(r"(?<!\d)(100|\d{1,2})(?!\d)", score_text)
+        score = score_match.group(1) if score_match else ""
+
+        count = ""
+        for tag in row.select(".ratingText"):
+            raw = clean_text(
+                tag.get("data-btx-original-score") or tag.get_text(" ", strip=True)
+            )
+            if re.fullmatch(r"\([\d,\s]+\)", raw):
+                count = re.sub(r"\D", "", raw)
+                break
+
+        if label == "user score":
+            result["user_score"] = score
+            result["user_ratings"] = count
+        else:
+            result["critic_score"] = score
+            result["critic_reviews"] = count
+    return (
+        result["user_score"],
+        result["user_ratings"],
+        result["critic_score"],
+        result["critic_reviews"],
+    )
+
+
+def _release_genres(card) -> list[str]:
+    """Read genres attached to this release card by the saved AOTY page."""
+
+    container = card.select_one(".btx-album-card-genres")
+    if container is None:
+        return []
+    genres = [
+        clean_text(tag.get_text(" ", strip=True))
+        for tag in container.select(".btx-album-card-genre")
+        if clean_text(tag.get_text(" ", strip=True))
+    ]
+    if not genres:
+        genres = [
+            clean_text(part)
+            for part in re.split(r"[•|]", clean_text(container.get("title")))
+            if clean_text(part)
+        ]
+    # Keep the page order while removing case-only duplicates.
+    seen: set[str] = set()
+    result: list[str] = []
+    for genre in genres:
+        key = genre.casefold()
+        if key not in seen:
+            seen.add(key)
+            result.append(genre)
+    return result
+
+
 def _artist_summary(soup) -> tuple[str, str, str]:
     user_box = soup.select_one(".artistHeader .artistUserScoreBox")
     score_tag = user_box.select_one(".artistUserScore") if user_box else None
@@ -193,6 +279,10 @@ def parse_artist_page(path: Path) -> ArtistPage:
             continue
         year, release_format = _release_year_and_format(card)
         cover = card.select_one(".image img[src]")
+        album_genres = _release_genres(card)
+        album_user_score, album_ratings, album_critic_score, album_critic_reviews = (
+            _release_scores(card)
+        )
         rows.append({
             **common,
             "Album ID": album_id,
@@ -201,8 +291,26 @@ def parse_artist_page(path: Path) -> ArtistPage:
             "Year": year,
             "Format": release_format,
             "Cover URL": tag_image_url(cover),
+            "Album Genres": ", ".join(album_genres),
+            "Album AOTY User Score": album_user_score,
+            "Album AOTY Ratings": album_ratings,
+            "Album Critic Score": album_critic_score,
+            "Album Critic Reviews": album_critic_reviews,
         })
         seen.add(album_id)
     if not rows:
-        rows.append({**common, "Album ID": "", "Album": "", "Album URL": "", "Year": "", "Format": "", "Cover URL": ""})
+        rows.append({
+            **common,
+            "Album ID": "",
+            "Album": "",
+            "Album URL": "",
+            "Year": "",
+            "Format": "",
+            "Cover URL": "",
+            "Album Genres": "",
+            "Album AOTY User Score": "",
+            "Album AOTY Ratings": "",
+            "Album Critic Score": "",
+            "Album Critic Reviews": "",
+        })
     return ArtistPage(rows=rows)

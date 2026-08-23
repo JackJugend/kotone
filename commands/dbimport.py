@@ -295,6 +295,20 @@ def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
                     current[key] = value
         album_id = _value(row, "Album ID")
         year = _value(row, "Year")
+        album_user_score = _score_value(row, "Album AOTY User Score")
+        album_ratings_count = _count_value(row, "Album AOTY Ratings")
+        album_critic_score = _score_value(row, "Album Critic Score")
+        album_critic_reviews = _count_value(row, "Album Critic Reviews")
+        album_genres = _list_value(row, "Album Genres")
+        has_album_scores = any(
+            value is not None
+            for value in (
+                album_user_score,
+                album_ratings_count,
+                album_critic_score,
+                album_critic_reviews,
+            )
+        )
         release_payload = {
             "artist": artist or None,
             "artist_url": _value(row, "Artist URL") or None,
@@ -303,10 +317,17 @@ def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
             "cover": _value(row, "Cover URL") or None,
             "release_date": year or None,
             "album_format": _value(row, "Format") or None,
+            "user_score": album_user_score,
+            "ratings_count": album_ratings_count,
+            "critic_score": album_critic_score,
+            "critic_reviews_count": album_critic_reviews,
+            "genres": album_genres,
             "source": "manual",
             "_section_complete": {
+                "score": has_album_scores,
                 "release_date": bool(year),
                 "format": bool(_value(row, "Format")),
+                "genres": bool(album_genres),
             },
         }
         release_payload = {
