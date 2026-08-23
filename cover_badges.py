@@ -23,9 +23,10 @@ def add_must_hear_badge(cover: Image.Image, *, kind: str = "users") -> Image.Ima
     cover = cover.copy().convert("RGB")
     draw = ImageDraw.Draw(cover)
     size = min(cover.size)
-    # Slightly larger than AOTY's CSS corner so it stays readable in Discord
-    # thumbnails, without covering a third of a small cover.
-    corner = max(24, int(size * 0.26))
+    # Discord mocno zmniejsza miniatury. Narożnik zajmuje 30% krótszego boku,
+    # dzięki czemu kolor oraz gwiazda pozostają czytelne także przy małych
+    # okładkach, ale nadal nie zasłaniają ich głównej części.
+    corner = max(28, int(size * 0.30))
     width = cover.width
     color = {
         "users": MUST_HEAR_ORANGE,

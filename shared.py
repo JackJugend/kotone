@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation, ROUND_HALF_DOWN
 from typing import Any
 
 import discord
@@ -117,17 +118,19 @@ def _legacy_score_icon(value: int) -> str:
 
 
 def _score_number(score: Any) -> int | None:
-    """Return the whole-number part of a score, if it is numeric.
+    """Return a conventionally rounded whole-number score, if numeric.
 
     AOTY sometimes exposes a decimal score (for example ``78.2``), while
-    Kotone displays scores as whole numbers everywhere.  Centralizing that
-    conversion keeps the text, colour and score emoji in sync.
+    Kotone displays the visible AOTY score as a whole number.  ``int(float())``
+    cannot be used here because it truncates ``89.9`` to ``89`` instead of
+    matching AOTY's visible ``90``. Kotone keeps an exact half on the lower
+    integer (``89.5`` becomes ``89``), while values above it round upward.
     """
 
     text = str(score or "").strip().replace(",", ".")
     try:
-        return int(float(text))
-    except (TypeError, ValueError):
+        return int(Decimal(text).quantize(Decimal("1"), rounding=ROUND_HALF_DOWN))
+    except (InvalidOperation, TypeError, ValueError):
         return None
 
 

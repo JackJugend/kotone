@@ -11,7 +11,7 @@ from urllib.parse import quote
 # Discord caches generated thumbnail URLs very aggressively. Bump this when
 # the deterministic badge artwork changes so a freshly invoked command shows
 # the new rendering instead of a previously cached PNG.
-MUST_HEAR_BADGE_RENDER_VERSION = "3"
+MUST_HEAR_BADGE_RENDER_VERSION = "4"
 
 
 def numeric_count(value) -> float | None:

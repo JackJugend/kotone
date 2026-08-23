@@ -328,6 +328,9 @@ class CoverCacheTests(unittest.TestCase):
         self.assertTrue(url.startswith("https://kotone.example/must-hear-cover/42/"))
         image = add_must_hear_badge(Image.new("RGB", (200, 200), "white"))
         self.assertEqual(image.getpixel((198, 1)), MUST_HEAR_ORANGE)
+        # The Discord badge uses a visibly larger 30% corner. This point was
+        # outside the previous 26% triangle and guards against shrinking it.
+        self.assertEqual(image.getpixel((150, 4)), MUST_HEAR_ORANGE)
         critics = add_must_hear_badge(
             Image.new("RGB", (200, 200), "white"), kind="critics"
         )
