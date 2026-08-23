@@ -2444,13 +2444,13 @@ class Database:
         return sorted(normalize_genres(raw_genres), key=str.casefold)
 
     def cached_artists(self) -> list[dict]:
-        """Artists from configured-user ratings and explicit manual releases.
+        """Artists from configured-user ratings and operator-imported releases.
 
         The database is intentionally the first autocomplete source.  This
         keeps artist lookup usable while AOTY is rate-limited or presenting a
-        challenge page. ``/dbmanual`` is the explicit operator exception: a
-        manually seeded release must be usable immediately, even before a
-        configured user assigns it an AOTY score.
+        challenge page. Operator-provided pages are also local SQLite data and
+        must be searchable immediately, even before a configured user assigns
+        the release an AOTY score.
         """
 
         with self._lock:
@@ -2467,7 +2467,7 @@ class Database:
                     UNION ALL
                     SELECT artist, artist_url, album_id
                     FROM releases
-                    WHERE COALESCE(metadata_source, '') = 'manual'
+                    WHERE NULLIF(TRIM(COALESCE(artist, '')), '') IS NOT NULL
                 ) AS known_release
                 WHERE NULLIF(TRIM(COALESCE(artist, '')), '') IS NOT NULL
                   AND artist != 'Nieznany artysta'
@@ -2548,7 +2548,7 @@ class Database:
                 """,
                 (artist,),
             ).fetchall()
-            manual_rows = self.connection.execute(
+            imported_rows = self.connection.execute(
                 """
                 SELECT
                     rel.album_id,
@@ -2567,8 +2567,7 @@ class Database:
                     rel.album_format,
                     0 AS cache_order
                 FROM releases AS rel
-                WHERE COALESCE(rel.metadata_source, '') = 'manual'
-                  AND rel.artist = ? COLLATE NOCASE
+                WHERE rel.artist = ? COLLATE NOCASE
                   AND NULLIF(TRIM(COALESCE(rel.album, '')), '') IS NOT NULL
                   AND NOT EXISTS(
                       SELECT 1 FROM ratings AS rated
@@ -2578,7 +2577,7 @@ class Database:
                 (artist,),
             ).fetchall()
 
-        rows = [*rows, *manual_rows]
+        rows = [*rows, *imported_rows]
 
         return [
             {
@@ -2656,8 +2655,9 @@ class Database:
         aliases: Iterable[object],
         *,
         source: str,
+        allow_unscoped_manual: bool = False,
     ) -> bool:
-        """Store AOTY or MusicBrainz aliases for an in-scope artist.
+        """Store provider aliases for an in-scope or operator-imported artist.
 
         The canonical artist display name is also indexed.  Every call fully
         replaces one provider's list, so aliases cannot accumulate duplicate
@@ -2667,7 +2667,7 @@ class Database:
         name = " ".join(str(artist or "").split())
         key = self._artist_image_key(name)
         source = str(source or "").strip().casefold()
-        if not key or source not in {"aoty", "musicbrainz"}:
+        if not key or source not in {"aoty", "musicbrainz", "manual"}:
             return False
         with self._lock, self.connection:
             in_scope = self.connection.execute(
@@ -2677,7 +2677,17 @@ class Database:
                 """,
                 (name,),
             ).fetchone()
-            if in_scope is None:
+            has_imported_release = self.connection.execute(
+                """
+                SELECT 1 FROM releases
+                WHERE artist = ? COLLATE NOCASE LIMIT 1
+                """,
+                (name,),
+            ).fetchone()
+            if (
+                in_scope is None
+                and not (allow_unscoped_manual and source == "manual" and has_imported_release)
+            ):
                 return False
             self.connection.execute(
                 "DELETE FROM artist_aliases WHERE artist_key = ? AND source = ?",

@@ -119,7 +119,10 @@ def _metadata_payload(row: dict[str, str]) -> dict:
         "year_ranking_text": _value(row, "Year Ratings") or None,
         "all_time_ranking": _value(row, "All Time Ratings") or None,
         "must_hear_kind": _value(row, "Must Hear").casefold() or None,
-        "source": "aoty",
+        # Saved HTML is explicitly selected and provided by an operator.
+        # Present it as manual Kotone data even when its contents originated
+        # from an AOTY page.
+        "source": "manual",
     }
     payload = {key: value for key, value in payload.items() if value not in (None, "", [])}
     payload["_section_complete"] = {
@@ -147,7 +150,7 @@ def _import_metadata(rows: list[dict[str, str]]) -> tuple[int, int]:
         if DB.save_release_details(
             album_id,
             _metadata_payload(row),
-            allow_unscoped_import=True,
+            allow_unscoped_manual=True,
         ):
             saved += 1
         else:
@@ -177,11 +180,11 @@ def _import_tracks(rows: list[dict[str, str]]) -> tuple[int, int]:
         if DB.save_release_details(
             album_id,
             {
-                "source": "aoty",
+                "source": "manual",
                 "tracklist": tracks,
                 "_section_complete": {"tracklist": True},
             },
-            allow_unscoped_import=True,
+            allow_unscoped_manual=True,
         ):
             saved += len(tracks)
         else:
@@ -203,11 +206,16 @@ def _import_artists(rows: list[dict[str, str]]) -> tuple[int, int]:
         if album_id.isdecimal() and DB.save_release_details(
             album_id,
             _metadata_payload(row),
-            allow_unscoped_import=True,
+            allow_unscoped_manual=True,
         ):
             releases_saved += 1
     for artist, aliases in by_artist.items():
-        if DB.save_artist_aliases(artist, aliases, source="aoty"):
+        if DB.save_artist_aliases(
+            artist,
+            aliases,
+            source="manual",
+            allow_unscoped_manual=True,
+        ):
             aliases_saved += 1
     return releases_saved, aliases_saved
 
