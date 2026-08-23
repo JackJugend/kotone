@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .common import absolute_url, aoty_album_id, clean_text, image_url, page_url_from_file, soup_from_path, split_values
+from .common import absolute_url, aoty_album_id, clean_text, image_url, page_url_from_file, soup_from_path, split_values, tag_image_url
 
 
 ARTIST_HEADERS = (
@@ -103,7 +103,7 @@ def parse_artist_page(path: Path) -> ArtistPage:
             "Album URL": album_url,
             "Year": year,
             "Format": "",
-            "Cover URL": absolute_url(cover.get("src")) if cover else "",
+            "Cover URL": tag_image_url(cover),
         })
         seen.add(album_id)
     if not rows:

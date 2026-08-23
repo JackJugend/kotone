@@ -91,7 +91,31 @@ def _value(row: dict[str, str], key: str) -> str:
 
 
 def _list_value(row: dict[str, str], key: str) -> list[str]:
-    return [item.strip() for item in re.split(r"[,;|]", _value(row, key)) if item.strip()]
+    values = [item.strip() for item in re.split(r"[,;|]", _value(row, key)) if item.strip()]
+    # A legitimate AOTY taxonomy value is short.  Refuse navigation/page text
+    # produced by an obsolete local exporter instead of poisoning SQLite.
+    return [item for item in values if 1 < len(item) <= 100 and len(values) <= 100]
+
+
+def _score_value(row: dict[str, str], key: str) -> str | None:
+    raw = _value(row, key)
+    if not re.fullmatch(r"(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?)", raw):
+        return None
+    return raw
+
+
+def _count_value(row: dict[str, str], key: str) -> str | None:
+    raw = _value(row, key).replace(",", "").replace(" ", "")
+    # Counts from one album cannot reasonably occupy dozens of digits.  The
+    # cap mainly detects a former parser that concatenated the whole page.
+    return raw if raw.isdecimal() and len(raw) <= 10 else None
+
+
+def _ranking_value(row: dict[str, str], key: str) -> str | None:
+    raw = _value(row, key)
+    if not raw or len(raw) > 40:
+        return None
+    return raw if re.fullmatch(r"(?:(?:19|20)\d{2}:)?#?\d+", raw) else None
 
 
 def _metadata_payload(row: dict[str, str]) -> dict:
@@ -112,12 +136,12 @@ def _metadata_payload(row: dict[str, str]) -> dict:
         "genres": _list_value(row, "Genres"),
         "secondary_genres": _list_value(row, "Secondary Genres"),
         "vibes": _list_value(row, "Vibes"),
-        "user_score": _value(row, "AOTY User Score") or None,
-        "ratings_count": re.sub(r"[^0-9]", "", _value(row, "AOTY Ratings")) or None,
-        "critic_score": _value(row, "Critic Score") or None,
-        "critic_reviews_count": re.sub(r"[^0-9]", "", _value(row, "Critic Reviews")) or None,
-        "year_ranking_text": _value(row, "Year Ratings") or None,
-        "all_time_ranking": _value(row, "All Time Ratings") or None,
+        "user_score": _score_value(row, "AOTY User Score"),
+        "ratings_count": _count_value(row, "AOTY Ratings"),
+        "critic_score": _score_value(row, "Critic Score"),
+        "critic_reviews_count": _count_value(row, "Critic Reviews"),
+        "year_ranking_text": _ranking_value(row, "Year Ratings"),
+        "all_time_ranking": _ranking_value(row, "All Time Ratings"),
         "must_hear_kind": _value(row, "Must Hear").casefold() or None,
         # Saved HTML is explicitly selected and provided by an operator.
         # Present it as manual Kotone data even when its contents originated
@@ -171,7 +195,7 @@ def _import_tracks(rows: list[dict[str, str]]) -> tuple[int, int]:
             "disc": _value(row, "Disc") or None,
             "title": title,
             "duration": _value(row, "Duration") or None,
-            "user_score": _value(row, "AOTY Score") or None,
+            "user_score": _score_value(row, "AOTY Score"),
             "url": _value(row, "URL") or None,
         })
     saved = 0

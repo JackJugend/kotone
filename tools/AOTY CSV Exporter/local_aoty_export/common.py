@@ -68,6 +68,24 @@ def image_url(soup: BeautifulSoup) -> str:
     return ""
 
 
+def tag_image_url(tag) -> str:
+    """Read a CDN image from an ``img`` inside a browser-saved page."""
+
+    if not tag:
+        return ""
+    for attribute in ("data-srcset", "srcset"):
+        raw = clean_text(tag.get(attribute))
+        if raw:
+            candidate = clean_text(raw.split(",", 1)[0].split(" ", 1)[0])
+            if candidate.startswith(("http://", "https://", "//")):
+                return absolute_url(candidate)
+    for attribute in ("data-src", "src"):
+        candidate = clean_text(tag.get(attribute))
+        if candidate.startswith(("http://", "https://", "//")):
+            return absolute_url(candidate)
+    return ""
+
+
 def first_href(soup: BeautifulSoup, pattern: str) -> str:
     tag = soup.find("a", href=re.compile(pattern, re.I))
     return absolute_url(tag.get("href")) if tag else ""

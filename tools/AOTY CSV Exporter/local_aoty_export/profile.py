@@ -14,6 +14,7 @@ from .common import (
     date_yyyy_mm_dd,
     page_url_from_file,
     soup_from_path,
+    tag_image_url,
 )
 
 
@@ -123,7 +124,7 @@ def parse_profile_page(path: Path) -> ProfilePage:
                 "Album ID": album_id,
                 "Album URL": album_url,
                 "Artist URL": artist_url,
-                "Cover URL": absolute_url(image.get("src")) if image else "",
+                "Cover URL": tag_image_url(image),
             })
             seen.add(album_id)
     if not rows:
