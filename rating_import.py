@@ -20,6 +20,15 @@ REQUIRED_COLUMNS = (
 )
 MAX_IMPORT_ROWS = 10_000
 
+# The official AOTY export itself has only the required columns above.  The
+# local HTML exporter can safely add stable identifiers and URLs that were
+# already present in a manually saved page.  They let an offline import seed
+# a new release without guessing an ID from a title.
+OPTIONAL_ID_COLUMNS = ("Album ID", "album_id", "AOTY Album ID")
+OPTIONAL_ALBUM_URL_COLUMNS = ("Album URL", "album_url", "AOTY Album URL")
+OPTIONAL_ARTIST_URL_COLUMNS = ("Artist URL", "artist_url", "AOTY Artist URL")
+OPTIONAL_COVER_URL_COLUMNS = ("Cover URL", "cover_url")
+
 
 class RatingImportError(ValueError):
     """The attachment is not a valid official AOTY ratings export."""
@@ -163,6 +172,16 @@ def _rating_date(value: str, row_index: int) -> tuple[str, float]:
     return parsed.strftime("%d.%m.%Y"), parsed.timestamp() + max(0, 86_399 - row_index)
 
 
+def _optional_column(raw: dict, names: tuple[str, ...]) -> str:
+    """Read an optional local-export column without changing official CSVs."""
+
+    for name in names:
+        value = str(raw.get(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def parse_aoty_ratings_csv(payload: bytes) -> dict:
     if not payload:
         raise RatingImportError("plik jest pusty")
@@ -222,6 +241,20 @@ def parse_aoty_ratings_csv(payload: bytes) -> dict:
                 "date": rating_date,
                 "sort_timestamp": sort_timestamp,
             }
+            album_id_hint = _optional_column(raw, OPTIONAL_ID_COLUMNS)
+            if album_id_hint:
+                if not album_id_hint.isdecimal():
+                    raise RatingImportError("Album ID musi być liczbą")
+                record["album_id_hint"] = album_id_hint
+            album_url_hint = _optional_column(raw, OPTIONAL_ALBUM_URL_COLUMNS)
+            if album_url_hint:
+                record["album_url_hint"] = album_url_hint
+            artist_url_hint = _optional_column(raw, OPTIONAL_ARTIST_URL_COLUMNS)
+            if artist_url_hint:
+                record["artist_url_hint"] = artist_url_hint
+            cover_url_hint = _optional_column(raw, OPTIONAL_COVER_URL_COLUMNS)
+            if cover_url_hint:
+                record["cover_url_hint"] = cover_url_hint
             hint = KNOWN_RELEASE_HINTS.get(
                 (
                     *normalized_identity(artist, album),

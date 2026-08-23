@@ -1,0 +1,105 @@
+EKSPORTER AOTY HTML -> CSV
+===========================
+
+To narzędzie działa WYŁĄCZNIE na plikach HTML zapisanych ręcznie w przeglądarce.
+Nie loguje się do AOTY, nie otwiera AOTY i nie wysyła żadnych requestów.
+
+
+1. PRZENIESIENIE NARZĘDZIA
+--------------------------
+
+Przenieś razem plik i cały folder, zachowując ten układ:
+
+wybrany-folder\
+  aoty_local_export.py
+  local_aoty_export\
+    __init__.py
+    common.py
+    profile.py
+    album.py
+    artist.py
+    INSTRUKCJA.txt
+
+
+2. JEDNORAZOWA INSTALACJA
+-------------------------
+
+Otwórz PowerShell w wybranym-folderze i wpisz:
+
+py -m pip install beautifulsoup4
+
+
+3. ZAPISYWANIE STRON AOTY
+-------------------------
+
+Otwórz stronę AOTY SAMODZIELNIE w przeglądarce, np.:
+
+https://www.albumoftheyear.org/user/enso/ratings/
+
+Zapisz ją przez Ctrl+S jako stronę HTML. Następnie przejdź do kolejnej strony
+ocen i zapisz ją do tego samego folderu. Możesz zapisać dowolną liczbę stron.
+
+
+4. CSV OCEN PROFILU - GOTOWY DLA /import
+----------------------------------------
+
+Przykład: zapisane strony ocen enso są w C:\Users\h\AOTY\enso
+
+py aoty_local_export.py profile --input "C:\Users\h\AOTY\enso" --output "C:\Users\h\AOTY\enso-ratings.csv"
+
+Wynikowy plik enso-ratings.csv można załączyć w Discordzie przez:
+
+/import -> source: AOTY — plik CSV
+
+Jeżeli ręcznie zapisane strony nie zawierają daty oceny, można świadomie podać
+jedną datę zastępczą (RRRR-MM-DD):
+
+py aoty_local_export.py profile --input "C:\Users\h\AOTY\enso" --output "C:\Users\h\AOTY\enso-ratings.csv" --fallback-date 2026-08-23
+
+Nie używaj fallback-date, jeżeli oceny pochodzą z różnych dni - lepiej zapisać
+strony, na których AOTY pokazuje faktyczne daty.
+
+
+5. CSV STRON ALBUMÓW
+--------------------
+
+Zapisz ręcznie strony albumów do jednego folderu, np. C:\Users\h\AOTY\albumy,
+a następnie uruchom:
+
+py aoty_local_export.py album --input "C:\Users\h\AOTY\albumy" --output "C:\Users\h\AOTY\albumy"
+
+Powstaną dwa pliki:
+
+albumy-metadata.csv   - podstawowe dane wydań
+albumy-tracklist.csv  - odczytane pozycje tracklist
+
+ID albumu jest odczytywane z zapisanych lokalnie linków AOTY, np.:
+
+/album/4594-cocteau-twins-heaven-or-las-vegas.php
+
+oznacza album_id = 4594.
+
+
+6. CSV STRON ARTYSTÓW
+---------------------
+
+Zapisz strony artystów do jednego folderu, a następnie:
+
+py aoty_local_export.py artist --input "C:\Users\h\AOTY\artysci" --output "C:\Users\h\AOTY\artysci.csv"
+
+Plik zawiera znalezione wydania artysty, ich ID, linki oraz rok, gdy jest
+dostępny na zapisanej stronie.
+
+
+7. KILKA PLIKÓW LUB FOLDERÓW
+----------------------------
+
+Możesz podać --input więcej niż raz:
+
+py aoty_local_export.py profile --input "C:\AOTY\enso-strona-1.html" --input "C:\AOTY\enso-strona-2.html" --output "C:\AOTY\enso.csv"
+
+
+8. POMOC
+--------
+
+py aoty_local_export.py --help

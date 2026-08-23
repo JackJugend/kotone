@@ -27,6 +27,7 @@ from commands.artist import setup_artist_command
 from commands.check import setup_check_command
 from commands.dbmanual import setup_dbmanual_command
 from commands.dbonly import setup_dbonly_command
+from commands.dbimport import setup_dbimport_command
 from commands.dbstats import setup_dbstats_command
 from commands.history import setup_history_command
 from commands.manual import setup_manual_command
@@ -86,6 +87,7 @@ setup_profile_command(tree)
 setup_rating_import_command(tree)
 setup_check_command(tree, monitor)
 setup_dbonly_command(tree)
+setup_dbimport_command(tree)
 setup_dbmanual_command(tree)
 setup_dbstats_command(tree)
 setup_history_command(tree)

@@ -1,0 +1,53 @@
+AOTY CSV EXPORTER - SZYBKA INSTRUKCJA
+=====================================
+
+To narzedzie NIE laczy sie z AOTY. Dziala tylko na stronach HTML, ktore
+sam zapiszesz w przegladarce przez Ctrl+S.
+
+PIERWSZE URUCHOMIENIE
+---------------------
+1. Otworz ten folder.
+2. Kliknij dwa razy run_exporter.cmd.
+3. Jezeli Windows napisze, ze brakuje biblioteki, otworz CMD w tym folderze
+   i wykonaj tylko raz:
+
+   py -m pip install -r requirements.txt
+
+UKLAD FOLDEROW
+--------------
+Po pierwszym uruchomieniu pojawia sie:
+
+  1. profile\       - zapisane strony ocen profili AOTY
+  2. album\         - zapisane strony konkretnych wydan AOTY
+  3. artist\        - zapisane strony artystow AOTY
+  0. GOTOWE CSV\    - tutaj trafia wynik
+
+JAK UZYWAC
+-----------
+1. Wejdz SAMODZIELNIE na AOTY w przegladarce.
+2. Zapisz strone przez Ctrl+S jako "Strona internetowa, kompletna" albo HTML.
+3. Wrzuc zapisany plik .html do odpowiedniego folderu.
+4. Uruchom run_exporter.cmd.
+
+Eksporter odczyta wszystko lokalnie, zapisze CSV w "0. GOTOWE CSV" i usunie
+TYLKO te HTML, ktore zostaly poprawnie przetworzone. Nieudane pliki zostaja
+w swoim folderze wraz z opisem bledu w oknie programu.
+
+PROFILE
+--------
+Do 1. profile\ wrzuc kolejne strony ocen dowolnego profilu. Nazwa uzytkownika
+jest odczytywana z adresu zapisanego w HTML, wiec nie musisz tworzyc folderow
+dla enso/kulkien. Wynik ma nazwe np. profile-enso-ratings.csv.
+
+IMPORT DO KOTONE
+----------------
+1. Spakuj ZAWARTOSC folderu "0. GOTOWE CSV" do jednego pliku ZIP.
+2. Na Discordzie uzyj /dbimport i zalacz ten ZIP.
+3. /dbimport obsluguje jednoczesnie CSV profili, stron albumow, tracklist
+   oraz stron artystow. Jest tylko dla operatorow Kotone.
+
+UWAGA
+-----
+Nie zmieniaj nazw kolumn w gotowych CSV. Mozesz zostawic stare pliki CSV w
+"0. GOTOWE CSV" - kolejne uruchomienie laczy je z nowymi rekordami zamiast ich
+kasowac.

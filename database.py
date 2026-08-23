@@ -3453,9 +3453,9 @@ class Database:
                             "release_format": record.get("release_format"),
                             "score": record.get("score"),
                             "year": record.get("year"),
-                            "artist_url": None,
+                            "artist_url": record.get("artist_url_hint"),
                             "album_url": record.get("album_url_hint"),
-                            "cover_url": (
+                            "cover_url": record.get("cover_url_hint") or (
                                 record.get("release_details_hint") or {}
                             ).get("cover"),
                         }
@@ -3484,6 +3484,35 @@ class Database:
                         **record["release_details_hint"],
                         "url": record.get("album_url_hint"),
                     }
+                elif record.get("album_id_hint"):
+                    # Local, user-saved AOTY pages include the stable ID and
+                    # basic card data.  Seed a compact release row so the
+                    # official rating CSV can import a completely new record
+                    # without any HTTP lookup or title-based guessing.
+                    release_detail_hints.setdefault(
+                        album_id,
+                        {
+                            "artist": candidate.get("artist") or record.get("artist"),
+                            "artist_url": candidate.get("artist_url") or record.get("artist_url_hint"),
+                            "album": candidate.get("album") or record.get("album"),
+                            "url": candidate.get("album_url") or record.get("album_url_hint"),
+                            "cover": candidate.get("cover_url") or record.get("cover_url_hint"),
+                            "year": record.get("year"),
+                            "album_format": record.get("release_format"),
+                            "source": "aoty",
+                            "_section_complete": {
+                                "score": False,
+                                "release_date": bool(record.get("year")),
+                                "format": bool(record.get("release_format")),
+                                "labels": False,
+                                "genres": False,
+                                "vibes": False,
+                                "ranking": False,
+                                "duration": False,
+                                "tracklist": False,
+                            },
+                        },
+                    )
 
                 existing = self.connection.execute(
                     """
