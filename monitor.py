@@ -23,6 +23,7 @@ import requests
 
 import aoty
 from avatar_emojis import AvatarEmojiSynchronizer
+from commands.last import _build_last_embed
 from database import DB
 from http_client import PRIORITY_INTERACTIVE, PRIORITY_NORMAL
 from services import DATA
@@ -34,17 +35,7 @@ from settings import (
     USER_CHANNELS,
     USERS,
 )
-from shared import (
-    aoty_score_or_missing,
-    load_release_variables,
-    must_hear_title_marker,
-    rating_flags_text,
-    release_year_suffix,
-    score_color,
-    score_icon,
-    score_or_nr,
-    set_aoty_footer,
-)
+from shared import load_release_variables, score_or_nr
 from views import SingleRatingView
 
 MONITOR_STATE_VERSION = 3
@@ -130,63 +121,7 @@ class RatingMonitor:
             return False
 
         variables = await load_release_variables(item, username=username)
-        flags = rating_flags_text(item)
-        flags_text = f"  •  {flags}" if flags else ""
-        must_hear = must_hear_title_marker(variables)
-        release_title = (
-            f"{variables.display_artist} — "
-            f"{must_hear + ' ' if must_hear else ''}"
-            f"**{variables.display_album}**"
-            f"{release_year_suffix(variables.year)}"
-        )
-        description_lines = [f"# {score_or_nr(variables.score)}{flags_text}"]
-        if variables.genres:
-            description_lines.append(variables.all_genres_text.title())
-        if variables.secondary_genres:
-            description_lines.append(
-                f"*{variables.secondary_genres_text.title()}*"
-            )
-        if variables.vibes:
-            description_lines.append(f"-# {variables.vibes_text}")
-
-        embed = discord.Embed(
-            title=f"{score_icon(variables.score)} {release_title}",
-            url=variables.url,
-            description="\n".join(description_lines),
-            color=score_color(variables.score),
-        )
-
-        embed.add_field(
-            name=(
-                f"<:aoty:1539095897084924004> "
-                f"**{aoty_score_or_missing(variables.aoty_user_score, variables.ratings_count)}**"
-            ),
-            value=f"/{variables.ratings_count}",
-            inline=True,
-        )
-        embed.add_field(
-            name=f"🏆 **{variables.year_ranking_text}**",
-            value=f"for **{variables.year}**",
-            inline=True,
-        )
-
-        if avatar:
-            embed.set_author(
-                name=f"{username}  •  {variables.date}",
-                url=f"https://www.albumoftheyear.org/user/{username}",
-                icon_url=avatar,
-            )
-        else:
-            embed.set_author(name=f"{username}  •  {variables.date}")
-
-        if variables.cover:
-            embed.set_thumbnail(url=variables.cover)
-
-        set_aoty_footer(
-            embed,
-            f"{variables.album_format}  •  {variables.release_date}  •  "
-            f"{variables.labels_text}{flags_text}",
-        )
+        embed = _build_last_embed(username, variables, item, avatar)
 
         view = SingleRatingView(
             username=username,
@@ -218,32 +153,14 @@ class RatingMonitor:
             return False
 
         variables = await load_release_variables(item, username=username)
-        flags = rating_flags_text(item)
-        flags_text = f"  •  {flags}" if flags else ""
-
-        embed = discord.Embed(
-            title=variables.display_album,
-            url=variables.url,
-            description=variables.display_artist,
-            color=score_color(variables.score),
+        score_change = f"{score_or_nr(old_score)}  ➡  {score_or_nr(variables.score)}"
+        embed = _build_last_embed(
+            username,
+            variables,
+            item,
+            avatar,
+            score_display=score_change,
         )
-        embed.add_field(
-            name=(
-                f"{score_icon(old_score)}  ➞  "
-                f"{score_icon(variables.score)}"
-            ),
-            value=" ",
-            inline=True,
-        )
-
-        if variables.cover:
-            embed.set_thumbnail(url=variables.cover)
-
-        footer_text = f"{username} AOTY  •  {variables.date}{flags_text}  🔄"
-        if avatar:
-            embed.set_footer(text=footer_text, icon_url=avatar)
-        else:
-            embed.set_footer(text=footer_text)
 
         view = SingleRatingView(
             username=username,

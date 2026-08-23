@@ -96,14 +96,21 @@ async def _cached_avatar(username: str) -> str | None:
         return None
 
 
-def _build_last_embed(username: str, variables, item: dict, avatar: str | None) -> discord.Embed:
-    """Zbuduj kartę Home; cała prezentacja pozostaje w jednym helperze."""
+def _build_last_embed(
+    username: str,
+    variables,
+    item: dict,
+    avatar: str | None,
+    *,
+    score_display: str | None = None,
+) -> discord.Embed:
+    """Zbuduj kartę Home wspólną dla ``/last`` i powiadomień monitora."""
 
     flags = rating_flags_text(item)
     last_flags = f" {flags}" if flags else ""
     description_lines = [
         f"## {_release_header_links(variables)}",
-        f"# {score_or_nr(variables.score)} {last_flags}",
+        f"# {score_display or score_or_nr(variables.score)} {last_flags}",
     ]
     if variables.genres:
         description_lines.append(variables.all_genres_text.title())
