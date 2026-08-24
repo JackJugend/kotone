@@ -232,12 +232,11 @@ def _build_lastfm_embed(
     )
     embed.add_field(
         name=application_avatar_emoji(),
-        value=(
-            f"{_lastfm_archive_progress(profile_key, archive)}\n"
-            f"**{_lastfm_count(archive['artists'])}** wykonawców\u2002•\u2002"
-            f"**{_lastfm_count(archive['albums'])}** albumów\u2002•\u2002"
-            f"**{_lastfm_count(archive['tracks'])}** utworów"
-        ),
+        # Raw CSV history can contain aliases, transliterations and edition
+        # spellings which Last.fm merges in its own library counters. Keep the
+        # calculated values in SQLite for searches, but do not present them as
+        # if they were directly comparable with Last.fm's account totals.
+        value=_lastfm_archive_progress(profile_key, archive),
         inline=False,
     )
     if latest:

@@ -163,6 +163,56 @@ class LastFMArchiveDatabaseTests(unittest.TestCase):
             1,
         )
 
+    def test_best_archive_key_prefers_complete_kotone_import_over_login_stub(self):
+        self.db.save_profile(
+            "desinitesse",
+            {"lastfm_username": "desinitesse", "total_scrobbles": "100"},
+        )
+        self.db.import_tracks(
+            "desinitesse",
+            [{"played_at": 1, "artist": "A", "album": "X", "track": "One"}],
+        )
+        self.db.import_tracks(
+            "enso",
+            [
+                {"played_at": 2, "artist": "A", "album": "X", "track": "Two"},
+                {"played_at": 3, "artist": "A", "album": "X", "track": "Three"},
+                {"played_at": 4, "artist": "A", "album": "X", "track": "Four"},
+            ],
+        )
+
+        self.assertEqual(self.db.best_archive_key("enso", "desinitesse"), "enso")
+        self.assertEqual(
+            self.db.album_scrobble_count(
+                self.db.best_archive_key("enso", "desinitesse"),
+                "X",
+                artist="A",
+            ),
+            3,
+        )
+
+    def test_archive_progress_uses_fresh_profile_total_over_stale_cursor_total(self):
+        self.db.import_page(
+            "enso",
+            {
+                "page": 1,
+                "total_pages": 1,
+                "total": 2,
+                "tracks": [
+                    {"played_at": 1, "artist": "A", "album": "X", "track": "One"}
+                ],
+            },
+        )
+        self.db.save_profile(
+            "enso",
+            {"lastfm_username": "desinitesse", "total_scrobbles": "5"},
+        )
+
+        progress = self.db.archive_progress("enso")
+
+        self.assertEqual(progress["scrobbles"], 1)
+        self.assertEqual(progress["total_scrobbles"], 5)
+
     def test_offline_csv_marks_history_complete_without_a_row_source_column(self):
         self.db.import_tracks(
             "enso",

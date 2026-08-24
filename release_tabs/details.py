@@ -396,19 +396,12 @@ def _lastfm_section(variables: ReleaseVariables) -> list[str]:
         lastfm_username = str(profile.get("lastfm_username") or "").strip()
         if not lastfm_username:
             continue
-        # Nie pokazujemy fikcyjnego zera przed pierwszym zapisem profilu lub
-        # historii. Starsze importy mogły być zapisane pod nazwą Kotone,
-        # dlatego najpierw znajdujemy faktycznie użyty klucz archiwum.
-        archive_key = lastfm_username
-        for candidate in dict.fromkeys((lastfm_username, str(name))):
-            profile_data = LASTFM_DB.get_profile(candidate)
-            progress = LASTFM_DB.archive_progress(candidate)
-            if profile_data is not None or int(progress.get("scrobbles") or 0):
-                archive_key = candidate
-                break
-        else:
-            profile_data = LASTFM_DB.get_profile(archive_key)
-            progress = LASTFM_DB.archive_progress(archive_key)
+        # Offline imports use the stable Kotone name, while very old rows can
+        # use the Last.fm login. Select the archive with the most actual rows;
+        # otherwise a tiny page-one refresh can hide the complete CSV import.
+        archive_key = LASTFM_DB.best_archive_key(str(name), lastfm_username)
+        profile_data = LASTFM_DB.get_profile(archive_key)
+        progress = LASTFM_DB.archive_progress(archive_key)
         if profile_data is None and not int(progress.get("scrobbles") or 0):
             continue
         count = LASTFM_DB.album_scrobble_count(

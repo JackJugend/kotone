@@ -441,6 +441,27 @@ class LastFMDatabase:
             "tracks": int(row["tracks"] or 0),
         }
 
+    def best_archive_key(self, *candidates: object) -> str:
+        """Choose the configured archive containing the most stored history.
+
+        Early Kotone builds sometimes used the Last.fm login as ``profile_key``
+        while offline CSV imports use the stable Kotone user name.  Merely
+        finding a profile row is insufficient: a login-key row can contain
+        only the newest API page and hide a complete CSV archive.  Prefer the
+        candidate with the largest stored history and use profile presence
+        only to break an empty-archive tie.
+        """
+
+        keys = list(dict.fromkeys(self._key(value) for value in candidates if self._key(value)))
+        if not keys:
+            return ""
+        ranked: list[tuple[int, int, int, str]] = []
+        for index, key in enumerate(keys):
+            archived = self.archive_statistics(key)["scrobbles"]
+            has_profile = 1 if self.get_profile(key) is not None else 0
+            ranked.append((archived, has_profile, -index, key))
+        return max(ranked)[-1]
+
     def archive_progress(self, profile_key: object) -> dict[str, int | bool | None]:
         """Return explicit import progress without conflating it with library totals.
 
@@ -451,7 +472,20 @@ class LastFMDatabase:
 
         state = self.state(profile_key)
         archived = self.archive_statistics(profile_key)
-        total = self._integer(state.get("total_scrobbles"))
+        profile = self.get_profile(profile_key) or {}
+        known_totals = [
+            value
+            for value in (
+                self._integer(state.get("total_scrobbles")),
+                self._integer(profile.get("total_scrobbles")),
+                archived["scrobbles"],
+            )
+            if value is not None
+        ]
+        # The page cursor can retain the total observed when a historical
+        # crawl started. Profile counters and page-one refreshes keep moving,
+        # so never show an archived numerator larger than its denominator.
+        total = max(known_totals) if known_totals else None
         total_pages = self._integer(state.get("total_pages"))
         next_page = max(1, self._integer(state.get("next_page")) or 1)
         return {
