@@ -125,6 +125,44 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(discography["source"], "SQLite cache")
         self.assertEqual(discography["releases"][0]["title"], "Dall")
 
+    async def test_artist_discography_keeps_imported_image_when_lastfm_has_none(self):
+        self.db.upsert_rating(
+            "enso",
+            {
+                "album_id": "artist-image-1",
+                "score": "83",
+                "artist": "Portraits Of Tracy",
+                "album": "Drive Home",
+                "artist_url": "https://www.albumoftheyear.org/artist/142224-portraits-of-tracy/",
+            },
+        )
+        self.db.save_release_details(
+            "artist-image-1",
+            {
+                "artist": "Portraits Of Tracy",
+                "album": "Drive Home",
+                "artist_url": "https://www.albumoftheyear.org/artist/142224-portraits-of-tracy/",
+            },
+        )
+        self.assertTrue(
+            self.db.save_artist_source_data(
+                "Portraits Of Tracy",
+                "manual",
+                {"image_url": "https://cdn.albumoftheyear.org/artists/portraits.jpg"},
+                quality="operator_html",
+                allow_unscoped_manual=True,
+            )
+        )
+
+        _artist, discography = await self.service.get_artist_discography(
+            "Portraits Of Tracy"
+        )
+
+        self.assertEqual(
+            discography["image"],
+            "https://cdn.albumoftheyear.org/artists/portraits.jpg",
+        )
+
     async def test_interactive_enabled_refresh_preserves_score_and_pending(self):
         self.db.upsert_rating(
             "enso",

@@ -677,7 +677,12 @@ class DataService:
         # filled by ``enrich_artist_sources`` in the low-priority worker.
         if cached_info and cached_discography:
             image = DB.get_artist_image(cached_info["name"])
-            cached_discography["image"] = str((image or {}).get("image_url") or "") or None
+            provider_image = str((image or {}).get("image_url") or "").strip()
+            imported_image = str(cached_discography.get("image") or "").strip()
+            # Last.fm remains the preferred artist-artwork provider, but a
+            # normal API 6/not-found response must not erase an AOTY image
+            # already imported from an operator-supplied artist HTML page.
+            cached_discography["image"] = provider_image or imported_image or None
         return cached_info, cached_discography
 
     async def enrich_artist_sources(
@@ -762,7 +767,11 @@ class DataService:
                     quality="api-artist-match",
                 ):
                     image = str(data.get("image_url") or "").strip() or None
-                    DB.save_artist_image(artist, image, source="lastfm")
+                    # Last.fm no longer returns artwork for every artist.
+                    # Preserve an older valid image instead of replacing it
+                    # with NULL when the rest of artist.getInfo succeeds.
+                    if image:
+                        DB.save_artist_image(artist, image, source="lastfm")
                     saved += 1
             except lastfm.LastFMUnavailable as exc:
                 print(f"[LASTFM] artist fallback: {type(exc).__name__}: {exc}")
