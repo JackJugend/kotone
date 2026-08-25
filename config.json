@@ -50,8 +50,11 @@
     "markov": {
         "enabled": true,
         "channel_id": 1021030274424897629,
-        "history_limit": 1000,
-        "spontaneous_every": 15,
+        "history_limit": 2000,
+        "spontaneous_min": 10,
+        "spontaneous_max": 30,
+        "mention_random_chance_min": 0.1,
+        "mention_random_chance_max": 0.3,
         "max_words": 35
     },
     "runtime": {

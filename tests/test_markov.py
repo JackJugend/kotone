@@ -15,6 +15,7 @@ from markov_service import (
     KotoneMarkovBot,
     MarkovService,
     MarkovStore,
+    _copied_word_ratio,
     sanitize_markov_message,
 )
 from settings import GUILD_ID
@@ -104,6 +105,11 @@ class _Client:
 
 
 class MarkovModelTests(unittest.TestCase):
+    def test_copied_word_ratio_counts_repeated_words_from_source(self):
+        self.assertEqual(_copied_word_ratio("kotone mówi", "kotone mówi teraz"), 2 / 3)
+        self.assertEqual(_copied_word_ratio("inne zdanie", "kotone mówi teraz"), 0)
+        self.assertEqual(_copied_word_ratio("hej hej", "hej hej kotone"), 2 / 3)
+
     def test_model_learns_and_generates_second_order_text(self):
         model = KotoneMarkovBot()
         model.read_text("ten album jest bardzo dobry")
@@ -155,6 +161,17 @@ class MarkovStoreTests(unittest.TestCase):
             self.assertFalse(self.store.advance_counter(15))
         self.assertTrue(self.store.advance_counter(15))
         self.assertFalse(self.store.advance_counter(15))
+
+    def test_random_counter_persists_a_new_target_after_each_reply(self):
+        with patch("markov_service.random.randint", side_effect=[10, 30, 20]):
+            for _ in range(9):
+                self.assertFalse(self.store.advance_random_counter(10, 30))
+            self.assertTrue(self.store.advance_random_counter(10, 30))
+            self.assertEqual(self.store.setting("ordinary_message_target", ""), "30")
+            for _ in range(29):
+                self.assertFalse(self.store.advance_random_counter(10, 30))
+            self.assertTrue(self.store.advance_random_counter(10, 30))
+            self.assertEqual(self.store.setting("ordinary_message_target", ""), "20")
 
     def test_batch_insert_returns_only_new_message_contents(self):
         rows = [
@@ -253,6 +270,30 @@ class MarkovServiceTests(unittest.TestCase):
         self.assertEqual(added, 2)
         self.assertEqual(self.store.message_count(MARKOV_CHANNEL_ID), 2)
 
+    def test_history_limit_counts_human_messages_not_bot_messages(self):
+        bot_messages = [
+            _Message(
+                MARKOV_HISTORY_LIMIT + message_id,
+                author=_User(7000 + message_id, bot=True),
+            )
+            for message_id in range(1, 301)
+        ]
+        human_messages = [
+            _Message(message_id)
+            for message_id in range(1, MARKOV_HISTORY_LIMIT + 1)
+        ]
+        channel = _HistoryChannel([*human_messages, *bot_messages])
+        service = MarkovService(_Client(channel), self.store)
+
+        with patch.dict(sys.modules, {"discord": FAKE_DISCORD}):
+            added = asyncio.run(service.bootstrap_history())
+
+        self.assertEqual(added, MARKOV_HISTORY_LIMIT)
+        self.assertEqual(
+            self.store.message_count(MARKOV_CHANNEL_ID),
+            MARKOV_HISTORY_LIMIT,
+        )
+
     def test_service_ignores_bots_and_every_channel_except_configured_one(self):
         client = _Client()
         service = MarkovService(client, self.store)
@@ -279,12 +320,16 @@ class MarkovServiceTests(unittest.TestCase):
         self.assertEqual(outside_guild.replies, [])
         self.assertEqual(self.store.stats()["messages"], 0)
 
-    def test_service_replies_on_mention_and_every_fifteenth_plain_message(self):
+    def test_service_replies_on_mention_and_at_random_plain_message_threshold(self):
         client = _Client()
         service = MarkovService(client, self.store)
         messages = [_Message(message_id) for message_id in range(1, 16)]
 
-        with patch.dict(sys.modules, {"discord": FAKE_DISCORD}):
+        with (
+            patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch("markov_service.random.randint", side_effect=[15, 20]),
+            patch("markov_service.random.random", return_value=1.0),
+        ):
             for message in messages:
                 asyncio.run(service.handle_message(message))
             mentioned = _Message(
@@ -311,11 +356,58 @@ class MarkovServiceTests(unittest.TestCase):
 
         with (
             patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch("markov_service.random.random", return_value=1.0),
             patch.object(service.model, "generate_text", side_effect=generated),
         ):
             asyncio.run(service.handle_message(mentioned))
 
         self.assertEqual(mentioned.replies[0][0], "inna wiadomość z korpusu")
+
+    def test_response_rejects_more_than_forty_percent_of_user_words(self):
+        client = _Client()
+        service = MarkovService(client, self.store)
+        mentioned = _Message(
+            1,
+            content=f"<@{client.user.id}> alfa beta gamma delta epsilon",
+            mentions=[client.user],
+        )
+        generated = [
+            "alfa beta gamma zupełnie inaczej",
+            "alfa beta odpowiedź z korpusu",
+        ]
+
+        with (
+            patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch("markov_service.random.random", return_value=1.0),
+            patch.object(service.model, "generate_text", side_effect=generated),
+        ):
+            asyncio.run(service.handle_message(mentioned))
+
+        self.assertEqual(mentioned.replies[0][0], "alfa beta odpowiedź z korpusu")
+
+    def test_mention_sometimes_uses_unseeded_response_with_no_current_words(self):
+        client = _Client()
+        service = MarkovService(client, self.store)
+        message = _Message(
+            1,
+            content=f"<@{client.user.id}> alfa beta gamma",
+            mentions=[client.user],
+        )
+
+        with (
+            patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch("markov_service.random.random", return_value=0.0),
+            patch("markov_service.random.uniform", return_value=0.20),
+            patch.object(
+                service.model,
+                "generate_text",
+                side_effect=["alfa obca odpowiedź", "zupełnie inny tekst"],
+            ) as generate,
+        ):
+            asyncio.run(service.handle_message(message))
+
+        self.assertEqual(message.replies[0][0], "zupełnie inny tekst")
+        self.assertTrue(all(call.kwargs["seedword"] is None for call in generate.call_args_list))
 
 
 if __name__ == "__main__":

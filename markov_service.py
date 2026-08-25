@@ -19,7 +19,7 @@ import re
 import sqlite3
 import threading
 import time
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -44,6 +44,26 @@ def _comparison_key(text: object) -> str:
     return " ".join(_COMPARISON_TOKEN_RE.findall(str(text or "").casefold()))
 
 
+def _copied_word_ratio(candidate: object, source: object) -> float:
+    """Zwróć część słów źródła powtórzoną w wygenerowanej odpowiedzi.
+
+    Liczymy również powtórzenia tego samego słowa, ale każde wystąpienie ze
+    źródła może zostać zaliczone najwyżej raz. Dzięki temu odpowiedź nie może
+    skopiować większości krótkiej ani długiej wiadomości użytkownika.
+    """
+
+    source_words = _comparison_key(source).split()
+    if not source_words:
+        return 0.0
+    candidate_counts = Counter(_comparison_key(candidate).split())
+    source_counts = Counter(source_words)
+    copied = sum(
+        min(count, candidate_counts.get(word, 0))
+        for word, count in source_counts.items()
+    )
+    return copied / len(source_words)
+
+
 def _integer(value: object, default: int) -> int:
     try:
         return int(value)
@@ -51,13 +71,35 @@ def _integer(value: object, default: int) -> int:
         return default
 
 
+def _number(value: object, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 MARKOV_CONFIG = dict(CONFIG.get("markov") or {})
 MARKOV_CHANNEL_ID = _integer(MARKOV_CONFIG.get("channel_id"), 1021030274424897629)
 MARKOV_DEFAULT_ENABLED = bool(MARKOV_CONFIG.get("enabled", True))
-MARKOV_HISTORY_LIMIT = max(1, _integer(MARKOV_CONFIG.get("history_limit"), 1000))
-MARKOV_SPONTANEOUS_EVERY = max(
+MARKOV_HISTORY_LIMIT = max(1, _integer(MARKOV_CONFIG.get("history_limit"), 2000))
+MARKOV_SPONTANEOUS_MIN = max(
     1,
-    _integer(MARKOV_CONFIG.get("spontaneous_every"), 15),
+    _integer(MARKOV_CONFIG.get("spontaneous_min"), 10),
+)
+MARKOV_SPONTANEOUS_MAX = max(
+    MARKOV_SPONTANEOUS_MIN,
+    _integer(MARKOV_CONFIG.get("spontaneous_max"), 30),
+)
+MARKOV_MENTION_RANDOM_CHANCE_MIN = min(
+    1.0,
+    max(0.0, _number(MARKOV_CONFIG.get("mention_random_chance_min"), 0.10)),
+)
+MARKOV_MENTION_RANDOM_CHANCE_MAX = min(
+    1.0,
+    max(
+        MARKOV_MENTION_RANDOM_CHANCE_MIN,
+        _number(MARKOV_CONFIG.get("mention_random_chance_max"), 0.30),
+    ),
 )
 MARKOV_MAX_WORDS = max(5, _integer(MARKOV_CONFIG.get("max_words"), 35))
 
@@ -288,6 +330,38 @@ class MarkovStore:
         self.set_setting("ordinary_message_counter", 0 if due else current)
         return due
 
+    def advance_random_counter(self, minimum: int, maximum: int) -> bool:
+        """Odlicz do trwałego, losowego progu i po odpowiedzi wylosuj nowy."""
+
+        lower = max(1, int(minimum))
+        upper = max(lower, int(maximum))
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT key, value FROM markov_settings WHERE key IN (?, ?)",
+                ("ordinary_message_counter", "ordinary_message_target"),
+            ).fetchall()
+            settings = {str(row["key"]): str(row["value"]) for row in rows}
+            current = _integer(settings.get("ordinary_message_counter"), 0) + 1
+            target = _integer(settings.get("ordinary_message_target"), 0)
+            if target < lower or target > upper:
+                target = random.randint(lower, upper)
+
+            due = current >= target
+            if due:
+                current = 0
+                target = random.randint(lower, upper)
+
+            self.connection.executemany(
+                """INSERT INTO markov_settings(key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (
+                    ("ordinary_message_counter", str(current)),
+                    ("ordinary_message_target", str(target)),
+                ),
+            )
+            self.connection.commit()
+        return due
+
     def stats(self) -> dict[str, int]:
         with self._lock:
             row = self.connection.execute(
@@ -356,62 +430,62 @@ class MarkovService:
 
                 cursor = self.store.history_cursor(MARKOV_CHANNEL_ID)
                 stored_count = self.store.message_count(MARKOV_CHANNEL_ID)
-                if cursor and stored_count >= MARKOV_HISTORY_LIMIT:
-                    history = [
-                        message
-                        async for message in channel.history(
-                            limit=None,
-                            oldest_first=True,
-                            after=discord.Object(id=cursor),
-                        )
-                    ]
-                else:
-                    # Pierwsze uruchomienie bierze ograniczoną próbkę. Ten sam
-                    # wariant uzupełnia starszą instalację po zwiększeniu limitu
-                    # (np. z 200 do 1000); INSERT OR IGNORE nie zapisze ponownie
-                    # wcześniejszych Discord message ID.
-                    newest = [
-                        message
-                        async for message in channel.history(
-                            limit=MARKOV_HISTORY_LIMIT,
-                            oldest_first=False,
-                        )
-                    ]
-                    history = list(reversed(newest))
-
                 prepared_messages: list[dict[str, object]] = []
-                for message in history:
-                    if getattr(message.author, "bot", False):
-                        continue
-                    content = sanitize_markov_message(
-                        message.content,
-                        getattr(self.client.user, "id", None),
+                highest_seen_id = int(cursor or 0)
+                if cursor and stored_count >= MARKOV_HISTORY_LIMIT:
+                    history = channel.history(
+                        limit=None,
+                        oldest_first=True,
+                        after=discord.Object(id=cursor),
                     )
-                    if not content:
-                        continue
-                    prepared_messages.append(
-                        {
-                            "message_id": message.id,
-                            "guild_id": getattr(message.guild, "id", GUILD_ID),
-                            "channel_id": message.channel.id,
-                            "author_id": message.author.id,
-                            "content": content,
-                            "created_at": message.created_at.timestamp(),
-                        }
-                    )
+                    async for message in history:
+                        highest_seen_id = max(highest_seen_id, int(message.id))
+                        if getattr(message.author, "bot", False):
+                            continue
+                        content = sanitize_markov_message(
+                            message.content,
+                            getattr(self.client.user, "id", None),
+                        )
+                        if content:
+                            prepared_messages.append(
+                                self._history_record(message, content)
+                            )
+                else:
+                    # Limit dotyczy wiadomości ludzi, nie wszystkich rekordów
+                    # Discorda. Skanujemy więc tyle historii, ile potrzeba, aby
+                    # znaleźć 2000 poprawnych wypowiedzi. Boty i puste wpisy nie
+                    # zużywają limitu.
+                    newest_records: list[dict[str, object]] = []
+                    async for message in channel.history(
+                        limit=None,
+                        oldest_first=False,
+                    ):
+                        highest_seen_id = max(highest_seen_id, int(message.id))
+                        if getattr(message.author, "bot", False):
+                            continue
+                        content = sanitize_markov_message(
+                            message.content,
+                            getattr(self.client.user, "id", None),
+                        )
+                        if not content:
+                            continue
+                        newest_records.append(self._history_record(message, content))
+                        if len(newest_records) >= MARKOV_HISTORY_LIMIT:
+                            break
+                    prepared_messages = list(reversed(newest_records))
                 inserted_contents = await asyncio.to_thread(
                     self.store.add_messages,
                     prepared_messages,
                 )
                 await asyncio.to_thread(self.model.read_many, inserted_contents)
                 added = len(inserted_contents)
-                if history:
+                if highest_seen_id:
                     # Kursor historii jest niezależny od wiadomości zapisanych
                     # na żywo, aby wiadomość wysłana tuż po deployu nie mogła
                     # przeskoczyć luki pomiędzy dwoma uruchomieniami.
                     self.store.set_history_cursor(
                         MARKOV_CHANNEL_ID,
-                        max(int(message.id) for message in history),
+                        highest_seen_id,
                     )
                 self.bootstrap_added = added
                 print(
@@ -421,6 +495,19 @@ class MarkovService:
                 return added
             finally:
                 self.bootstrap_running = False
+
+    @staticmethod
+    def _history_record(message: discord.Message, content: str) -> dict[str, object]:
+        """Zbuduj rekord korpusu z wiadomości Discorda."""
+
+        return {
+            "message_id": message.id,
+            "guild_id": getattr(message.guild, "id", GUILD_ID),
+            "channel_id": message.channel.id,
+            "author_id": message.author.id,
+            "content": content,
+            "created_at": message.created_at.timestamp(),
+        }
 
     async def handle_message(self, message: discord.Message) -> None:
         """Zapisz wiadomość człowieka i ewentualnie wygeneruj odpowiedź."""
@@ -460,8 +547,9 @@ class MarkovService:
             if inserted:
                 self.model.read_text(content)
 
-        spontaneous = not mentioned and self.store.advance_counter(
-            MARKOV_SPONTANEOUS_EVERY
+        spontaneous = not mentioned and self.store.advance_random_counter(
+            MARKOV_SPONTANEOUS_MIN,
+            MARKOV_SPONTANEOUS_MAX,
         )
         if not mentioned and not spontaneous:
             return
@@ -473,10 +561,20 @@ class MarkovService:
         ]
         response = ""
         current_key = _comparison_key(content)
+        fully_random_mention = mentioned and random.random() < random.uniform(
+            MARKOV_MENTION_RANDOM_CHANCE_MIN,
+            MARKOV_MENTION_RANDOM_CHANCE_MAX,
+        )
+        allowed_overlap = 0.0 if fully_random_mention else 0.40
         # Najpierw próbujemy odpowiedzi związanej z bieżącą wiadomością. Jeśli
         # mały korpus potrafi zbudować wyłącznie jej kopię, przechodzimy do
         # całego słownika zamiast od razu pokazywać komunikat awaryjny.
-        for attempt_seeds, attempts in ((seeds, 10), (None, 30)):
+        generation_plans = (
+            ((None, 60),)
+            if fully_random_mention
+            else ((seeds, 10), (None, 30))
+        )
+        for attempt_seeds, attempts in generation_plans:
             for _ in range(attempts):
                 candidate = self.model.generate_text(
                     MARKOV_MAX_WORDS,
@@ -484,6 +582,8 @@ class MarkovService:
                 )
                 candidate_key = _comparison_key(candidate)
                 if not candidate_key or candidate_key == current_key:
+                    continue
+                if _copied_word_ratio(candidate, content) > allowed_overlap:
                     continue
                 if candidate_key in self._recent_response_keys:
                     continue
@@ -499,7 +599,10 @@ class MarkovService:
         if not response:
             for _ in range(30):
                 candidate = self.model.generate_text(MARKOV_MAX_WORDS)
-                if _comparison_key(candidate) not in {"", current_key}:
+                if (
+                    _comparison_key(candidate) not in {"", current_key}
+                    and _copied_word_ratio(candidate, content) <= allowed_overlap
+                ):
                     response = candidate
                     break
         if not response:
