@@ -15,6 +15,7 @@ from markov_service import (
     KotoneMarkovBot,
     MarkovService,
     MarkovStore,
+    _context_copy_limit,
     _copied_word_ratio,
     sanitize_markov_message,
 )
@@ -109,6 +110,9 @@ class MarkovModelTests(unittest.TestCase):
         self.assertEqual(_copied_word_ratio("kotone mówi", "kotone mówi teraz"), 2 / 3)
         self.assertEqual(_copied_word_ratio("inne zdanie", "kotone mówi teraz"), 0)
         self.assertEqual(_copied_word_ratio("hej hej", "hej hej kotone"), 2 / 3)
+        self.assertEqual(_context_copy_limit("hej"), 1)
+        self.assertEqual(_context_copy_limit("hej kotone"), 1)
+        self.assertEqual(_context_copy_limit("jeden dwa trzy cztery pięć"), 2)
 
     def test_model_learns_and_generates_second_order_text(self):
         model = KotoneMarkovBot()
@@ -386,6 +390,25 @@ class MarkovServiceTests(unittest.TestCase):
             asyncio.run(service.handle_message(mentioned))
 
         self.assertEqual(mentioned.replies[0][0], "alfa odpowiedź z korpusu")
+
+    def test_one_word_mention_can_generate_a_contextual_markov_answer(self):
+        client = _Client()
+        service = MarkovService(client, self.store)
+        service.model.read_text("ten album ma bardzo dobry klimat")
+        mentioned = _Message(
+            1,
+            content=f"<@{client.user.id}> album",
+            mentions=[client.user],
+        )
+
+        with (
+            patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch("markov_service.random.random", return_value=1.0),
+        ):
+            asyncio.run(service.handle_message(mentioned))
+
+        self.assertIn("album", mentioned.replies[0][0].casefold())
+        self.assertNotEqual(mentioned.replies[0][0].casefold(), "album")
 
     def test_failed_contextual_mention_falls_back_to_random_corpus_text(self):
         client = _Client()

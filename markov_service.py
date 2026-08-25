@@ -55,13 +55,27 @@ def _copied_word_ratio(candidate: object, source: object) -> float:
     source_words = _comparison_key(source).split()
     if not source_words:
         return 0.0
+    return _copied_word_count(candidate, source) / len(source_words)
+
+
+def _copied_word_count(candidate: object, source: object) -> int:
+    """Policz wspólne wystąpienia słów bez wielokrotnego zaliczania."""
+
     candidate_counts = Counter(_comparison_key(candidate).split())
-    source_counts = Counter(source_words)
-    copied = sum(
+    source_counts = Counter(_comparison_key(source).split())
+    return sum(
         min(count, candidate_counts.get(word, 0))
         for word, count in source_counts.items()
     )
-    return copied / len(source_words)
+
+
+def _context_copy_limit(source: object) -> int:
+    """Dopuść 40% słów, a dla krótkiej wiadomości jedno słowo kontekstu."""
+
+    source_length = len(_comparison_key(source).split())
+    if source_length == 0:
+        return 0
+    return max(1, int(source_length * 0.40))
 
 
 def _integer(value: object, default: int) -> int:
@@ -569,7 +583,9 @@ class MarkovService:
                 MARKOV_MENTION_RANDOM_CHANCE_MAX,
             )
         )
-        allowed_overlap = 0.0 if fully_random_mention else 0.40
+        allowed_copied_words = (
+            0 if fully_random_mention else _context_copy_limit(content)
+        )
         # Najpierw próbujemy odpowiedzi związanej z bieżącą wiadomością. Jeśli
         # mały korpus potrafi zbudować wyłącznie jej kopię, przechodzimy do
         # całego słownika zamiast od razu pokazywać komunikat awaryjny.
@@ -590,10 +606,10 @@ class MarkovService:
                 candidate_key = _comparison_key(candidate)
                 if not candidate_key or candidate_key == current_key:
                     continue
-                copied_ratio = _copied_word_ratio(candidate, content)
-                if copied_ratio > allowed_overlap:
+                copied_words = _copied_word_count(candidate, content)
+                if copied_words > allowed_copied_words:
                     continue
-                if mentioned and not fully_random_mention and copied_ratio == 0:
+                if mentioned and not fully_random_mention and copied_words == 0:
                     continue
                 if candidate_key in self._recent_response_keys:
                     continue
@@ -611,7 +627,8 @@ class MarkovService:
                 candidate = self.model.generate_text(MARKOV_MAX_WORDS)
                 if (
                     _comparison_key(candidate) not in {"", current_key}
-                    and _copied_word_ratio(candidate, content) <= allowed_overlap
+                    and _copied_word_count(candidate, content)
+                    <= allowed_copied_words
                 ):
                     response = candidate
                     break
