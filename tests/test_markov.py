@@ -156,6 +156,23 @@ class MarkovStoreTests(unittest.TestCase):
         self.assertTrue(self.store.advance_counter(15))
         self.assertFalse(self.store.advance_counter(15))
 
+    def test_batch_insert_returns_only_new_message_contents(self):
+        rows = [
+            {
+                "message_id": message_id,
+                "guild_id": 2,
+                "channel_id": 3,
+                "author_id": 4,
+                "content": f"wiadomość {message_id}",
+                "created_at": 5,
+            }
+            for message_id in range(1, 101)
+        ]
+
+        self.assertEqual(len(self.store.add_messages(rows)), 100)
+        self.assertEqual(self.store.add_messages(rows), [])
+        self.assertEqual(self.store.stats()["messages"], 100)
+
 
 class MarkovServiceTests(unittest.TestCase):
     def setUp(self):
@@ -284,6 +301,21 @@ class MarkovServiceTests(unittest.TestCase):
             mentioned.replies[0][0].casefold().rstrip(".!?"),
             mentioned.content.casefold().rstrip(".!?"),
         )
+
+    def test_seeded_echo_falls_back_to_the_whole_corpus(self):
+        client = _Client()
+        service = MarkovService(client, self.store)
+        current = f"<@{client.user.id}> powiedz coś"
+        mentioned = _Message(1, content=current, mentions=[client.user])
+        generated = ["powiedz coś"] * 10 + ["inna wiadomość z korpusu"]
+
+        with (
+            patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch.object(service.model, "generate_text", side_effect=generated),
+        ):
+            asyncio.run(service.handle_message(mentioned))
+
+        self.assertEqual(mentioned.replies[0][0], "inna wiadomość z korpusu")
 
 
 if __name__ == "__main__":

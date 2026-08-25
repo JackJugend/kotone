@@ -202,22 +202,46 @@ class MarkovStore:
         content: str,
         created_at: float | None = None,
     ) -> bool:
+        inserted = self.add_messages(
+            [
+                {
+                    "message_id": message_id,
+                    "guild_id": guild_id,
+                    "channel_id": channel_id,
+                    "author_id": author_id,
+                    "content": content,
+                    "created_at": created_at,
+                }
+            ]
+        )
+        return bool(inserted)
+
+    def add_messages(self, messages: Iterable[dict[str, object]]) -> list[str]:
+        """Zapisz wiele wiadomości w jednej transakcji i zwróć nowe treści."""
+
+        inserted_contents: list[str] = []
+        now = time.time()
         with self._lock:
-            cursor = self.connection.execute(
-                """INSERT OR IGNORE INTO markov_messages(
-                    message_id, guild_id, channel_id, author_id, content, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    int(message_id),
-                    int(guild_id),
-                    int(channel_id),
-                    int(author_id),
-                    str(content),
-                    float(created_at or time.time()),
-                ),
-            )
+            for message in messages:
+                content = str(message.get("content") or "")
+                cursor = self.connection.execute(
+                    """INSERT OR IGNORE INTO markov_messages(
+                        message_id, guild_id, channel_id, author_id,
+                        content, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        int(message["message_id"]),
+                        int(message["guild_id"]),
+                        int(message["channel_id"]),
+                        int(message["author_id"]),
+                        content,
+                        float(message.get("created_at") or now),
+                    ),
+                )
+                if cursor.rowcount:
+                    inserted_contents.append(content)
             self.connection.commit()
-            return bool(cursor.rowcount)
+        return inserted_contents
 
     def corpus(self) -> list[str]:
         with self._lock:
@@ -355,6 +379,7 @@ class MarkovService:
                     ]
                     history = list(reversed(newest))
 
+                prepared_messages: list[dict[str, object]] = []
                 for message in history:
                     if getattr(message.author, "bot", False):
                         continue
@@ -364,17 +389,22 @@ class MarkovService:
                     )
                     if not content:
                         continue
-                    inserted = self.store.add_message(
-                        message_id=message.id,
-                        guild_id=getattr(message.guild, "id", GUILD_ID),
-                        channel_id=message.channel.id,
-                        author_id=message.author.id,
-                        content=content,
-                        created_at=message.created_at.timestamp(),
+                    prepared_messages.append(
+                        {
+                            "message_id": message.id,
+                            "guild_id": getattr(message.guild, "id", GUILD_ID),
+                            "channel_id": message.channel.id,
+                            "author_id": message.author.id,
+                            "content": content,
+                            "created_at": message.created_at.timestamp(),
+                        }
                     )
-                    if inserted:
-                        self.model.read_text(content)
-                        added += 1
+                inserted_contents = await asyncio.to_thread(
+                    self.store.add_messages,
+                    prepared_messages,
+                )
+                await asyncio.to_thread(self.model.read_many, inserted_contents)
+                added = len(inserted_contents)
                 if history:
                     # Kursor historii jest niezależny od wiadomości zapisanych
                     # na żywo, aby wiadomość wysłana tuż po deployu nie mogła
@@ -443,21 +473,35 @@ class MarkovService:
         ]
         response = ""
         current_key = _comparison_key(content)
-        # Łańcuch drugiego rzędu przy małym korpusie potrafi odbić dokładnie
-        # bieżącą wiadomość. Losujemy kilka razy, ale nie odpowiadamy kopią
-        # aktualnej wypowiedzi ani niedawnej odpowiedzi Kotone.
-        for _ in range(10):
-            candidate = self.model.generate_text(MARKOV_MAX_WORDS, seedword=seeds)
-            candidate_key = _comparison_key(candidate)
-            if not candidate_key:
-                continue
-            if candidate_key == current_key:
-                continue
-            if candidate_key in self._recent_response_keys:
-                continue
-            response = candidate
-            self._recent_response_keys.append(candidate_key)
-            break
+        # Najpierw próbujemy odpowiedzi związanej z bieżącą wiadomością. Jeśli
+        # mały korpus potrafi zbudować wyłącznie jej kopię, przechodzimy do
+        # całego słownika zamiast od razu pokazywać komunikat awaryjny.
+        for attempt_seeds, attempts in ((seeds, 10), (None, 30)):
+            for _ in range(attempts):
+                candidate = self.model.generate_text(
+                    MARKOV_MAX_WORDS,
+                    seedword=attempt_seeds,
+                )
+                candidate_key = _comparison_key(candidate)
+                if not candidate_key or candidate_key == current_key:
+                    continue
+                if candidate_key in self._recent_response_keys:
+                    continue
+                response = candidate
+                self._recent_response_keys.append(candidate_key)
+                break
+            if response:
+                break
+
+        # Gdy niewielki korpus zawiera bardzo mało różnych wypowiedzi, wolno
+        # powtórzyć wcześniejszą odpowiedź Kotone, ale nadal nigdy bieżącą
+        # wiadomość użytkownika.
+        if not response:
+            for _ in range(30):
+                candidate = self.model.generate_text(MARKOV_MAX_WORDS)
+                if _comparison_key(candidate) not in {"", current_key}:
+                    response = candidate
+                    break
         if not response:
             response = "Jeszcze zbieram słowa."
         response = sanitize_markov_message(response, bot_user.id)
