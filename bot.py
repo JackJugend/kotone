@@ -31,6 +31,7 @@ from commands.dbimport import setup_dbimport_command
 from commands.dbstats import setup_dbstats_command
 from commands.history import setup_history_command
 from commands.manual import setup_manual_command
+from commands.markov import setup_markov_command
 from commands.last import setup_last_command
 from commands.profile import setup_profile_command
 from commands.rating_import import setup_rating_import_command
@@ -47,6 +48,7 @@ from lifecycle import (
     stop_tasks_before_deadline,
 )
 from monitor import RatingMonitor
+from markov_service import MarkovService
 from presence_cache import PRESENCE_CACHE
 from score_emojis import ScoreEmojiSynchronizer, StatusEmojiSynchronizer
 from settings import APPLICATION_ID, GUILD_ID, TOKEN
@@ -59,6 +61,9 @@ intents = discord.Intents.default()
 # retains those activities for the bot.
 intents.presences = True
 intents.members = True
+# Model Markowa uczy się z treści zwykłych wiadomości. Ten intent musi być
+# również włączony w Discord Developer Portal dla aplikacji Kotone.
+intents.message_content = True
 
 activity = discord.Activity(
     type=discord.ActivityType.watching,
@@ -78,6 +83,7 @@ background = BackgroundWorker(client)
 health = HealthServer(client, monitor, background)
 score_emojis = ScoreEmojiSynchronizer(client)
 status_emojis = StatusEmojiSynchronizer(client)
+markov = MarkovService(client)
 
 setup_last_command(tree)
 setup_recent_command(tree)
@@ -93,6 +99,7 @@ setup_dbstats_command(tree)
 setup_history_command(tree)
 setup_manual_command(tree)
 setup_analytics_commands(tree)
+setup_markov_command(tree, markov)
 
 
 @tree.error
@@ -129,6 +136,18 @@ async def on_presence_update(before: discord.Member, after: discord.Member) -> N
     PRESENCE_CACHE.update(after)
 
 
+@client.event
+async def on_message(message: discord.Message) -> None:
+    """Ucz Markova wyłącznie na wiadomościach ludzi i obsłuż odpowiedzi."""
+
+    try:
+        await markov.handle_message(message)
+    except discord.HTTPException as exc:
+        print(f"[MARKOV] Nie wysłano odpowiedzi: HTTP {exc.status}.")
+    except Exception as exc:
+        print(f"[MARKOV] Obsługa wiadomości: {type(exc).__name__}: {exc}")
+
+
 async def setup_hook() -> None:
     """Sync one authoritative guild command set.
 
@@ -154,6 +173,7 @@ client.setup_hook = setup_hook
 monitor_task: asyncio.Task | None = None
 background_task: asyncio.Task | None = None
 emoji_sync_task: asyncio.Task | None = None
+markov_bootstrap_task: asyncio.Task | None = None
 shutdown_deadline: float | None = None
 shutdown_task: asyncio.Task | None = None
 shutdown_snapshot_task: asyncio.Task | None = None
@@ -191,9 +211,26 @@ def _log_worker_exit(task: asyncio.Task) -> None:
 
 @client.event
 async def on_ready() -> None:
-    global monitor_task, background_task, emoji_sync_task
+    global monitor_task, background_task, emoji_sync_task, markov_bootstrap_task
 
     print(f"Zalogowano jako {client.user}")
+
+    if markov_bootstrap_task is None or markov_bootstrap_task.done():
+        async def bootstrap_markov_history() -> None:
+            try:
+                await markov.bootstrap_history()
+            except discord.Forbidden:
+                print(
+                    "[MARKOV] Brak dostępu do kanału lub uprawnienia "
+                    "Read Message History."
+                )
+            except Exception as exc:
+                print(f"[MARKOV] Import historii: {type(exc).__name__}: {exc}")
+
+        markov_bootstrap_task = asyncio.create_task(
+            bootstrap_markov_history(),
+            name="kotone-markov-history",
+        )
 
     if monitor_task is None or monitor_task.done():
         monitor_task = asyncio.create_task(
@@ -263,6 +300,7 @@ async def _persist_shutdown_snapshot():
         {
             "monitor": monitor_task,
             "background": background_task,
+            "markov_history": markov_bootstrap_task,
         },
         deadline=deadline,
     )
@@ -374,6 +412,7 @@ async def main() -> None:
         # survived Discord shutdown will be cancelled by asyncio.run before it
         # can resume and perform another DB operation.
         DB.close()
+        markov.close()
 
     if requested_exit_code:
         raise SystemExit(requested_exit_code)

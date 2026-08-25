@@ -47,6 +47,13 @@
         "audiobook": 0
     },
     "album_lookup_fallback_limit": 1000,
+    "markov": {
+        "enabled": true,
+        "channel_id": 1021030274424897629,
+        "history_limit": 200,
+        "spontaneous_every": 15,
+        "max_words": 35
+    },
     "runtime": {
         "profile_sync_interval": 21600,
         "full_sync_interval": 86400,

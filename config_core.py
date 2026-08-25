@@ -36,11 +36,13 @@ if DATA_DIR:
     DATA_FILE = os.path.join(DATA_DIR, "data.json")
     DATABASE_FILE = os.path.join(DATA_DIR, "kotone.sqlite3")
     LASTFM_DATABASE_FILE = os.path.join(DATA_DIR, "kotone-lastfm.sqlite3")
+    MARKOV_DATABASE_FILE = os.path.join(DATA_DIR, "kotone-markov.sqlite3")
     MIGRATED_DATA_BACKUP_FILE = os.path.join(DATA_DIR, "data_migrated.json.bak")
 else:
     DATA_FILE = DEFAULT_DATA_FILE
     DATABASE_FILE = DEFAULT_DATABASE_FILE
     LASTFM_DATABASE_FILE = os.path.join(BASE_DIR, "kotone-lastfm.sqlite3")
+    MARKOV_DATABASE_FILE = os.path.join(BASE_DIR, "kotone-markov.sqlite3")
     MIGRATED_DATA_BACKUP_FILE = os.path.join(BASE_DIR, "data_migrated.json.bak")
 
 
@@ -50,4 +52,3 @@ else:
 
 with open(CONFIG_FILE, "r", encoding="utf-8") as config_file:
     CONFIG = json.load(config_file)
-
