@@ -561,9 +561,13 @@ class MarkovService:
         ]
         response = ""
         current_key = _comparison_key(content)
-        fully_random_mention = mentioned and random.random() < random.uniform(
-            MARKOV_MENTION_RANDOM_CHANCE_MIN,
-            MARKOV_MENTION_RANDOM_CHANCE_MAX,
+        fully_random_mention = mentioned and (
+            not current_key
+            or random.random()
+            < random.uniform(
+                MARKOV_MENTION_RANDOM_CHANCE_MIN,
+                MARKOV_MENTION_RANDOM_CHANCE_MAX,
+            )
         )
         allowed_overlap = 0.0 if fully_random_mention else 0.40
         # Najpierw próbujemy odpowiedzi związanej z bieżącą wiadomością. Jeśli
@@ -612,7 +616,20 @@ class MarkovService:
                     response = candidate
                     break
         if not response:
-            response = "Jeszcze zbieram słowa."
+            # Ostatnia szansa po nieudanej odpowiedzi kontekstowej: wypowiedź
+            # z całego korpusu, ale bez żadnego słowa bieżącej wiadomości.
+            # Nigdy nie wracamy już do tekstu „Jeszcze zbieram słowa”.
+            for _ in range(60):
+                candidate = self.model.generate_text(MARKOV_MAX_WORDS)
+                candidate_key = _comparison_key(candidate)
+                if (
+                    candidate_key not in {"", current_key}
+                    and _copied_word_ratio(candidate, content) == 0
+                ):
+                    response = candidate
+                    break
+        if not response:
+            return
         response = sanitize_markov_message(response, bot_user.id)
         await message.reply(
             response[:2000],

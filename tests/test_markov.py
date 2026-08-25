@@ -387,6 +387,29 @@ class MarkovServiceTests(unittest.TestCase):
 
         self.assertEqual(mentioned.replies[0][0], "alfa odpowiedź z korpusu")
 
+    def test_failed_contextual_mention_falls_back_to_random_corpus_text(self):
+        client = _Client()
+        service = MarkovService(client, self.store)
+        mentioned = _Message(
+            1,
+            content=f"<@{client.user.id}> alfa beta gamma delta epsilon",
+            mentions=[client.user],
+        )
+        contextual_echoes = ["alfa beta gamma delta epsilon"] * 40
+
+        with (
+            patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch("markov_service.random.random", return_value=1.0),
+            patch.object(
+                service.model,
+                "generate_text",
+                side_effect=[*contextual_echoes, "zupełnie losowa wypowiedź"],
+            ),
+        ):
+            asyncio.run(service.handle_message(mentioned))
+
+        self.assertEqual(mentioned.replies[0][0], "zupełnie losowa wypowiedź")
+
     def test_response_rejects_more_than_forty_percent_of_user_words(self):
         client = _Client()
         service = MarkovService(client, self.store)
@@ -432,6 +455,27 @@ class MarkovServiceTests(unittest.TestCase):
 
         self.assertEqual(message.replies[0][0], "zupełnie inny tekst")
         self.assertTrue(all(call.kwargs["seedword"] is None for call in generate.call_args_list))
+
+    def test_bare_mention_uses_corpus_instead_of_collection_message(self):
+        client = _Client()
+        service = MarkovService(client, self.store)
+        message = _Message(
+            1,
+            content=f"<@{client.user.id}>",
+            mentions=[client.user],
+        )
+
+        with (
+            patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch.object(
+                service.model,
+                "generate_text",
+                return_value="wiadomość z całego korpusu",
+            ),
+        ):
+            asyncio.run(service.handle_message(message))
+
+        self.assertEqual(message.replies[0][0], "wiadomość z całego korpusu")
 
 
 if __name__ == "__main__":
