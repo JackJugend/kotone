@@ -19,7 +19,7 @@ import re
 import sqlite3
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -35,6 +35,13 @@ _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _MASS_MENTION_RE = re.compile(r"@(everyone|here)\b", re.IGNORECASE)
 _ROLE_MENTION_RE = re.compile(r"<@&\d+>")
 _WHITESPACE_RE = re.compile(r"\s+")
+_COMPARISON_TOKEN_RE = re.compile(r"<@!?\d+>|\w+", re.UNICODE)
+
+
+def _comparison_key(text: object) -> str:
+    """Ujednolić tekst do wykrywania kopii mimo interpunkcji i wielkości."""
+
+    return " ".join(_COMPARISON_TOKEN_RE.findall(str(text or "").casefold()))
 
 
 def _integer(value: object, default: int) -> int:
@@ -47,7 +54,7 @@ def _integer(value: object, default: int) -> int:
 MARKOV_CONFIG = dict(CONFIG.get("markov") or {})
 MARKOV_CHANNEL_ID = _integer(MARKOV_CONFIG.get("channel_id"), 1021030274424897629)
 MARKOV_DEFAULT_ENABLED = bool(MARKOV_CONFIG.get("enabled", True))
-MARKOV_HISTORY_LIMIT = max(1, _integer(MARKOV_CONFIG.get("history_limit"), 200))
+MARKOV_HISTORY_LIMIT = max(1, _integer(MARKOV_CONFIG.get("history_limit"), 1000))
 MARKOV_SPONTANEOUS_EVERY = max(
     1,
     _integer(MARKOV_CONFIG.get("spontaneous_every"), 15),
@@ -138,10 +145,7 @@ class KotoneMarkovBot:
                 break
             words.append(next_word)
 
-        sentence = " ".join(words).strip()
-        if sentence and sentence[-1] not in ".!?":
-            sentence += "."
-        return sentence
+        return " ".join(words).strip()
 
     def stats(self) -> dict[str, int]:
         with self._lock:
@@ -222,6 +226,14 @@ class MarkovStore:
             ).fetchall()
         return [str(row["content"]) for row in rows]
 
+    def message_count(self, channel_id: int) -> int:
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT COUNT(*) AS total FROM markov_messages WHERE channel_id = ?",
+                (int(channel_id),),
+            ).fetchone()
+        return int(row["total"] or 0)
+
     def history_cursor(self, channel_id: int) -> int | None:
         value = self.setting(f"history_cursor:{int(channel_id)}", "")
         return _integer(value, 0) or None
@@ -286,6 +298,7 @@ class MarkovService:
         self.model = KotoneMarkovBot()
         self.model.read_many(self.store.corpus())
         self._bootstrap_lock = asyncio.Lock()
+        self._recent_response_keys: deque[str] = deque(maxlen=50)
         self.bootstrap_running = False
         self.bootstrap_added = 0
 
@@ -311,9 +324,15 @@ class MarkovService:
                     channel = await self.client.fetch_channel(MARKOV_CHANNEL_ID)
                 if not hasattr(channel, "history"):
                     raise RuntimeError("Skonfigurowany kanał nie udostępnia historii.")
+                channel_guild_id = getattr(getattr(channel, "guild", None), "id", None)
+                if int(channel_guild_id or 0) != GUILD_ID:
+                    raise RuntimeError(
+                        "Kanał Markova nie należy do serwera skonfigurowanego w Kotone."
+                    )
 
                 cursor = self.store.history_cursor(MARKOV_CHANNEL_ID)
-                if cursor:
+                stored_count = self.store.message_count(MARKOV_CHANNEL_ID)
+                if cursor and stored_count >= MARKOV_HISTORY_LIMIT:
                     history = [
                         message
                         async for message in channel.history(
@@ -323,8 +342,10 @@ class MarkovService:
                         )
                     ]
                 else:
-                    # Pierwsze uruchomienie bierze wyłącznie niewielką próbkę
-                    # najnowszych wypowiedzi, a nie całą historię kanału.
+                    # Pierwsze uruchomienie bierze ograniczoną próbkę. Ten sam
+                    # wariant uzupełnia starszą instalację po zwiększeniu limitu
+                    # (np. z 200 do 1000); INSERT OR IGNORE nie zapisze ponownie
+                    # wcześniejszych Discord message ID.
                     newest = [
                         message
                         async for message in channel.history(
@@ -420,7 +441,23 @@ class MarkovService:
             for word in content.split()
             if not word.startswith("<@") and len(word) > 2
         ]
-        response = self.model.generate_text(MARKOV_MAX_WORDS, seedword=seeds)
+        response = ""
+        current_key = _comparison_key(content)
+        # Łańcuch drugiego rzędu przy małym korpusie potrafi odbić dokładnie
+        # bieżącą wiadomość. Losujemy kilka razy, ale nie odpowiadamy kopią
+        # aktualnej wypowiedzi ani niedawnej odpowiedzi Kotone.
+        for _ in range(10):
+            candidate = self.model.generate_text(MARKOV_MAX_WORDS, seedword=seeds)
+            candidate_key = _comparison_key(candidate)
+            if not candidate_key:
+                continue
+            if candidate_key == current_key:
+                continue
+            if candidate_key in self._recent_response_keys:
+                continue
+            response = candidate
+            self._recent_response_keys.append(candidate_key)
+            break
         if not response:
             response = "Jeszcze zbieram słowa."
         response = sanitize_markov_message(response, bot_user.id)

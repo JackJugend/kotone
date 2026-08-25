@@ -5,7 +5,7 @@ from __future__ import annotations
 import discord
 
 from markov_service import MarkovService
-from settings import GUILD_ID, is_operator_discord_id
+from settings import is_operator_discord_id
 
 
 def setup_markov_command(
@@ -13,7 +13,6 @@ def setup_markov_command(
     service: MarkovService,
 ) -> None:
     @tree.command(name="markov", description="Włącza, wyłącza lub pokazuje stan Markova")
-    @discord.app_commands.guilds(discord.Object(id=GUILD_ID))
     @discord.app_commands.describe(action="Włącz, wyłącz albo pokaż statystyki")
     @discord.app_commands.choices(
         action=[
