@@ -569,11 +569,14 @@ class MarkovService:
         # Najpierw próbujemy odpowiedzi związanej z bieżącą wiadomością. Jeśli
         # mały korpus potrafi zbudować wyłącznie jej kopię, przechodzimy do
         # całego słownika zamiast od razu pokazywać komunikat awaryjny.
-        generation_plans = (
-            ((None, 60),)
-            if fully_random_mention
-            else ((seeds, 10), (None, 30))
-        )
+        if fully_random_mention:
+            generation_plans = ((None, 60),)
+        elif mentioned:
+            # Zwykła odpowiedź po wzmiance musi pozostać związana z treścią.
+            # Nie przechodzimy tu po cichu na losowy początek z całego korpusu.
+            generation_plans = ((seeds, 40),)
+        else:
+            generation_plans = ((seeds, 10), (None, 30))
         for attempt_seeds, attempts in generation_plans:
             for _ in range(attempts):
                 candidate = self.model.generate_text(
@@ -583,7 +586,10 @@ class MarkovService:
                 candidate_key = _comparison_key(candidate)
                 if not candidate_key or candidate_key == current_key:
                     continue
-                if _copied_word_ratio(candidate, content) > allowed_overlap:
+                copied_ratio = _copied_word_ratio(candidate, content)
+                if copied_ratio > allowed_overlap:
+                    continue
+                if mentioned and not fully_random_mention and copied_ratio == 0:
                     continue
                 if candidate_key in self._recent_response_keys:
                     continue
@@ -596,7 +602,7 @@ class MarkovService:
         # Gdy niewielki korpus zawiera bardzo mało różnych wypowiedzi, wolno
         # powtórzyć wcześniejszą odpowiedź Kotone, ale nadal nigdy bieżącą
         # wiadomość użytkownika.
-        if not response:
+        if not response and (spontaneous or fully_random_mention):
             for _ in range(30):
                 candidate = self.model.generate_text(MARKOV_MAX_WORDS)
                 if (

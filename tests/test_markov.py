@@ -347,12 +347,14 @@ class MarkovServiceTests(unittest.TestCase):
             mentioned.content.casefold().rstrip(".!?"),
         )
 
-    def test_seeded_echo_falls_back_to_the_whole_corpus(self):
+    def test_seeded_echo_falls_back_to_a_different_contextual_answer(self):
         client = _Client()
         service = MarkovService(client, self.store)
-        current = f"<@{client.user.id}> powiedz coś"
+        current = f"<@{client.user.id}> powiedz coś o tym albumie"
         mentioned = _Message(1, content=current, mentions=[client.user])
-        generated = ["powiedz coś"] * 10 + ["inna wiadomość z korpusu"]
+        generated = ["powiedz coś o tym albumie"] * 10 + [
+            "albumie jest dziwne zakończenie"
+        ]
 
         with (
             patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
@@ -361,7 +363,29 @@ class MarkovServiceTests(unittest.TestCase):
         ):
             asyncio.run(service.handle_message(mentioned))
 
-        self.assertEqual(mentioned.replies[0][0], "inna wiadomość z korpusu")
+        self.assertEqual(mentioned.replies[0][0], "albumie jest dziwne zakończenie")
+
+    def test_normal_mention_rejects_unrelated_candidate(self):
+        client = _Client()
+        service = MarkovService(client, self.store)
+        mentioned = _Message(
+            1,
+            content=f"<@{client.user.id}> alfa beta gamma delta epsilon",
+            mentions=[client.user],
+        )
+
+        with (
+            patch.dict(sys.modules, {"discord": FAKE_DISCORD}),
+            patch("markov_service.random.random", return_value=1.0),
+            patch.object(
+                service.model,
+                "generate_text",
+                side_effect=["zupełnie obcy tekst", "alfa odpowiedź z korpusu"],
+            ),
+        ):
+            asyncio.run(service.handle_message(mentioned))
+
+        self.assertEqual(mentioned.replies[0][0], "alfa odpowiedź z korpusu")
 
     def test_response_rejects_more_than_forty_percent_of_user_words(self):
         client = _Client()
