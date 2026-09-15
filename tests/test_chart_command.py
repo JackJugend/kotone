@@ -77,7 +77,7 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(sent_file.filename, "chart-enso-monthly-10.png")
                 with Image.open(sent_file.fp) as image:
                     self.assertEqual(image.format, "PNG")
-                    self.assertEqual(image.width, 1000)
+                    self.assertEqual(image.width, 1280)
                 sent_file.close()
                 self.interaction.response.send_message.assert_not_awaited()
 
@@ -125,7 +125,7 @@ class ChartGraphicTests(unittest.TestCase):
                 graphic = render_chart(data)
                 with Image.open(io.BytesIO(graphic.getvalue())) as image:
                     self.assertEqual(image.format, "PNG")
-                    self.assertEqual(image.width, 1000)
+                    self.assertEqual(image.width, 1280)
                     self.assertEqual(image.getpixel((0, 0)), BACKGROUND)
                     self.assertEqual(image.getpixel((500, 30)), PANEL)
 
