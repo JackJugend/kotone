@@ -536,7 +536,6 @@ def render_chart(data: dict) -> io.BytesIO:
     )
 
     heading_font = _font(28, bold=True)
-    draw.text((54, 303), "Liczba ocen w czasie", font=heading_font, fill=TEXT)
     legend_font = _font(17)
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
