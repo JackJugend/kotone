@@ -522,6 +522,11 @@ def render_chart(data: dict) -> io.BytesIO:
         draw, 54, "Liczba ocen", str(data.get("ratings", 0)), TEXT,
         fit_text=True, width=metric_width,
     )
+    #_metric(
+    #    draw, 54 + 3 * metric_step, "Średnia liczby ocen", _number(data.get("average_score")),
+    #    _score_color(data.get("average_score")),
+    #    fit_text=True, width=metric_width,
+    #)
     _metric(
         draw, 54 + metric_step, average_label, _number(data.get("average", 0)),
         GENRE_COLORS[0], fit_text=True, width=metric_width,
@@ -530,14 +535,9 @@ def render_chart(data: dict) -> io.BytesIO:
         draw, 54 + 2 * metric_step, peak_label, str(data.get("peak", 0)),
         GENRE_COLORS[-1], fit_text=True, width=metric_width,
     )
-    _metric(
-        draw, 54 + 3 * metric_step, "Średnia ocen", _number(data.get("average_score")),
-        _score_color(data.get("average_score")),
-        fit_text=True, width=metric_width,
-    )
 
-    heading_font = _font(28, bold=True)
-    legend_font = _font(25)
+    #heading_font = _font(28, bold=True)
+    legend_font = _font(25, bold=True)
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
         x = 70 + (index % 6) * ((image.width - 124) // 6)
