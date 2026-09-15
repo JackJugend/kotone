@@ -522,11 +522,11 @@ def render_chart(data: dict) -> io.BytesIO:
         draw, 54, "Liczba ocen", str(data.get("ratings", 0)), TEXT,
         fit_text=True, width=metric_width,
     )
-    #_metric(
-    #    draw, 54 + 3 * metric_step, "Średnia liczby ocen", _number(data.get("average_score")),
-    #    _score_color(data.get("average_score")),
-    #    fit_text=True, width=metric_width,
-    #)
+    _metric(
+        draw, 54 + 3 * metric_step, "Średnia / okres", _number(data.get("average_score")),
+        _score_color(data.get("average_score")),
+        fit_text=True, width=metric_width,
+    )
     _metric(
         draw, 54 + metric_step, average_label, _number(data.get("average", 0)),
         GENRE_COLORS[0], fit_text=True, width=metric_width,
