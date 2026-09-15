@@ -543,7 +543,7 @@ def render_chart(data: dict) -> io.BytesIO:
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
         x = 70 + (index % 6) * ((image.width - 124) // 6)
         y = 351 + (index // 6) * 36
-        draw.rounded_rectangle((x, y + 5, x + 10, y + 33), 4, fill=color, outline="#ffffffcc")
+        draw.rounded_rectangle((x, y + 5, x + 10, y + 33), 4, fill=rect_color, outline="#ffffffcc")
         draw.text((x + 20, y), label, font=legend_font, fill=MUTED)
     incomplete = bool(data.get("current_period_incomplete", True))
 
