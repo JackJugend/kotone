@@ -16,7 +16,7 @@ from stats_engine import SCORE_BUCKETS
 
 WIDTH = 1000
 HEIGHT = 900
-CHART_WIDTH = 1920
+CHART_WIDTH = 1500
 CHART_FILL_ALPHA = 75
 # Bazowa paleta interfejsu AOTY.  Wszystkie generowane wykresy korzystają z
 # tych stałych, więc dalsze dostrojenie kolorów pozostaje w jednym miejscu.
@@ -499,14 +499,14 @@ def render_chart(data: dict) -> io.BytesIO:
         f"{_chart_date(data.get('range_start'))} – "
         f"{_chart_date(data.get('range_end'))}"
     )
-    image, draw = _base("", f"{type_label} • {range_text}", height=1280, width=CHART_WIDTH)
-    title_font = _font(40, bold=True)
+    image, draw = _base("", f"{type_label} • {range_text}", height=900, width=CHART_WIDTH)
+    title_font = _font(70, bold=True)
     title_right = image.width - (124 if data.get("_avatar_images") else 54)
     title = _fit(
         draw,
-        f"Aktywność ocen • {data.get('username') or 'Użytkownik'}",
+        f"Aktywność  •  {data.get('username') or 'Użytkownik'}",
         title_font,
-        title_right - 54,
+        title_right - 50,
     )
     draw.text(
         (_centered_x(draw, title, title_font, 54, title_right), 48),
@@ -515,8 +515,8 @@ def render_chart(data: dict) -> io.BytesIO:
         fill=TEXT,
     )
     _avatar_badges(image, data)
-    metric_width = (image.width - 108 - 3 * 24) // 4
-    metric_step = metric_width + 24
+    metric_width = (image.width - 108 - 3 * 26) // 4
+    metric_step = metric_width + 26
     _metric(
         draw, 54, "Liczba ocen", str(data.get("ratings", 0)), TEXT,
         fit_text=True, width=metric_width,
@@ -536,7 +536,7 @@ def render_chart(data: dict) -> io.BytesIO:
     )
 
     heading_font = _font(28, bold=True)
-    legend_font = _font(17)
+    legend_font = _font(25)
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
         x = 70 + (index % 6) * ((image.width - 124) // 6)
@@ -574,7 +574,7 @@ def render_chart(data: dict) -> io.BytesIO:
     draw.line(
         (plot_left, plot_bottom, plot_right, plot_bottom),
         fill=(136, 141, 151),
-        width=1,
+        width=2,
     )
 
     points = [
@@ -602,7 +602,7 @@ def render_chart(data: dict) -> io.BytesIO:
                 value,
                 font=count_font,
                 fill=TEXT,
-                stroke_width=1,
+                stroke_width=2,
                 stroke_fill=PANEL,
             )
 
