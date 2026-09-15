@@ -472,8 +472,6 @@ def _chart_areas(image, points, score_rows, score_labels, axis_maximum, box):
         ImageDraw.Draw(mask).rounded_rectangle((*corners[0], *corners[1]), 12 * scale, fill=255)
         for layer in (areas, outlines):
             layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", size), mask))
-    elif points:
-        rounded_line(_chart_curve(points), (*TEXT, 255), 5)
     layer = Image.alpha_composite(areas, outlines).resize(
         (size[0] // scale, size[1] // scale), Image.Resampling.LANCZOS,
     )
@@ -497,7 +495,6 @@ def render_chart(data: dict) -> io.BytesIO:
         "yearly": ("Rocznie", "Średnia / rok", "Najwięcej / rok"),
     }.get(chart_type, ("Miesięcznie", "Średnia / miesiąc", "Najwięcej / mies."))
     buckets = list(data.get("buckets") or [])
-    period = int(data.get("period") or len(buckets) or 1)
     range_text = (
         f"{_chart_date(data.get('range_start'))} – "
         f"{_chart_date(data.get('range_end'))}"
@@ -533,7 +530,8 @@ def render_chart(data: dict) -> io.BytesIO:
         GENRE_COLORS[-1], fit_text=True, width=metric_width,
     )
     _metric(
-        draw, 54 + 3 * metric_step, "Liczba okresów", str(period), TEXT,
+        draw, 54 + 3 * metric_step, "Średnia ocen", _number(data.get("average_score")),
+        _score_color(data.get("average_score")),
         fit_text=True, width=metric_width,
     )
 
@@ -594,9 +592,6 @@ def render_chart(data: dict) -> io.BytesIO:
             image, points, score_rows, score_labels, axis_maximum,
             (plot_left, plot_top, plot_right, plot_bottom),
         )
-    radius = 4 if len(points) <= 24 else 3
-    for x, y in points:
-        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=TEXT)
     if len(points) <= 12:
         count_font = _font(16, bold=True)
         available = 120 if len(points) <= 1 else int((plot_right - plot_left) / (len(points) - 1)) - 12
@@ -614,8 +609,6 @@ def render_chart(data: dict) -> io.BytesIO:
 
     if points:
         x, y = points[-1]
-        draw.ellipse((x - 9, y - 9, x + 9, y + 9), fill=PANEL)
-        draw.ellipse((x - 6, y - 6, x + 6, y + 6), fill=TEXT)
         value_font = _font(18, bold=True)
         value = _fit(draw, f"{counts[-1]:,}".replace(",", " ") + ("*" if incomplete else ""), value_font, 172)
         value_width = draw.textlength(value, font=value_font)

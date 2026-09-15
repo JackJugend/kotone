@@ -176,6 +176,7 @@ def rating_activity(
         bucket_by_start[start] = bucket
 
     undated_ratings = 0
+    selected_scores = []
     for row in rows:
         score = _score(row.get("score"))
         if row.get("_track_score") or score is None:
@@ -191,6 +192,7 @@ def rating_activity(
         bucket = bucket_by_start.get(_activity_bucket_start(rated_on, chart_type))
         if bucket is not None:
             bucket["count"] += 1
+            selected_scores.append(score)
             # Fractional export scores stay in their decade (89.5 in 80–89).
             score_label = next(
                 label for label, lower, upper in SCORE_BUCKETS
@@ -206,6 +208,7 @@ def rating_activity(
         "buckets": buckets,
         "ratings": ratings,
         "average": ratings / period,
+        "average_score": statistics.fmean(selected_scores) if selected_scores else None,
         "peak": max(bucket["count"] for bucket in buckets),
         "undated_ratings": undated_ratings,
         "range_start": buckets[0]["start"],

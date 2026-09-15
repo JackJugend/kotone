@@ -7,7 +7,7 @@ import unittest
 from PIL import Image
 
 from stats_engine import SCORE_BUCKETS
-from stats_graphics import PANEL, RATING_COLORS, render_chart
+from stats_graphics import PANEL, RATING_COLORS, TEXT, render_chart
 
 
 LABELS = [label for label, _, _ in SCORE_BUCKETS]
@@ -57,6 +57,9 @@ class ChartScoreColorTests(unittest.TestCase):
             y = round(806 - (level + 0.5) * 356 / 15)
             with self.subTest(score=LABELS[-level - 1]):
                 self.assert_color(image.getpixel((400, y)), translucent(color))
+        # Count labels sit at the endpoints; no white total line or markers
+        # should cover the colored upper boundary through the plot's middle.
+        self.assertNotIn(TEXT, plot_colors(image, (300, 451, 1000, 806)))
 
     def test_single_period_renders_real_stacked_column_with_all_score_colors(self):
         image = chart_image([{label: 1 for label in LABELS}])

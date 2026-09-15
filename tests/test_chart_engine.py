@@ -33,6 +33,7 @@ class RatingActivityTests(unittest.TestCase):
         self.assertTrue(data["current_period_incomplete"])
         self.assertEqual(data["ratings"], 4)
         self.assertEqual(data["average"], 0.4)
+        self.assertEqual(data["average_score"], 80)
         self.assertEqual(data["peak"], 1)
         self.assertEqual(data["undated_ratings"], 0)
         self.assertEqual(
@@ -124,12 +125,28 @@ class RatingActivityTests(unittest.TestCase):
         self.assertEqual(data["range_start"], "2025-10-01")
         self.assertEqual([bucket["count"] for bucket in data["buckets"]], [0] * 12)
         self.assertEqual((data["ratings"], data["average"], data["peak"]), (0, 0, 0))
+        self.assertIsNone(data["average_score"])
         for chart_type in ("daily", "weekly", "monthly", "yearly"):
             with self.subTest(chart_type=chart_type):
                 self.assertEqual(
                     len(rating_activity("enso", [], chart_type, 60, now=datetime(2026, 9, 15))["buckets"]),
                     60,
                 )
+
+    def test_score_average_uses_exact_displayed_ratings_and_weights_each_rating_equally(self):
+        rows = [
+            rating("15.09.2026", "0"),
+            rating("01.08.2026", "89.5"),
+            rating("02.08.2026", "100"),
+            rating("31.07.2026", "1"),
+            rating("16.09.2026", "2"),
+            rating("nieznana", "3"),
+            rating("15.09.2026", "NR"),
+            rating("15.09.2026", "95", _track_score=True),
+        ]
+        data = rating_activity("enso", rows, "monthly", 2, now=datetime(2026, 9, 15))
+        self.assertEqual([bucket["count"] for bucket in data["buckets"]], [2, 1])
+        self.assertAlmostEqual(data["average_score"], (0 + 89.5 + 100) / 3)
 
     def test_numeric_zero_and_hundred_count_but_nr_invalid_and_track_scores_do_not(self):
         rows = [
