@@ -536,6 +536,7 @@ def render_chart(data: dict) -> io.BytesIO:
         fit_text=True, width=metric_width,
     )
 
+    rect_color = color + ", 75"
     heading_font = _font(28, bold=True)
     legend_font = _font(25)
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
