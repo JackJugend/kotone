@@ -491,10 +491,10 @@ def render_chart(data: dict) -> io.BytesIO:
     chart_type = str(data.get("chart_type") or "monthly")
     type_label, average_label, peak_label = {
         "daily": ("Dziennie", "Średnia / dzień", "Najwięcej / dzień"),
-        "weekly": ("Tygodniowo", "Średnia / tydzień", "Najwięcej / tydz."),
-        "monthly": ("Miesięcznie", "Średnia / miesiąc", "Najwięcej / mies."),
+        "weekly": ("Tygodniowo", "Średnia / tydzień", "Najwięcej / tydzień"),
+        "monthly": ("Miesięcznie", "Średnia / miesiąc", "Najwięcej / miesiąc"),
         "yearly": ("Rocznie", "Średnia / rok", "Najwięcej / rok"),
-    }.get(chart_type, ("Miesięcznie", "Średnia / miesiąc", "Najwięcej / mies."))
+    }.get(chart_type, ("Miesięcznie", "Średnia / miesiąc", "Najwięcej / miesiąc"))
     buckets = list(data.get("buckets") or [])
     range_text = (
         f"{_chart_date(data.get('range_start'))} – "
@@ -542,7 +542,7 @@ def render_chart(data: dict) -> io.BytesIO:
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
         x = 70 + (index % 6) * ((image.width - 124) // 6)
         y = 351 + (index // 6) * 36
-        draw.rounded_rectangle((x, y + 5, x + 10, y + 33), 4, fill=color, 75)
+        draw.rounded_rectangle((x, y + 5, x + 10, y + 33), 4, fill=color, outline="#ffffffcc")
         draw.text((x + 20, y), label, font=legend_font, fill=MUTED)
     incomplete = bool(data.get("current_period_incomplete", True))
 
