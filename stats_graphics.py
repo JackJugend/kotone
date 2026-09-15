@@ -499,7 +499,7 @@ def render_chart(data: dict) -> io.BytesIO:
         f"{_chart_date(data.get('range_start'))} – "
         f"{_chart_date(data.get('range_end'))}"
     )
-    image, draw = _base("", f"{type_label} • {range_text}", height=1000, width=CHART_WIDTH)
+    image, draw = _base("", f"{type_label} • {range_text}", height=1280, width=CHART_WIDTH)
     title_font = _font(40, bold=True)
     title_right = image.width - (124 if data.get("_avatar_images") else 54)
     title = _fit(
