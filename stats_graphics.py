@@ -540,7 +540,7 @@ def render_chart(data: dict) -> io.BytesIO:
     legend_font = _font(25)
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
-        x = 70 + (index % 6) * ((image.width - 124) // 6)
+        x = 70 + (index % 6) * ((image.width - 24) // 6)
         y = 351 + (index // 6) * 36
         draw.rounded_rectangle((x, y + 5, x + 18, y + 23), 4, fill=color)
         draw.text((x + 28, y), label, font=legend_font, fill=MUTED)
