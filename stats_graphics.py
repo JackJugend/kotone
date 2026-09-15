@@ -16,8 +16,8 @@ from stats_engine import SCORE_BUCKETS
 
 WIDTH = 1000
 HEIGHT = 900
-CHART_WIDTH = 1500
 CHART_HEIGHT = 1000
+CHART_WIDTH = 1500
 CHART_FILL_ALPHA = 75
 # Bazowa paleta interfejsu AOTY.  Wszystkie generowane wykresy korzystają z
 # tych stałych, więc dalsze dostrojenie kolorów pozostaje w jednym miejscu.
@@ -500,7 +500,7 @@ def render_chart(data: dict) -> io.BytesIO:
         f"{_chart_date(data.get('range_start'))} – "
         f"{_chart_date(data.get('range_end'))}"
     )
-    image, draw = _base("", f"{type_label} • {range_text}", height=CHART_WIDTH, width=CHART_WIDTH)
+    image, draw = _base("", f"{type_label} • {range_text}", height=CHART_HEIGHT, width=CHART_WIDTH)
     title_font = _font(40, bold=True)
     title_right = image.width - (124 if data.get("_avatar_images") else 54)
     title = _fit(
