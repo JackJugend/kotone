@@ -507,7 +507,7 @@ def render_chart(data: dict) -> io.BytesIO:
         draw,
         f"Aktywność  •  {data.get('username') or 'Użytkownik'}",
         title_font,
-        title_right - 50,
+        title_right - 54,
     )
     draw.text(
         (_centered_x(draw, title, title_font, 54, title_right), 48),
@@ -540,7 +540,7 @@ def render_chart(data: dict) -> io.BytesIO:
     legend_font = _font(25)
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
-        x = 70 + (index % 6) * ((image.width - 24) // 6)
+        x = 70 + (index % 6) * ((image.width - 124) // 6)
         y = 351 + (index // 6) * 36
         draw.rounded_rectangle((x, y + 5, x + 18, y + 23), 4, fill=color)
         draw.text((x + 28, y), label, font=legend_font, fill=MUTED)
@@ -575,7 +575,7 @@ def render_chart(data: dict) -> io.BytesIO:
     draw.line(
         (plot_left, plot_bottom, plot_right, plot_bottom),
         fill=(136, 141, 151),
-        width=2,
+        width=1,
     )
 
     points = [
@@ -603,7 +603,7 @@ def render_chart(data: dict) -> io.BytesIO:
                 value,
                 font=count_font,
                 fill=TEXT,
-                stroke_width=2,
+                stroke_width=1,
                 stroke_fill=PANEL,
             )
 
