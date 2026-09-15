@@ -516,8 +516,8 @@ def render_chart(data: dict) -> io.BytesIO:
         fill=TEXT,
     )
     _avatar_badges(image, data)
-    metric_width = (image.width - 108 - 3 * 26) // 4
-    metric_step = metric_width + 26
+    metric_width = (image.width - 108 - 3 * 24) // 4
+    metric_step = metric_width + 24
     _metric(
         draw, 54, "Liczba ocen", str(data.get("ratings", 0)), TEXT,
         fit_text=True, width=metric_width,
