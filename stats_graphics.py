@@ -16,7 +16,7 @@ from stats_engine import SCORE_BUCKETS
 
 WIDTH = 1000
 HEIGHT = 900
-CHART_HEIGHT = 1000
+CHART_HEIGHT = 950
 CHART_WIDTH = 1500
 CHART_FILL_ALPHA = 75
 # Bazowa paleta interfejsu AOTY.  Wszystkie generowane wykresy korzystają z
