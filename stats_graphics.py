@@ -523,7 +523,7 @@ def render_chart(data: dict) -> io.BytesIO:
         fit_text=True, width=metric_width,
     )
     _metric(
-        draw, 54 + 3 * metric_step, "Średnia / okres", _number(data.get("average_score")),
+        draw, 54 + 3 * metric_step, "Średnia ocena / okres", _number(data.get("average_score")),
         _score_color(data.get("average_score")),
         fit_text=True, width=metric_width,
     )
