@@ -142,13 +142,13 @@ class RatingActivityTests(unittest.TestCase):
         self.assertEqual(data["peak"], 3)
         self.assertEqual(data["undated_ratings"], 0)
 
-    def test_saved_date_timestamp_wins_over_conflicting_text_and_uses_utc(self):
-        timestamp = datetime(2026, 9, 1, 0, 30, tzinfo=UTC).timestamp()
+    def test_date_only_exports_are_not_shifted_by_synthetic_sorting_timestamps(self):
+        timestamp = datetime(2026, 8, 31, 23, 59, tzinfo=UTC).timestamp()
         data = rating_activity(
             "enso", [rating("31.08.2026", sort_timestamp=str(timestamp))],
             "monthly", 2, now=datetime(2026, 9, 15),
         )
-        self.assertEqual([bucket["count"] for bucket in data["buckets"]], [0, 1])
+        self.assertEqual([bucket["count"] for bucket in data["buckets"]], [1, 0])
 
     def test_missing_or_invalid_timestamps_fall_back_to_explicit_calendar_dates(self):
         rows = [
@@ -177,10 +177,10 @@ class RatingActivityTests(unittest.TestCase):
         self.assertEqual(data["ratings"], 0)
         self.assertEqual(data["undated_ratings"], 10)
 
-    def test_future_dates_are_excluded_even_when_text_is_past(self):
+    def test_future_dates_are_excluded_and_date_only_exports_keep_today(self):
         rows = [
             rating("16.09.2026"),
-            rating("15.09.2026", sort_timestamp=datetime(2026, 9, 16, tzinfo=UTC).timestamp()),
+            rating("", sort_timestamp=datetime(2026, 9, 16, tzinfo=UTC).timestamp()),
             rating("15.09.2026", sort_timestamp=datetime(2026, 9, 15, 23, 59, tzinfo=UTC).timestamp()),
         ]
         data = rating_activity(
@@ -189,16 +189,44 @@ class RatingActivityTests(unittest.TestCase):
         self.assertEqual(data["ratings"], 1)
         self.assertEqual(data["undated_ratings"], 0)
 
-    def test_naive_now_is_utc_and_aware_now_is_converted_to_utc(self):
+    def test_naive_now_is_polish_and_aware_now_is_converted_to_polish_time(self):
         naive = datetime(2026, 9, 15, 23)
-        utc = naive.replace(tzinfo=UTC)
-        local = datetime(2026, 9, 16, 1, tzinfo=timezone(timedelta(hours=2)))
+        utc = datetime(2026, 9, 15, 21, tzinfo=UTC)
+        local = naive.replace(tzinfo=timezone(timedelta(hours=2)))
         rows = [rating("15.09.2026"), rating("16.09.2026")]
         expected = rating_activity("enso", rows, "daily", 1, now=utc)
         self.assertEqual(rating_activity("enso", rows, "daily", 1, now=naive), expected)
         self.assertEqual(rating_activity("enso", rows, "daily", 1, now=local), expected)
         self.assertEqual(expected["range_end"], "2026-09-15")
         self.assertEqual(expected["ratings"], 1)
+
+    def test_timestamp_only_ratings_use_polish_month_and_year_boundaries(self):
+        for instant, local_day in (
+            (datetime(2026, 8, 31, 22, 30, tzinfo=UTC), "2026-09-01"),
+            (datetime(2026, 2, 28, 23, 30, tzinfo=UTC), "2026-03-01"),
+            (datetime(2025, 12, 31, 23, 30, tzinfo=UTC), "2026-01-01"),
+        ):
+            with self.subTest(instant=instant):
+                data = rating_activity(
+                    "enso", [rating("", sort_timestamp=instant.timestamp())],
+                    "daily", 1, now=instant,
+                )
+                self.assertEqual(data["range_end"], local_day)
+                self.assertEqual(data["buckets"][0]["start"], local_day)
+                self.assertEqual(data["ratings"], 1)
+
+    def test_dst_transitions_keep_both_clock_occurrences_in_the_correct_day(self):
+        for instants, local_day in (
+            ([datetime(2026, 3, 29, hour, 30, tzinfo=UTC) for hour in (0, 1)], "2026-03-29"),
+            ([datetime(2026, 10, 25, hour, 30, tzinfo=UTC) for hour in (0, 1)], "2026-10-25"),
+        ):
+            with self.subTest(local_day=local_day):
+                data = rating_activity(
+                    "enso", [rating("", sort_timestamp=instant.timestamp()) for instant in instants],
+                    "daily", 1, now=instants[-1],
+                )
+                self.assertEqual(data["range_end"], local_day)
+                self.assertEqual(data["ratings"], 2)
 
     def test_release_flags_nested_tracks_and_history_do_not_multiply_counts_or_mutate_rows(self):
         rows = [rating(

@@ -6,9 +6,10 @@ import math
 import re
 import statistics
 from collections import Counter, defaultdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from must_hear import must_hear_album
+from time_utils import POLISH_TIMEZONE, polish_datetime, polish_now
 
 
 SCORE_BUCKETS = (
@@ -37,15 +38,9 @@ def _score(value) -> float | None:
 
 
 def _rating_year(row: dict) -> int | None:
-    try:
-        timestamp = float(row.get("sort_timestamp") or 0)
-    except (TypeError, ValueError):
-        timestamp = 0
-    if timestamp > 0:
-        try:
-            return datetime.fromtimestamp(timestamp, UTC).year
-        except (OverflowError, OSError, ValueError):
-            pass
+    rated_on = _activity_date(row)
+    if rated_on is not None:
+        return rated_on.year
 
     text = str(row.get("rating_date") or "")
     years = re.findall(r"(?<!\d)(19\d{2}|20\d{2}|21\d{2})(?!\d)", text)
@@ -53,16 +48,8 @@ def _rating_year(row: dict) -> int | None:
 
 
 def _rating_month(row: dict) -> int | None:
-    try:
-        timestamp = float(row.get("sort_timestamp") or 0)
-    except (TypeError, ValueError):
-        return None
-    if timestamp <= 0:
-        return None
-    try:
-        return datetime.fromtimestamp(timestamp, UTC).month
-    except (OverflowError, OSError, ValueError):
-        return None
+    rated_on = _activity_date(row)
+    return rated_on.month if rated_on is not None else None
 
 
 _CHART_MONTHS = (
@@ -85,15 +72,10 @@ _ENGLISH_MONTHS = {
 
 
 def _activity_date(row: dict) -> date | None:
-    """Use the saved rating's date, never its database discovery time."""
+    """Keep calendar dates intact; render timestamp-only ratings in Warsaw."""
 
-    try:
-        timestamp = float(row.get("sort_timestamp") or 0)
-        if math.isfinite(timestamp) and timestamp > 0:
-            return datetime.fromtimestamp(timestamp, UTC).date()
-    except (TypeError, OverflowError, OSError, ValueError):
-        pass
-
+    # CSV dates have no time zone. Their synthetic sorting timestamp may land
+    # on the following Polish day, so the explicit calendar date takes priority.
     text = " ".join(str(row.get("rating_date") or "").split())
     for pattern in ("%d.%m.%Y", "%Y-%m-%d"):
         try:
@@ -115,6 +97,12 @@ def _activity_date(row: dict) -> date | None:
                 return date(int(match.group(3)), month, int(match.group(2)))
             except ValueError:
                 pass
+    try:
+        timestamp = float(row.get("sort_timestamp") or 0)
+        if math.isfinite(timestamp) and timestamp > 0:
+            return polish_datetime(timestamp).date()
+    except (TypeError, OverflowError, OSError, ValueError):
+        pass
     return None
 
 
@@ -147,7 +135,7 @@ def rating_activity(
     *,
     now: datetime | None = None,
 ) -> dict:
-    """Count active release ratings and their score ranges in UTC calendar buckets.
+    """Count active release ratings in Polish calendar periods, including DST.
 
     The current day/week/month/year is included even when it is incomplete.
     ``rows`` is the analytics read model: one row per active saved release
@@ -159,12 +147,12 @@ def rating_activity(
     if isinstance(period, bool) or not isinstance(period, int) or not 1 <= period <= 60:
         raise ValueError("Liczba okresów musi być liczbą całkowitą od 1 do 60.")
     if now is None:
-        now = datetime.now(UTC)
+        now = polish_now()
     elif not isinstance(now, datetime):
         raise ValueError("Bieżący czas musi być datą i godziną.")
     if now.tzinfo is None:
-        now = now.replace(tzinfo=UTC)
-    today = now.astimezone(UTC).date()
+        now = now.replace(tzinfo=POLISH_TIMEZONE)
+    today = now.astimezone(POLISH_TIMEZONE).date()
     current_start = _activity_bucket_start(today, chart_type)
     buckets = []
     bucket_by_start = {}

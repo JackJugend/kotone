@@ -363,7 +363,7 @@ def render_stats(data: dict) -> io.BytesIO:
 
 
 def _chart_date(value) -> str:
-    """Present UTC bucket boundaries in the same Polish date format."""
+    """Present calendar bucket boundaries in the same Polish date format."""
 
     try:
         return date.fromisoformat(str(value)[:10]).strftime("%d.%m.%Y")
@@ -442,8 +442,6 @@ def render_chart(data: dict) -> io.BytesIO:
     heading_font = _font(28, bold=True)
     draw.text((54, 303), "Liczba ocen w czasie", font=heading_font, fill=TEXT)
     legend_font = _font(17)
-    draw.line((779, 317, 805, 317), fill=TEXT, width=2)
-    draw.text((815, 305), "Suma ocen", font=legend_font, fill=MUTED)
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
         x = 70 + (index % 6) * 146
@@ -615,12 +613,6 @@ def render_chart(data: dict) -> io.BytesIO:
             font=footer_font,
             fill=MUTED,
         )
-    draw.text(
-        (54, 914),
-        "Dane zapisane przez bota • Granice okresów: UTC",
-        font=footer_font,
-        fill=MUTED,
-    )
     undated = int(data.get("undated_ratings") or 0)
     if undated:
         note = _fit(
@@ -629,7 +621,7 @@ def render_chart(data: dict) -> io.BytesIO:
             _font(15),
             892,
         )
-        draw.text((54, 944), note, font=_font(15), fill=MUTED)
+        draw.text((54, 914), note, font=_font(15), fill=MUTED)
     return _save(image)
 
 

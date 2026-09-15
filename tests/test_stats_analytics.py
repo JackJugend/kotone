@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -132,6 +133,17 @@ class StatsEngineTests(unittest.TestCase):
         self.assertEqual(data["ratings"], 1)
         self.assertEqual(data["average"], 91)
         self.assertEqual(data["months"][0], (1, 1))
+
+    def test_wrapped_uses_polish_year_for_timestamps_and_preserves_calendar_dates(self):
+        instant = datetime(2025, 12, 31, 23, 30, tzinfo=UTC).timestamp()
+        precise = row("precise", "90", timestamp=instant)
+        calendar = {**row("calendar", "80", timestamp=instant), "rating_date": "31.12.2025"}
+        new_year = wrapped("enso", [precise, calendar], 2026)
+        old_year = wrapped("enso", [precise, calendar], 2025)
+        self.assertEqual((new_year["ratings"], new_year["average"]), (1, 90))
+        self.assertEqual(new_year["months"][0], (1, 1))
+        self.assertEqual((old_year["ratings"], old_year["average"]), (1, 80))
+        self.assertEqual(old_year["months"][-1], (12, 1))
 
     def test_distribution_filters_every_format_year_genre_and_score(self):
         lp = row("lp", "90", genres=["Art Pop"])

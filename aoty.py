@@ -11,7 +11,7 @@ import re
 import time
 import unicodedata
 from html import unescape
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus, urljoin, urlparse
 
 import requests
@@ -30,6 +30,7 @@ from settings import (
     BASE_URL,
     RATING_FETCH_LIMITS,
 )
+from time_utils import POLISH_TIMEZONE, polish_now
 
 
 HEADERS = {
@@ -2600,7 +2601,7 @@ def format_polish_date(text: str) -> str | None:
         return None
 
     text = text.strip()
-    now = datetime.now()
+    now = polish_now()
     lower = text.casefold()
 
     if lower == "just now":
@@ -2619,7 +2620,11 @@ def format_polish_date(text: str) -> str | None:
             continue
 
         value = int(match.group(1))
-        result = now - timedelta(**{unit: value})
+        # Relative times describe elapsed time; calculate it in UTC so a DST
+        # transition cannot add or remove an hour before formatting in Poland.
+        result = (now.astimezone(timezone.utc) - timedelta(**{unit: value})).astimezone(
+            POLISH_TIMEZONE
+        )
         return result.strftime("%d.%m.%Y")
 
     match = re.search(
@@ -2645,7 +2650,7 @@ def format_polish_date(text: str) -> str | None:
     else:
         year = now.year
         try:
-            candidate = datetime(year, month, day)
+            candidate = datetime(year, month, day, tzinfo=POLISH_TIMEZONE)
             if candidate > now + timedelta(days=2):
                 year -= 1
         except ValueError:
@@ -2662,7 +2667,7 @@ def _parse_rating_datetime_for_sort(text: str) -> datetime | None:
         return None
 
     normalized = " ".join(str(text).split())
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     lower = normalized.casefold()
 
     if lower == "just now":
@@ -2685,7 +2690,8 @@ def _parse_rating_datetime_for_sort(text: str) -> datetime | None:
         return None
 
     try:
-        return datetime.strptime(formatted, "%d.%m.%Y")
+        # A calendar-only AOTY date is an ordering anchor, not a local instant.
+        return datetime.strptime(formatted, "%d.%m.%Y").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
@@ -3032,7 +3038,7 @@ def parse_album_block(block) -> dict | None:
 
     date = extract_date(block)
     if date == "Brak danych":
-        date = datetime.now().strftime("%d.%m.%Y")
+        date = polish_now().strftime("%d.%m.%Y")
 
     cover = extract_cover(block)
     release_format = _extract_release_format(block.get_text(" ", strip=True))

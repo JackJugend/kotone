@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 import discord
 import requests
@@ -28,6 +27,7 @@ from shared import (
     application_avatar_emoji,
 )
 from services import DATA
+from time_utils import polish_datetime
 from ui_constants import (
     LASTFM_ICON,
     LASTFM_ICON_ATTACHMENT,
@@ -109,7 +109,7 @@ def _rating_date_text(item: dict) -> str:
         if timestamp > 10_000_000_000:
             timestamp /= 1000
         if timestamp > 946_684_800:
-            return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%d.%m.%Y")
+            return polish_datetime(timestamp).strftime("%d.%m.%Y")
     except (TypeError, ValueError, OverflowError, OSError):
         pass
     return "—"
@@ -123,13 +123,14 @@ def _lastfm_count(value: object) -> str:
 
 
 def _lastfm_timestamp(value: object) -> str:
-    """Render the archived Unix scrobble time as Discord timestamps."""
+    """Show the archived scrobble time in Poland, plus its relative age."""
 
     try:
         timestamp = int(value)
-    except (TypeError, ValueError):
+        absolute = polish_datetime(timestamp).strftime("%d.%m.%Y %H:%M %Z")
+    except (TypeError, ValueError, OverflowError, OSError):
         return ""
-    return f"\n<t:{timestamp}:F>  •  <t:{timestamp}:R>"
+    return f"\n{absolute}  •  <t:{timestamp}:R>"
 
 
 def _lastfm_avatar_url(profile: dict[str, object]) -> str | None:

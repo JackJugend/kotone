@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-from datetime import UTC, datetime
 
 import discord
 
@@ -22,6 +21,7 @@ from stats_graphics import (
     render_wrapped,
 )
 from views import TimedDisableView
+from time_utils import polish_now
 
 
 BOT_DATABASE_FOOTER = "Komenda bazuje na bazie danych bota"
@@ -336,7 +336,7 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         canonical = await _configured_user_or_error(interaction, username)
         if canonical is None:
             return
-        current_year = datetime.now(UTC).year
+        current_year = polish_now().year
         if year is not None and not 1900 <= year <= current_year + 1:
             await interaction.response.send_message(
                 "Podaj poprawny rok wydania od 1900 do przyszłego roku.",
@@ -499,8 +499,9 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         canonical = await _configured_user_or_error(interaction, username)
         if canonical is None:
             return
-        selected_year = year if year is not None else datetime.now(UTC).year
-        if not 1900 <= selected_year <= datetime.now(UTC).year + 1:
+        current_year = polish_now().year
+        selected_year = year if year is not None else current_year
+        if not 1900 <= selected_year <= current_year + 1:
             await interaction.response.send_message(
                 "Podaj poprawny rok od 1900 do przyszłego roku.",
                 ephemeral=True,
