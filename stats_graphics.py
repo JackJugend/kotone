@@ -17,11 +17,11 @@ from stats_engine import SCORE_BUCKETS
 WIDTH = 1000
 HEIGHT = 900
 CHART_WIDTH = 1280
-CHART_FILL_ALPHA = 72
+CHART_FILL_ALPHA = 75
 # Bazowa paleta interfejsu AOTY.  Wszystkie generowane wykresy korzystają z
 # tych stałych, więc dalsze dostrojenie kolorów pozostaje w jednym miejscu.
-BACKGROUND = (32, 34, 37)  # #202225
-PANEL = (54, 57, 63)  # #36393f
+BACKGROUND = (54, 57, 63)  # #202225
+PANEL = (32, 34, 37)  # #36393f
 PANEL_ALT = (47, 49, 54)  # #2f3136
 TEXT = (242, 243, 245)
 MUTED = (190, 194, 202)
