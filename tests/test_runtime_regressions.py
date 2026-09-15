@@ -13,6 +13,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import requests
 
@@ -545,6 +546,32 @@ class ServiceScoreOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cached["metadata_sources"]["genres"], "musicbrainz")
         self.assertEqual(cached["genres"], ["Art Pop"])
         self.assertEqual(cached["tracklist"][0]["duration"], "3:00")
+
+    async def test_musicbrainz_fallback_respects_disabled_runtime_setting(self):
+        with (
+            patch.object(services, "MUSICBRAINZ_FALLBACK_ENABLED", False),
+            patch.object(services.SOURCES, "enabled") as enabled,
+            patch.object(services.musicbrainz.MUSICBRAINZ, "lookup_release") as lookup,
+        ):
+            result = await self.service._musicbrainz_release_fallback(
+                {"artist": "Artist", "album": "Album"}, priority=0
+            )
+        self.assertIsNone(result)
+        enabled.assert_not_called()
+        lookup.assert_not_called()
+
+    async def test_musicbrainz_fallback_respects_disabled_operator_switch(self):
+        with (
+            patch.object(services, "MUSICBRAINZ_FALLBACK_ENABLED", True),
+            patch.object(services.SOURCES, "enabled", return_value=False) as enabled,
+            patch.object(services.musicbrainz.MUSICBRAINZ, "lookup_release") as lookup,
+        ):
+            result = await self.service._musicbrainz_release_fallback(
+                {"artist": "Artist", "album": "Album"}, priority=0
+            )
+        self.assertIsNone(result)
+        enabled.assert_called_once_with("musicbrainz")
+        lookup.assert_not_called()
 
     async def test_musicbrainz_outage_blocks_followup_requests_globally(self):
         item = {"artist": "Artist", "album": "Album"}

@@ -13,8 +13,9 @@ from formats import RATING_FORMATS
 from shared import score_color, username_autocomplete
 from settings import resolve_aoty_username
 from stats_cover_cache import load_cover_images
-from stats_engine import compare, rating_distribution, summarize, wrapped
+from stats_engine import compare, rating_activity, rating_distribution, summarize, wrapped
 from stats_graphics import (
+    render_chart,
     render_compare,
     render_rating_distribution,
     render_stats,
@@ -252,6 +253,60 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             file=discord.File(
                 io.BytesIO(graphic.getvalue()),
                 filename=f"stats-{canonical}.png",
+            )
+        )
+
+    @tree.command(
+        name="chart",
+        description="Wykres liczby ocen użytkownika w ostatnich dniach, tygodniach, miesiącach lub latach.",
+    )
+    @discord.app_commands.describe(
+        type="Jednostka czasu: daily, weekly, monthly lub yearly",
+        period="Liczba okresów (1–60), wliczając bieżący; domyślnie 12",
+        username="Użytkownik; domyślnie Twój profil Kotone",
+    )
+    @discord.app_commands.choices(
+        type=[
+            discord.app_commands.Choice(name="monthly", value="monthly"),
+            discord.app_commands.Choice(name="daily", value="daily"),
+            discord.app_commands.Choice(name="weekly", value="weekly"),
+            discord.app_commands.Choice(name="yearly", value="yearly"),
+        ]
+    )
+    @discord.app_commands.autocomplete(username=username_autocomplete)
+    async def chart_command(
+        interaction: discord.Interaction,
+        type: str = "monthly",
+        period: discord.app_commands.Range[int, 1, 60] = 12,
+        username: str | None = None,
+    ):
+        canonical = await _configured_user_or_error(interaction, username)
+        if canonical is None:
+            return
+        if type not in {"daily", "weekly", "monthly", "yearly"} or not 1 <= period <= 60:
+            await interaction.response.send_message(
+                "Wybierz daily, weekly, monthly lub yearly i podaj od 1 do 60 okresów.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+        rows, avatar = await asyncio.gather(
+            asyncio.to_thread(DB.get_analytics_rows, canonical),
+            asyncio.to_thread(DB.get_avatar, canonical),
+        )
+        data = rating_activity(canonical, rows, type, period)
+        avatar_items = [{"username": canonical, "cover": avatar}] if avatar else []
+        data["_avatar_images"] = await asyncio.to_thread(
+            load_cover_images,
+            avatar_items,
+            limit=1,
+        )
+        graphic = await asyncio.to_thread(render_chart, data)
+        await interaction.followup.send(
+            file=discord.File(
+                io.BytesIO(graphic.getvalue()),
+                filename=f"chart-{canonical}-{type}-{period}.png",
             )
         )
 

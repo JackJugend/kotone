@@ -173,34 +173,6 @@ class DataService:
         """
         if not MUSICBRAINZ_FALLBACK_ENABLED or not SOURCES.enabled("musicbrainz"):
             return None
-
-    async def _persist_parse_release_fallback(
-        self,
-        username: str,
-        item: dict,
-        *,
-        priority: int,
-    ) -> bool:
-        """Use one Parse credit/day/user only while direct AOTY is unavailable."""
-
-        if not PARSE_API_ENABLED:
-            return False
-        key = str(username or "").casefold()
-        now = time.time()
-        if now < self._parse_next_by_user.get(key, 0.0):
-            return False
-        album_id = str(item.get("album_id") or "").strip()
-        if not album_id or not item.get("url"):
-            return False
-        # Reserve before the request so an invalid response cannot burn the
-        # credit again in the next worker pass.
-        self._parse_next_by_user[key] = now + PARSE_USER_DAILY_INTERVAL
-        try:
-            details = await _thread_call(priority, parsebot.PARSE.lookup_album, item["url"])
-        except (parsebot.ParseUnavailable, requests.RequestException) as exc:
-            print(f"[PARSE] fallback: {type(exc).__name__}: {exc}")
-            return False
-        return bool(details and DB.save_parse_fallback(album_id, details))
         if self._musicbrainz_is_blocked():
             return None
         try:
@@ -230,6 +202,34 @@ class DataService:
                 )
             print(f"[MUSICBRAINZ] fallback: {self._musicbrainz_last_error}")
             return None
+
+    async def _persist_parse_release_fallback(
+        self,
+        username: str,
+        item: dict,
+        *,
+        priority: int,
+    ) -> bool:
+        """Use one Parse credit/day/user only while direct AOTY is unavailable."""
+
+        if not PARSE_API_ENABLED:
+            return False
+        key = str(username or "").casefold()
+        now = time.time()
+        if now < self._parse_next_by_user.get(key, 0.0):
+            return False
+        album_id = str(item.get("album_id") or "").strip()
+        if not album_id or not item.get("url"):
+            return False
+        # Reserve before the request so an invalid response cannot burn the
+        # credit again in the next worker pass.
+        self._parse_next_by_user[key] = now + PARSE_USER_DAILY_INTERVAL
+        try:
+            details = await _thread_call(priority, parsebot.PARSE.lookup_album, item["url"])
+        except (parsebot.ParseUnavailable, requests.RequestException) as exc:
+            print(f"[PARSE] fallback: {type(exc).__name__}: {exc}")
+            return False
+        return bool(details and DB.save_parse_fallback(album_id, details))
 
     async def _discogs_release_fallback(
         self,
@@ -418,7 +418,9 @@ class DataService:
             {
                 key: value
                 for key, value in item.items()
-                if value is not None
+                # Compact cards omit public detail fields or leave them empty.
+                # Keep known cache values until the card supplies a replacement.
+                if self._value_present(value)
             }
         )
         title = item.get("title") or item.get("album") or cached.get("album")

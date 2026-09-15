@@ -911,19 +911,29 @@ class DetailViewTests(unittest.IsolatedAsyncioTestCase):
                 shared_module,
                 "score_emoji",
                 side_effect=lambda score: (
-                    f"<:score_{score}:123>" if score in {84, 89} else None
+                    f"<:score_{score}:123>" if score in {84, 85, 89} else None
                 ),
             ),
         ):
-            embed = await views_module.build_release_details_embed(item)
+            # Shared display rounding keeps exact halves on the lower
+            # integer; fractions above a half select the next score tile.
+            for critic_score, expected in (
+                ("84.49", 84), ("84.5", 84), ("84.51", 85), ("84.8", 85),
+            ):
+                with self.subTest(critic_score=critic_score):
+                    details["critic_score"] = critic_score
+                    embed = await views_module.build_release_details_embed(item)
 
-        self.assertIn("**User score:** <:score_89:123>", embed.description)
-        self.assertIn("**Critic score:** <:score_84:123>", embed.description)
-        self.assertIn(
-            "**Must hear:** <:musthear_critics:1539713389557841981> critics",
-            embed.description,
-        )
-        self.assertNotIn("AOTY User Score", embed.description)
+                    self.assertIn("**User score:** <:score_89:123>", embed.description)
+                    self.assertIn(
+                        f"**Critic score:** <:score_{expected}:123>",
+                        embed.description,
+                    )
+                    self.assertIn(
+                        "**Must hear:** <:musthear_critics:1539713389557841981> critics",
+                        embed.description,
+                    )
+                    self.assertNotIn("AOTY User Score", embed.description)
 
     async def test_tracklist_button_is_disabled_without_any_track_rows(self):
         item = {

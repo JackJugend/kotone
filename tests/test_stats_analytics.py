@@ -357,7 +357,7 @@ class DistributionViewTests(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertEqual(
                 {command.name for command in tree.get_commands()},
-                {"stats", "compare", "wrapped", "ratingdistribution"},
+                {"stats", "chart", "compare", "wrapped", "ratingdistribution"},
             )
         finally:
             await client.close()

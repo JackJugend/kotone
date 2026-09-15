@@ -224,7 +224,9 @@ class RatingImportDatabaseTests(unittest.TestCase):
             "enso",
             delivered_at=parsed["rows"][0]["sort_timestamp"] - 1,
         )
-        result = self.db.import_official_ratings("enso", parsed["rows"])
+        # This fixed export date must stay within the seven-day notification window.
+        with patch("database._now", return_value=parsed["rows"][0]["sort_timestamp"] + 3600):
+            result = self.db.import_official_ratings("enso", parsed["rows"])
         rating = self.db.get_rating("enso", "1981558")
         release = self.db.get_release_details("1981558")
         self.assertEqual(result["added"], 1)

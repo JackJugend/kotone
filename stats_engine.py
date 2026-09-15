@@ -6,7 +6,7 @@ import math
 import re
 import statistics
 from collections import Counter, defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from must_hear import must_hear_album
 
@@ -63,6 +63,167 @@ def _rating_month(row: dict) -> int | None:
         return datetime.fromtimestamp(timestamp, UTC).month
     except (OverflowError, OSError, ValueError):
         return None
+
+
+_CHART_MONTHS = (
+    "Sty", "Lut", "Mar", "Kwi", "Maj", "Cze",
+    "Lip", "Sie", "Wrz", "Paź", "Lis", "Gru",
+)
+_ENGLISH_MONTHS = {
+    name: month
+    for month, names in enumerate(
+        (
+            ("jan", "january"), ("feb", "february"), ("mar", "march"),
+            ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+            ("aug", "august"), ("sep", "sept", "september"),
+            ("oct", "october"), ("nov", "november"), ("dec", "december"),
+        ),
+        start=1,
+    )
+    for name in names
+}
+
+
+def _activity_date(row: dict) -> date | None:
+    """Use the saved rating's date, never its database discovery time."""
+
+    try:
+        timestamp = float(row.get("sort_timestamp") or 0)
+        if math.isfinite(timestamp) and timestamp > 0:
+            return datetime.fromtimestamp(timestamp, UTC).date()
+    except (TypeError, OverflowError, OSError, ValueError):
+        pass
+
+    text = " ".join(str(row.get("rating_date") or "").split())
+    for pattern in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, pattern).date()
+        except ValueError:
+            pass
+
+    # AOTY calendar dates must have an explicit year. Relative strings and
+    # yearless dates cannot safely be reconstructed from an old database row.
+    match = re.fullmatch(
+        r"([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{4})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        month = _ENGLISH_MONTHS.get(match.group(1).casefold())
+        if month is not None:
+            try:
+                return date(int(match.group(3)), month, int(match.group(2)))
+            except ValueError:
+                pass
+    return None
+
+
+def _activity_bucket_start(day: date, chart_type: str) -> date:
+    if chart_type == "daily":
+        return day
+    if chart_type == "weekly":
+        return day - timedelta(days=day.weekday())
+    if chart_type == "monthly":
+        return day.replace(day=1)
+    return day.replace(month=1, day=1)
+
+
+def _activity_bucket_shift(start: date, chart_type: str, offset: int) -> date:
+    if chart_type == "daily":
+        return start + timedelta(days=offset)
+    if chart_type == "weekly":
+        return start + timedelta(weeks=offset)
+    if chart_type == "monthly":
+        year, month = divmod(start.year * 12 + start.month - 1 + offset, 12)
+        return date(year, month + 1, 1)
+    return date(start.year + offset, 1, 1)
+
+
+def rating_activity(
+    username: str,
+    rows: list[dict],
+    chart_type: str = "monthly",
+    period: int = 12,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Count active release ratings and their score ranges in UTC calendar buckets.
+
+    The current day/week/month/year is included even when it is incomplete.
+    ``rows`` is the analytics read model: one row per active saved release
+    rating, so edits, event history and individual track scores add no counts.
+    """
+
+    if chart_type not in ("daily", "weekly", "monthly", "yearly"):
+        raise ValueError("Nieznany typ wykresu.")
+    if isinstance(period, bool) or not isinstance(period, int) or not 1 <= period <= 60:
+        raise ValueError("Liczba okresów musi być liczbą całkowitą od 1 do 60.")
+    if now is None:
+        now = datetime.now(UTC)
+    elif not isinstance(now, datetime):
+        raise ValueError("Bieżący czas musi być datą i godziną.")
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    today = now.astimezone(UTC).date()
+    current_start = _activity_bucket_start(today, chart_type)
+    buckets = []
+    bucket_by_start = {}
+    for offset in range(1 - period, 1):
+        start = _activity_bucket_shift(current_start, chart_type, offset)
+        end = _activity_bucket_shift(start, chart_type, 1)
+        if chart_type == "monthly":
+            label = f"{_CHART_MONTHS[start.month - 1]} {start.year}"
+        elif chart_type == "yearly":
+            label = str(start.year)
+        else:
+            label = start.strftime("%d.%m.%Y")
+        bucket = {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "label": label,
+            "count": 0,
+            "score_counts": {label: 0 for label, _, _ in SCORE_BUCKETS},
+        }
+        buckets.append(bucket)
+        bucket_by_start[start] = bucket
+
+    undated_ratings = 0
+    for row in rows:
+        score = _score(row.get("score"))
+        if row.get("_track_score") or score is None:
+            continue
+        rated_on = _activity_date(row)
+        if rated_on is None:
+            undated_ratings += 1
+            continue
+        # Export timestamps encode date-only rows close to midnight. A time
+        # later today is still today's rating; only future dates are excluded.
+        if rated_on > today:
+            continue
+        bucket = bucket_by_start.get(_activity_bucket_start(rated_on, chart_type))
+        if bucket is not None:
+            bucket["count"] += 1
+            # Fractional export scores stay in their decade (89.5 in 80–89).
+            score_label = next(
+                label for label, lower, upper in SCORE_BUCKETS
+                if lower <= score < upper + 1
+            )
+            bucket["score_counts"][score_label] += 1
+
+    ratings = sum(bucket["count"] for bucket in buckets)
+    return {
+        "username": username,
+        "chart_type": chart_type,
+        "period": period,
+        "buckets": buckets,
+        "ratings": ratings,
+        "average": ratings / period,
+        "peak": max(bucket["count"] for bucket in buckets),
+        "undated_ratings": undated_ratings,
+        "range_start": buckets[0]["start"],
+        "range_end": today.isoformat(),
+        "current_period_incomplete": True,
+    }
 
 
 def _release_year(row: dict) -> int | None:

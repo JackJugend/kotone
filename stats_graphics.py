@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
+import math
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from cover_badges import add_must_hear_badge
+from stats_engine import SCORE_BUCKETS
 
 
 WIDTH = 1000
@@ -171,12 +174,25 @@ def _metric(
     label: str,
     value: str,
     color=TEXT,
+    *,
+    fit_text: bool = False,
 ) -> None:
     y = 158
     width = 205
     draw.rounded_rectangle((x, y, x + width, y + 112), 16, fill=PANEL_ALT)
     label_font = _font(20)
     value_font = _font(38, bold=True)
+    if fit_text:
+        for size in range(20, 14, -1):
+            label_font = _font(size)
+            if draw.textlength(label, font=label_font) <= width - 20:
+                break
+        label = _fit(draw, label, label_font, width - 20)
+        for size in range(38, 17, -1):
+            value_font = _font(size, bold=True)
+            if draw.textlength(value, font=value_font) <= width - 20:
+                break
+        value = _fit(draw, value, value_font, width - 20)
     draw.text(
         (_centered_x(draw, label, label_font, x, x + width), y + 14),
         label,
@@ -343,6 +359,277 @@ def render_stats(data: dict) -> io.BytesIO:
         max_rows=10,
     )
     _cover_cards(draw, image, data)
+    return _save(image)
+
+
+def _chart_date(value) -> str:
+    """Present UTC bucket boundaries in the same Polish date format."""
+
+    try:
+        return date.fromisoformat(str(value)[:10]).strftime("%d.%m.%Y")
+    except (TypeError, ValueError):
+        return str(value or "—")
+
+
+def _chart_scale(maximum: int) -> tuple[int, int]:
+    """Return an integer axis ceiling and a readable, non-fractional step."""
+
+    if maximum <= 5:
+        return max(1, maximum), 1
+    target = maximum / 5
+    magnitude = 10 ** math.floor(math.log10(target))
+    step = next(
+        int(multiplier * magnitude)
+        for multiplier in (1, 2, 5, 10)
+        if multiplier * magnitude >= target
+    )
+    return math.ceil(maximum / step) * step, step
+
+
+def _chart_axis_number(value: int) -> str:
+    """Keep a large integer axis readable without reducing the plotted data."""
+
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:g} mld"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:g} mln"
+    return f"{value:,}".replace(",", " ")
+
+
+def render_chart(data: dict) -> io.BytesIO:
+    """Render absolute rating counts in colored, stacked score bands."""
+
+    chart_type = str(data.get("chart_type") or "monthly")
+    type_label, average_label, peak_label = {
+        "daily": ("Dziennie", "Średnia / dzień", "Najwięcej / dzień"),
+        "weekly": ("Tygodniowo", "Średnia / tydzień", "Najwięcej / tydz."),
+        "monthly": ("Miesięcznie", "Średnia / miesiąc", "Najwięcej / mies."),
+        "yearly": ("Rocznie", "Średnia / rok", "Najwięcej / rok"),
+    }.get(chart_type, ("Miesięcznie", "Średnia / miesiąc", "Najwięcej / mies."))
+    buckets = list(data.get("buckets") or [])
+    period = int(data.get("period") or len(buckets) or 1)
+    range_text = (
+        f"{_chart_date(data.get('range_start'))} – "
+        f"{_chart_date(data.get('range_end'))}"
+    )
+    image, draw = _base("", f"{type_label} • {range_text}", height=1000)
+    title_font = _font(40, bold=True)
+    title_right = 876 if data.get("_avatar_images") else 946
+    title = _fit(
+        draw,
+        f"Aktywność ocen • {data.get('username') or 'Użytkownik'}",
+        title_font,
+        title_right - 54,
+    )
+    draw.text(
+        (_centered_x(draw, title, title_font, 54, title_right), 48),
+        title,
+        font=title_font,
+        fill=TEXT,
+    )
+    _avatar_badges(image, data)
+    _metric(draw, 54, "Liczba ocen", str(data.get("ratings", 0)), TEXT, fit_text=True)
+    _metric(
+        draw, 283, average_label, _number(data.get("average", 0)),
+        GENRE_COLORS[0], fit_text=True,
+    )
+    _metric(
+        draw, 512, peak_label, str(data.get("peak", 0)),
+        GENRE_COLORS[-1], fit_text=True,
+    )
+    _metric(draw, 741, "Liczba okresów", str(period), TEXT, fit_text=True)
+
+    heading_font = _font(28, bold=True)
+    draw.text((54, 303), "Liczba ocen w czasie", font=heading_font, fill=TEXT)
+    legend_font = _font(17)
+    draw.line((779, 317, 805, 317), fill=TEXT, width=2)
+    draw.text((815, 305), "Suma ocen", font=legend_font, fill=MUTED)
+    score_labels = [label for label, _, _ in SCORE_BUCKETS]
+    for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
+        x = 70 + (index % 6) * 146
+        y = 351 + (index // 6) * 36
+        draw.rounded_rectangle((x, y + 5, x + 18, y + 23), 4, fill=color)
+        draw.text((x + 28, y), label, font=legend_font, fill=MUTED)
+    incomplete = bool(data.get("current_period_incomplete", True))
+
+    plot_left, plot_top, plot_right, plot_bottom = 144, 450, 924, 806
+    score_rows = [
+        {
+            label: max(0, int((bucket.get("score_counts") or {}).get(label, 0)))
+            for label in score_labels
+        }
+        for bucket in buckets
+    ]
+    counts = [
+        sum(scores.values()) if "score_counts" in bucket else max(0, int(bucket.get("count", 0)))
+        for bucket, scores in zip(buckets, score_rows)
+    ]
+    maximum = max(counts, default=0)
+    axis_maximum, axis_step = _chart_scale(maximum)
+    tick_font = _font(18)
+    for value in range(0, axis_maximum + 1, axis_step):
+        y = plot_bottom - (plot_bottom - plot_top) * value / axis_maximum
+        draw.line((plot_left, y, plot_right, y), fill=(75, 78, 86), width=1)
+        label = _chart_axis_number(value)
+        label = _fit(draw, label, tick_font, plot_left - 70)
+        draw.text(
+            (plot_left - 17 - draw.textlength(label, font=tick_font), y - 13),
+            label,
+            font=tick_font,
+            fill=MUTED,
+        )
+    draw.line(
+        (plot_left, plot_bottom, plot_right, plot_bottom),
+        fill=(136, 141, 151),
+        width=1,
+    )
+
+    points = [
+        (
+            (plot_left + plot_right) / 2
+            if len(counts) == 1
+            else plot_left + index * (plot_right - plot_left) / (len(counts) - 1),
+            plot_bottom - count / axis_maximum * (plot_bottom - plot_top),
+        )
+        for index, count in enumerate(counts)
+    ]
+    if maximum:
+        cumulative = [0] * len(buckets)
+        # Low scores form the bottom bands; a perfect 100 remains at the top.
+        # Boundaries interpolate raw counts, never percentages or averages.
+        for label, color in reversed(list(zip(score_labels, RATING_COLORS))):
+            values = [scores[label] for scores in score_rows]
+            if not any(values):
+                continue
+            lower = [
+                (x, plot_bottom - total / axis_maximum * (plot_bottom - plot_top))
+                for (x, _), total in zip(points, cumulative)
+            ]
+            cumulative = [total + value for total, value in zip(cumulative, values)]
+            upper = [
+                (x, plot_bottom - total / axis_maximum * (plot_bottom - plot_top))
+                for (x, _), total in zip(points, cumulative)
+            ]
+            if len(points) == 1:
+                x = points[0][0]
+                draw.rectangle((x - 28, upper[0][1], x + 28, lower[0][1]), fill=color)
+            else:
+                draw.polygon([*upper, *reversed(lower)], fill=color)
+        # Subtle grid lines remain visible through the opaque score colors.
+        grid = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        grid_draw = ImageDraw.Draw(grid)
+        for value in range(0, axis_maximum + 1, axis_step):
+            y = plot_bottom - (plot_bottom - plot_top) * value / axis_maximum
+            grid_draw.line((plot_left, y, plot_right, y), fill=(TEXT[0], TEXT[1], TEXT[2], 35), width=1)
+        image = Image.alpha_composite(image.convert("RGBA"), grid).convert("RGB")
+        draw = ImageDraw.Draw(image)
+    if len(points) > 1:
+        draw.line(points, fill=TEXT, width=2, joint="curve")
+    radius = 4 if len(points) <= 24 else 3
+    for x, y in points:
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=TEXT)
+    if len(points) <= 12:
+        count_font = _font(16, bold=True)
+        available = 120 if len(points) <= 1 else int((plot_right - plot_left) / (len(points) - 1)) - 12
+        for (x, y), count in zip(points[:-1], counts[:-1]):
+            value = _fit(draw, f"{count:,}".replace(",", " "), count_font, available)
+            label_y = y + 12 if y < plot_top + 32 else y - 29
+            draw.text(
+                (x - draw.textlength(value, font=count_font) / 2, label_y),
+                value,
+                font=count_font,
+                fill=TEXT,
+                stroke_width=1,
+                stroke_fill=PANEL,
+            )
+
+    if points:
+        x, y = points[-1]
+        draw.ellipse((x - 9, y - 9, x + 9, y + 9), fill=PANEL)
+        draw.ellipse((x - 6, y - 6, x + 6, y + 6), fill=TEXT)
+        value_font = _font(18, bold=True)
+        value = _fit(draw, f"{counts[-1]:,}".replace(",", " ") + ("*" if incomplete else ""), value_font, 172)
+        value_width = draw.textlength(value, font=value_font)
+        label_x = max(plot_left, min(plot_right - value_width - 20, x - value_width / 2 - 10))
+        label_y = y + 16 if y < plot_top + 46 else y - 43
+        if len(points) == 1:
+            label_x = min(plot_right - value_width - 20, x + 43)
+            label_y = max(plot_top, y - 16)
+        draw.rounded_rectangle(
+            (label_x, label_y, label_x + value_width + 20, label_y + 32),
+            8,
+            fill=PANEL_ALT,
+        )
+        draw.text((label_x + 10, label_y + 3), value, font=value_font, fill=TEXT)
+
+    # Pick labels by their real width. Endpoints always stay visible, even for
+    # 60 daily buckets, and the last point never shares a label with its neighbor.
+    axis_font = _font(16)
+    if buckets:
+        axis_labels = [str(bucket.get("label") or _chart_date(bucket.get("start"))) for bucket in buckets]
+        multiline = chart_type == "monthly" and len(buckets) <= 12
+        label_lines = [label.rsplit(" ", 1) if multiline else [label] for label in axis_labels]
+        largest_label = max(draw.textlength(line, font=axis_font) for lines in label_lines for line in lines)
+        # Reserve enough horizontal space for the endpoints, which are inset
+        # to keep their full dates inside the card.
+        max_labels = max(2, int((plot_right - plot_left - largest_label / 2) / (largest_label + 22)) + 1)
+        if multiline or len(buckets) <= max_labels:
+            label_indices = list(range(len(buckets)))
+        else:
+            label_indices = sorted({round(index * (len(buckets) - 1) / (max_labels - 1)) for index in range(max_labels)})
+        if not multiline:
+            while len(label_indices) > 2:
+                boxes = []
+                for index in label_indices:
+                    width = draw.textlength(axis_labels[index], font=axis_font)
+                    left = max(54, min(946 - width, points[index][0] - width / 2))
+                    boxes.append((left, left + width))
+                if all(previous[1] + 14 <= following[0] for previous, following in zip(boxes, boxes[1:])):
+                    break
+                max_labels = len(label_indices) - 1
+                label_indices = sorted({round(index * (len(buckets) - 1) / (max_labels - 1)) for index in range(max_labels)})
+        for index in label_indices:
+            x = points[index][0]
+            draw.line((x, plot_bottom + 4, x, plot_bottom + 10), fill=(136, 141, 151), width=1)
+            for line_index, label in enumerate(label_lines[index]):
+                width = draw.textlength(label, font=axis_font)
+                label_x = max(54, min(946 - width, x - width / 2))
+                draw.text((label_x, plot_bottom + 16 + 21 * line_index), label, font=axis_font, fill=MUTED)
+
+    if not maximum:
+        empty_font = _font(24, bold=True)
+        empty = "Brak ocen w wybranym okresie"
+        draw.rounded_rectangle((275, 601, 793, 663), 14, fill=PANEL_ALT)
+        draw.text(
+            (_centered_x(draw, empty, empty_font, 275, 793), 615),
+            empty,
+            font=empty_font,
+            fill=MUTED,
+        )
+
+    footer_font = _font(17)
+    if incomplete:
+        draw.text(
+            (54, 878),
+            "* Bieżący okres jest niepełny — liczony do dziś.",
+            font=footer_font,
+            fill=MUTED,
+        )
+    draw.text(
+        (54, 914),
+        "Dane zapisane przez bota • Granice okresów: UTC",
+        font=footer_font,
+        fill=MUTED,
+    )
+    undated = int(data.get("undated_ratings") or 0)
+    if undated:
+        note = _fit(
+            draw,
+            f"Pominięte oceny bez daty: {undated:,}".replace(",", " "),
+            _font(15),
+            892,
+        )
+        draw.text((54, 944), note, font=_font(15), fill=MUTED)
     return _save(image)
 
 
