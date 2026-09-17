@@ -159,6 +159,11 @@ class ChartScoreColorTests(unittest.TestCase):
         curve = _chart_curve(points)
         self.assertEqual(curve[1], (3.0, 25.0))
 
+    def test_series_up_to_sixty_periods_keeps_rounded_interpolation(self):
+        points = [(index * 12, 100 if index else 0) for index in range(CHART_SMOOTH_POINT_LIMIT)]
+        curve = _chart_curve(points)
+        self.assertEqual(curve[1], (3.0, 15.625))
+
     def test_legend_reads_left_to_right_in_one_row_with_space_below(self):
         image = chart_image([{"70–79": 5}])
         swatch_y = 320

@@ -19,7 +19,7 @@ HEIGHT = 900
 CHART_HEIGHT = 1020
 CHART_WIDTH = 1500
 CHART_FILL_ALPHA = 75
-CHART_SMOOTH_POINT_LIMIT = 32
+CHART_SMOOTH_POINT_LIMIT = 60
 # Bazowa paleta interfejsu AOTY.  Wszystkie generowane wykresy korzystają z
 # tych stałych, więc dalsze dostrojenie kolorów pozostaje w jednym miejscu.
 BACKGROUND = (54, 57, 63)  # #202225
