@@ -129,8 +129,8 @@ class RatingActivityTests(unittest.TestCase):
         for chart_type in ("daily", "weekly", "monthly", "yearly"):
             with self.subTest(chart_type=chart_type):
                 self.assertEqual(
-                    len(rating_activity("enso", [], chart_type, 60, now=datetime(2026, 9, 15))["buckets"]),
-                    60,
+                    len(rating_activity("enso", [], chart_type, 365, now=datetime(2026, 9, 15))["buckets"]),
+                    365,
                 )
 
     def test_score_average_uses_exact_displayed_ratings_and_weights_each_rating_equally(self):
@@ -261,7 +261,7 @@ class RatingActivityTests(unittest.TestCase):
             with self.subTest(chart_type=chart_type):
                 with self.assertRaises(ValueError):
                     rating_activity("enso", [], chart_type=chart_type)
-        for period in (None, 0, -1, 61, 1.5, 2.0, "10", True, False):
+        for period in (None, 0, -1, 366, 1.5, 2.0, "10", True, False):
             with self.subTest(period=period):
                 with self.assertRaises(ValueError):
                     rating_activity("enso", [], period=period)

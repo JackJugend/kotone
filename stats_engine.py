@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 
 from must_hear import must_hear_album
+from formats import format_key_from_label
 from time_utils import POLISH_TIMEZONE, polish_datetime, polish_now
 
 
@@ -50,6 +51,51 @@ def _rating_year(row: dict) -> int | None:
 def _rating_month(row: dict) -> int | None:
     rated_on = _activity_date(row)
     return rated_on.month if rated_on is not None else None
+
+
+def filter_rating_rows(
+    rows: list[dict],
+    *,
+    release_year: int | None = None,
+    genre: str | None = None,
+    release_format: str | None = None,
+    score_min: int | None = None,
+    score_max: int | None = None,
+    reviewed: bool | None = None,
+    liked: bool | None = None,
+    has_tracks: bool | None = None,
+    artist: str | None = None,
+) -> list[dict]:
+    """Apply the common graphic-command filters to an analytics snapshot."""
+
+    genre_key = str(genre or "").strip().casefold()
+    artist_key = str(artist or "").strip().casefold()
+    format_key = format_key_from_label(release_format) if release_format else None
+    selected = []
+    for row in rows:
+        score = _score(row.get("score"))
+        if release_year is not None and _release_year(row) != release_year:
+            continue
+        if genre_key and genre_key not in {
+            value.casefold() for value in _clean_values(row.get("genres"))
+        }:
+            continue
+        if format_key and format_key_from_label(row.get("release_format")) != format_key:
+            continue
+        if score_min is not None and (score is None or score < score_min):
+            continue
+        if score_max is not None and (score is None or score > score_max):
+            continue
+        if reviewed is not None and bool(row.get("has_review")) is not reviewed:
+            continue
+        if liked is not None and bool(row.get("liked")) is not liked:
+            continue
+        if has_tracks is not None and bool(row.get("has_track_ratings")) is not has_tracks:
+            continue
+        if artist_key and artist_key not in str(row.get("artist") or "").casefold():
+            continue
+        selected.append(row)
+    return selected
 
 
 _CHART_MONTHS = (
@@ -144,8 +190,8 @@ def rating_activity(
 
     if chart_type not in ("daily", "weekly", "monthly", "yearly"):
         raise ValueError("Nieznany typ wykresu.")
-    if isinstance(period, bool) or not isinstance(period, int) or not 1 <= period <= 60:
-        raise ValueError("Liczba okresów musi być liczbą całkowitą od 1 do 60.")
+    if isinstance(period, bool) or not isinstance(period, int) or not 1 <= period <= 365:
+        raise ValueError("Liczba okresów musi być liczbą całkowitą od 1 do 365.")
     if now is None:
         now = polish_now()
     elif not isinstance(now, datetime):
@@ -311,6 +357,10 @@ def rating_distribution(
     genre: str | None = None,
     score_min: int | None = None,
     score_max: int | None = None,
+    reviewed: bool | None = None,
+    liked: bool | None = None,
+    has_tracks: bool | None = None,
+    artist: str | None = None,
 ) -> dict:
     """Build one AOTY-style distribution without reading outside SQLite."""
 
@@ -335,24 +385,20 @@ def rating_distribution(
             if normalized(row.get("release_format")) in accepted_formats
         ]
 
-    genre_key = str(genre or "").strip().casefold()
-    filtered: list[dict] = []
-    for row in selected:
-        score = _score(row.get("score"))
-        if score is None:
-            continue
-        if year is not None and _release_year(row) != int(year):
-            continue
-        if genre_key and genre_key not in {
-            value.casefold()
-            for value in _clean_values(row.get("genres"))
-        }:
-            continue
-        if score_min is not None and score < int(score_min):
-            continue
-        if score_max is not None and score > int(score_max):
-            continue
-        filtered.append(row)
+    filtered = [
+        row for row in filter_rating_rows(
+            selected,
+            release_year=year,
+            genre=genre,
+            score_min=score_min,
+            score_max=score_max,
+            reviewed=reviewed,
+            liked=liked,
+            has_tracks=has_tracks,
+            artist=artist,
+        )
+        if _score(row.get("score")) is not None
+    ]
 
     summary = summarize(username, filtered)
     example_rows = filtered

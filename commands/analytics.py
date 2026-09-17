@@ -8,11 +8,18 @@ import io
 import discord
 
 from database import DB
-from formats import RATING_FORMATS
+from formats import RATING_FORMATS, format_key_from_label
 from shared import score_color, username_autocomplete
 from settings import resolve_aoty_username
 from stats_cover_cache import load_cover_images
-from stats_engine import compare, rating_activity, rating_distribution, summarize, wrapped
+from stats_engine import (
+    compare,
+    filter_rating_rows,
+    rating_activity,
+    rating_distribution,
+    summarize,
+    wrapped,
+)
 from stats_graphics import (
     render_chart,
     render_compare,
@@ -33,6 +40,62 @@ RATING_DISTRIBUTION_FORMATS = (
         for key, info in RATING_FORMATS.items()
     ),
 )
+ANALYTICS_FORMAT_CHOICES = [
+    discord.app_commands.Choice(name=str(info["label"]), value=key)
+    for key, info in RATING_FORMATS.items()
+]
+
+
+def _filter_error(
+    *,
+    release_year: int | None,
+    release_format: str | None,
+    score_min: int | None,
+    score_max: int | None,
+) -> str | None:
+    current_year = polish_now().year
+    if release_year is not None and not 1900 <= release_year <= current_year + 1:
+        return "Podaj poprawny rok wydania od 1900 do przyszłego roku."
+    if release_format and format_key_from_label(release_format) is None:
+        return "Wybierz poprawny format wydania."
+    if any(value is not None and not 0 <= value <= 100 for value in (score_min, score_max)):
+        return "Zakres ocen musi mieścić się od 0 do 100."
+    if score_min is not None and score_max is not None and score_min > score_max:
+        return "Minimalna ocena nie może być większa od maksymalnej."
+    return None
+
+
+def _filter_text(
+    *,
+    release_year=None,
+    genre=None,
+    release_format=None,
+    score_min=None,
+    score_max=None,
+    reviewed=None,
+    liked=None,
+    has_tracks=None,
+    artist=None,
+) -> str:
+    parts = []
+    if release_year is not None:
+        parts.append(f"wydania {release_year}")
+    if genre:
+        parts.append(str(genre))
+    if release_format:
+        info = RATING_FORMATS.get(str(release_format), {})
+        parts.append(str(info.get("label") or release_format))
+    if score_min is not None or score_max is not None:
+        parts.append(f"oceny {score_min or 0}–{100 if score_max is None else score_max}")
+    if reviewed is not None:
+        parts.append("z recenzją" if reviewed else "bez recenzji")
+    if liked is not None:
+        parts.append("polubione" if liked else "niepolubione")
+    if has_tracks is not None:
+        parts.append("z tracklistą" if has_tracks else "bez tracklisty")
+    if artist:
+        parts.append(f"artysta: {artist}")
+    return " · ".join(parts)
 
 
 def _metric(value) -> str:
@@ -204,7 +267,11 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         interaction: discord.Interaction,
         current: str,
     ):
-        username = str(getattr(interaction.namespace, "username", "") or "")
+        username = str(
+            getattr(interaction.namespace, "username", "")
+            or getattr(interaction.namespace, "user_a", "")
+            or ""
+        )
         needle = str(current or "").casefold()
         return [
             discord.app_commands.Choice(name=value[:100], value=value[:100])
@@ -216,21 +283,68 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         name="stats",
         description="Statystyki ocen użytkownika zapisane przez kotone.",
     )
-    @discord.app_commands.describe(username="username")
-    @discord.app_commands.autocomplete(username=username_autocomplete)
+    @discord.app_commands.describe(
+        username="Użytkownik; domyślnie Twój profil Kotone",
+        release_year="Rok wydania albumu",
+        genre="Gatunek",
+        format="Format wydania",
+        score_min="Minimalna ocena 0–100",
+        score_max="Maksymalna ocena 0–100",
+        reviewed="Tylko z recenzją lub bez recenzji",
+        liked="Tylko polubione lub niepolubione",
+        has_tracks="Tylko z ocenioną tracklistą lub bez",
+        artist="Artysta; można wpisać fragment nazwy",
+    )
+    @discord.app_commands.choices(format=ANALYTICS_FORMAT_CHOICES)
+    @discord.app_commands.autocomplete(username=username_autocomplete, genre=genre_autocomplete)
     async def stats_command(
         interaction: discord.Interaction,
         username: str | None = None,
+        release_year: int | None = None,
+        genre: str | None = None,
+        format: str | None = None,
+        score_min: int | None = None,
+        score_max: int | None = None,
+        reviewed: bool | None = None,
+        liked: bool | None = None,
+        has_tracks: bool | None = None,
+        artist: str | None = None,
     ):
         canonical = await _configured_user_or_error(interaction, username)
         if canonical is None:
+            return
+        error = _filter_error(
+            release_year=release_year,
+            release_format=format,
+            score_min=score_min,
+            score_max=score_max,
+        )
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
             return
         await interaction.response.defer()
         rows, avatar = await asyncio.gather(
             asyncio.to_thread(DB.get_analytics_rows, canonical),
             asyncio.to_thread(DB.get_avatar, canonical),
         )
+        rows = filter_rating_rows(
+            rows,
+            release_year=release_year,
+            genre=genre,
+            release_format=format,
+            score_min=score_min,
+            score_max=score_max,
+            reviewed=reviewed,
+            liked=liked,
+            has_tracks=has_tracks,
+            artist=artist,
+        )
         data = summarize(canonical, rows)
+        data["filter_text"] = _filter_text(
+            release_year=release_year, genre=genre, release_format=format,
+            score_min=score_min, score_max=score_max, reviewed=reviewed,
+            liked=liked, has_tracks=has_tracks, artist=artist,
+        )
         avatar_items = [
             {"username": canonical, "cover": avatar}
         ] if avatar else []
@@ -262,8 +376,17 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
     )
     @discord.app_commands.describe(
         type="Jednostka czasu: daily, weekly, monthly lub yearly",
-        period="Liczba okresów (1–60), wliczając bieżący; domyślnie 12",
+        period="Liczba okresów (1–365), wliczając bieżący; domyślnie 12",
         username="Użytkownik; domyślnie Twój profil Kotone",
+        release_year="Rok wydania albumu",
+        genre="Gatunek",
+        format="Format wydania",
+        score_min="Minimalna ocena 0–100",
+        score_max="Maksymalna ocena 0–100",
+        reviewed="Tylko z recenzją lub bez recenzji",
+        liked="Tylko polubione lub niepolubione",
+        has_tracks="Tylko z ocenioną tracklistą lub bez",
+        artist="Artysta; można wpisać fragment nazwy",
     )
     @discord.app_commands.choices(
         type=[
@@ -271,23 +394,42 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             discord.app_commands.Choice(name="daily", value="daily"),
             discord.app_commands.Choice(name="weekly", value="weekly"),
             discord.app_commands.Choice(name="yearly", value="yearly"),
-        ]
+        ],
+        format=ANALYTICS_FORMAT_CHOICES,
     )
-    @discord.app_commands.autocomplete(username=username_autocomplete)
+    @discord.app_commands.autocomplete(username=username_autocomplete, genre=genre_autocomplete)
     async def chart_command(
         interaction: discord.Interaction,
         type: str = "monthly",
-        period: discord.app_commands.Range[int, 1, 60] = 12,
+        period: discord.app_commands.Range[int, 1, 365] = 12,
         username: str | None = None,
+        release_year: int | None = None,
+        genre: str | None = None,
+        format: str | None = None,
+        score_min: int | None = None,
+        score_max: int | None = None,
+        reviewed: bool | None = None,
+        liked: bool | None = None,
+        has_tracks: bool | None = None,
+        artist: str | None = None,
     ):
         canonical = await _configured_user_or_error(interaction, username)
         if canonical is None:
             return
-        if type not in {"daily", "weekly", "monthly", "yearly"} or not 1 <= period <= 60:
+        if type not in {"daily", "weekly", "monthly", "yearly"} or not 1 <= period <= 365:
             await interaction.response.send_message(
-                "Wybierz daily, weekly, monthly lub yearly i podaj od 1 do 60 okresów.",
+                "Wybierz daily, weekly, monthly lub yearly i podaj od 1 do 365 okresów.",
                 ephemeral=True,
             )
+            return
+        error = _filter_error(
+            release_year=release_year,
+            release_format=format,
+            score_min=score_min,
+            score_max=score_max,
+        )
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -295,7 +437,24 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             asyncio.to_thread(DB.get_analytics_rows, canonical),
             asyncio.to_thread(DB.get_avatar, canonical),
         )
+        rows = filter_rating_rows(
+            rows,
+            release_year=release_year,
+            genre=genre,
+            release_format=format,
+            score_min=score_min,
+            score_max=score_max,
+            reviewed=reviewed,
+            liked=liked,
+            has_tracks=has_tracks,
+            artist=artist,
+        )
         data = rating_activity(canonical, rows, type, period)
+        data["filter_text"] = _filter_text(
+            release_year=release_year, genre=genre, release_format=format,
+            score_min=score_min, score_max=score_max, reviewed=reviewed,
+            liked=liked, has_tracks=has_tracks, artist=artist,
+        )
         avatar_items = [{"username": canonical, "cover": avatar}] if avatar else []
         data["_avatar_images"] = await asyncio.to_thread(
             load_cover_images,
@@ -320,6 +479,10 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         genre="Gatunek",
         score_min="Min rating 0–100",
         score_max="Max rating 0–100",
+        reviewed="Tylko z recenzją lub bez recenzji",
+        liked="Tylko polubione lub niepolubione",
+        has_tracks="Tylko z ocenioną tracklistą lub bez",
+        artist="Artysta; można wpisać fragment nazwy",
     )
     @discord.app_commands.autocomplete(
         username=username_autocomplete,
@@ -332,6 +495,10 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         genre: str | None = None,
         score_min: int | None = None,
         score_max: int | None = None,
+        reviewed: bool | None = None,
+        liked: bool | None = None,
+        has_tracks: bool | None = None,
+        artist: str | None = None,
     ):
         canonical = await _configured_user_or_error(interaction, username)
         if canonical is None:
@@ -374,6 +541,14 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             genre or "Wszystkie gatunki",
             f"Oceny {score_range}",
         ]
+        extra_filters = _filter_text(
+            reviewed=reviewed,
+            liked=liked,
+            has_tracks=has_tracks,
+            artist=artist,
+        )
+        if extra_filters:
+            filter_parts.append(extra_filters)
         filter_text = " · ".join(filter_parts)
         distributions = {}
         for key, label in RATING_DISTRIBUTION_FORMATS:
@@ -387,6 +562,10 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
                 genre=genre,
                 score_min=score_min,
                 score_max=score_max,
+                reviewed=reviewed,
+                liked=liked,
+                has_tracks=has_tracks,
+                artist=artist,
             )
             data["filter_text"] = f"{label} · {filter_text}"
             distributions[key] = data
@@ -418,15 +597,35 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
     @discord.app_commands.describe(
         user_a="username",
         user_b="username",
+        release_year="Rok wydania albumu",
+        genre="Gatunek",
+        format="Format wydania",
+        score_min="Minimalna ocena 0–100",
+        score_max="Maksymalna ocena 0–100",
+        reviewed="Tylko z recenzją lub bez recenzji",
+        liked="Tylko polubione lub niepolubione",
+        has_tracks="Tylko z ocenioną tracklistą lub bez",
+        artist="Artysta; można wpisać fragment nazwy",
     )
+    @discord.app_commands.choices(format=ANALYTICS_FORMAT_CHOICES)
     @discord.app_commands.autocomplete(
         user_a=username_autocomplete,
         user_b=username_autocomplete,
+        genre=genre_autocomplete,
     )
     async def compare_command(
         interaction: discord.Interaction,
         user_a: str,
         user_b: str,
+        release_year: int | None = None,
+        genre: str | None = None,
+        format: str | None = None,
+        score_min: int | None = None,
+        score_max: int | None = None,
+        reviewed: bool | None = None,
+        liked: bool | None = None,
+        has_tracks: bool | None = None,
+        artist: str | None = None,
     ):
         canonical_a = DB.canonical_username(user_a)
         canonical_b = DB.canonical_username(user_b)
@@ -442,6 +641,15 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
                 ephemeral=True,
             )
             return
+        error = _filter_error(
+            release_year=release_year,
+            release_format=format,
+            score_min=score_min,
+            score_max=score_max,
+        )
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
 
         await interaction.response.defer()
         rows_a, rows_b, avatar_a, avatar_b = await asyncio.gather(
@@ -450,7 +658,21 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             asyncio.to_thread(DB.get_avatar, canonical_a),
             asyncio.to_thread(DB.get_avatar, canonical_b),
         )
+        common_filters = {
+            "release_year": release_year,
+            "genre": genre,
+            "release_format": format,
+            "score_min": score_min,
+            "score_max": score_max,
+            "reviewed": reviewed,
+            "liked": liked,
+            "has_tracks": has_tracks,
+            "artist": artist,
+        }
+        rows_a = filter_rating_rows(rows_a, **common_filters)
+        rows_b = filter_rating_rows(rows_b, **common_filters)
         data = compare(canonical_a, rows_a, canonical_b, rows_b)
+        data["filter_text"] = _filter_text(**common_filters)
         data["avatar_items"] = [
             {"username": username, "cover": avatar}
             for username, avatar in (
@@ -488,13 +710,32 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
     )
     @discord.app_commands.describe(
         username="username",
-        year="Rok",
+        year="Rok wystawienia ocen",
+        release_year="Rok wydania albumu",
+        genre="Gatunek",
+        format="Format wydania",
+        score_min="Minimalna ocena 0–100",
+        score_max="Maksymalna ocena 0–100",
+        reviewed="Tylko z recenzją lub bez recenzji",
+        liked="Tylko polubione lub niepolubione",
+        has_tracks="Tylko z ocenioną tracklistą lub bez",
+        artist="Artysta; można wpisać fragment nazwy",
     )
-    @discord.app_commands.autocomplete(username=username_autocomplete)
+    @discord.app_commands.choices(format=ANALYTICS_FORMAT_CHOICES)
+    @discord.app_commands.autocomplete(username=username_autocomplete, genre=genre_autocomplete)
     async def wrapped_command(
         interaction: discord.Interaction,
         username: str | None = None,
         year: int | None = None,
+        release_year: int | None = None,
+        genre: str | None = None,
+        format: str | None = None,
+        score_min: int | None = None,
+        score_max: int | None = None,
+        reviewed: bool | None = None,
+        liked: bool | None = None,
+        has_tracks: bool | None = None,
+        artist: str | None = None,
     ):
         canonical = await _configured_user_or_error(interaction, username)
         if canonical is None:
@@ -507,13 +748,39 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
                 ephemeral=True,
             )
             return
+        error = _filter_error(
+            release_year=release_year,
+            release_format=format,
+            score_min=score_min,
+            score_max=score_max,
+        )
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
 
         await interaction.response.defer()
         rows, avatar = await asyncio.gather(
             asyncio.to_thread(DB.get_analytics_rows, canonical),
             asyncio.to_thread(DB.get_avatar, canonical),
         )
+        rows = filter_rating_rows(
+            rows,
+            release_year=release_year,
+            genre=genre,
+            release_format=format,
+            score_min=score_min,
+            score_max=score_max,
+            reviewed=reviewed,
+            liked=liked,
+            has_tracks=has_tracks,
+            artist=artist,
+        )
         data = wrapped(canonical, rows, selected_year)
+        data["filter_text"] = _filter_text(
+            release_year=release_year, genre=genre, release_format=format,
+            score_min=score_min, score_max=score_max, reviewed=reviewed,
+            liked=liked, has_tracks=has_tracks, artist=artist,
+        )
         avatar_items = [
             {"username": canonical, "cover": avatar}
         ] if avatar else []

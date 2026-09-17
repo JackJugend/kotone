@@ -16,7 +16,7 @@ from stats_engine import SCORE_BUCKETS
 
 WIDTH = 1000
 HEIGHT = 900
-CHART_HEIGHT = 950
+CHART_HEIGHT = 1020
 CHART_WIDTH = 1500
 CHART_FILL_ALPHA = 75
 # Bazowa paleta interfejsu AOTY.  Wszystkie generowane wykresy korzystają z
@@ -143,6 +143,7 @@ def _base(title: str, subtitle: str, *, height: int = HEIGHT, width: int = WIDTH
         fill=TEXT,
     )
     if subtitle:
+        subtitle = _fit(draw, subtitle, subtitle_font, width - 108)
         draw.text(
             (_centered_x(draw, subtitle, subtitle_font, 54, width - 54), 105),
             subtitle,
@@ -303,7 +304,7 @@ def _cover_cards(
         draw.text((x + 92, y + 38), artist, font=detail_font, fill=MUTED)
         draw.text(
             (x + 92, y + 61),
-            f"Ocena: {score}",
+            score,
             font=detail_font,
             fill=_score_color(item.get("score", item.get("mean"))),
         )
@@ -312,7 +313,7 @@ def _cover_cards(
 def render_stats(data: dict) -> io.BytesIO:
     image, draw = _base(
         f"Statystyki • {data['username']}",
-        "Komenda bazuje na danych zapisanych przez bota",
+        str(data.get("filter_text") or "Komenda bazuje na danych zapisanych przez bota"),
     )
     _avatar_badges(image, data)
     _metric(draw, 54, "Liczba ocen", str(data["ratings"]), TEXT)
@@ -361,7 +362,7 @@ def render_stats(data: dict) -> io.BytesIO:
         minimum_row_height=34,
         max_rows=10,
     )
-    _cover_cards(draw, image, data)
+    _cover_cards(draw, image, data, y=762)
     return _save(image)
 
 
@@ -432,14 +433,16 @@ def _chart_areas(image, points, score_rows, score_labels, axis_maximum, box):
     def scaled(curve):
         return [((x - origin_x) * scale, (y - origin_y) * scale) for x, y in curve]
 
-    def rounded_line(curve, color, width):
+    def rounded_line(curve, color, width, *, caps=True):
         path = scaled(curve)
         line_draw.line(path, fill=color, width=width * scale, joint="curve")
-        radius = width * scale / 2
-        for x, y in (path[0], path[-1]):
-            line_draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
+        if caps:
+            radius = width * scale / 2
+            for x, y in (path[0], path[-1]):
+                line_draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
 
     cumulative = [0] * len(points)
+    band_outlines = []
     # Low scores form the bottom bands; a perfect 100 remains at the top.
     for label, color in reversed(list(zip(score_labels, RATING_COLORS))):
         values = [scores[label] for scores in score_rows]
@@ -455,21 +458,51 @@ def _chart_areas(image, points, score_rows, score_labels, axis_maximum, box):
             for (x, _), total in zip(points, cumulative)
         ]
         if len(points) == 1:
-            x = points[0][0]
-            corners = scaled([(x - 28, upper[0][1]), (x + 28, lower[0][1])])
+            corners = scaled([(left, upper[0][1]), (right, lower[0][1])])
             area_draw.rectangle((*corners[0], *corners[1]), fill=(*color, CHART_FILL_ALPHA))
-            rounded_line([(x - 28, upper[0][1]), (x + 28, upper[0][1])], (*color, 255), 3)
+            rounded_line([(left, upper[0][1]), (right, upper[0][1])], (*color, 255), 3)
         else:
             upper_curve, lower_curve = _chart_curve(upper), _chart_curve(lower)
             area_draw.polygon(
                 scaled([*upper_curve, *reversed(lower_curve)]),
                 fill=(*color, CHART_FILL_ALPHA),
             )
-            rounded_line(upper_curve, (*color, 255), 3)
+            # Keep a band's outline only where that score range has thickness.
+            # Otherwise a rare 100 rating would color the whole top edge cyan,
+            # even at dates where the highest present range is much lower.
+            visible_curve = []
+            for segment, ((x0, y0), (x1, y1)) in enumerate(zip(upper, upper[1:])):
+                value0, value1 = values[segment], values[segment + 1]
+                steps = max(2, math.ceil((x1 - x0) / 3))
+                for step in range(steps + 1):
+                    if segment and step == 0:
+                        continue
+                    t = step / steps
+                    eased = t * t * (3 - 2 * t)
+                    thickness = value0 + (value1 - value0) * eased
+                    visible_curve.append((
+                        x0 + (x1 - x0) * t,
+                        y0 + (y1 - y0) * eased,
+                        thickness,
+                    ))
+            band_outlines.append((visible_curve, color))
+    # Higher score ranges are drawn first. At a zero-thickness meeting point,
+    # the lower range then owns the visible outer edge and supplies its color.
+    for visible_curve, color in reversed(band_outlines):
+        path = []
+        for x, y, thickness in visible_curve:
+            if thickness > 1e-6:
+                path.append((x, y))
+            elif path:
+                if len(path) > 1:
+                    rounded_line(path, (*color, 255), 3, caps=False)
+                path = []
+        if len(path) > 1:
+            rounded_line(path, (*color, 255), 3, caps=False)
     if len(points) == 1:
-        x, y = points[0]
+        _, y = points[0]
         mask = Image.new("L", size)
-        corners = scaled([(x - 28, y), (x + 28, bottom)])
+        corners = scaled([(left, y), (right, bottom)])
         ImageDraw.Draw(mask).rounded_rectangle((*corners[0], *corners[1]), 12 * scale, fill=255)
         for layer in (areas, outlines):
             layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", size), mask))
@@ -500,17 +533,18 @@ def render_chart(data: dict) -> io.BytesIO:
         f"{_chart_date(data.get('range_start'))} – "
         f"{_chart_date(data.get('range_end'))}"
     )
+    if data.get("filter_text"):
+        range_text += f" • {data['filter_text']}"
     image, draw = _base("", f"{type_label} • {range_text}", height=CHART_HEIGHT, width=CHART_WIDTH)
     title_font = _font(40, bold=True)
-    title_right = image.width - (124 if data.get("_avatar_images") else 54)
     title = _fit(
         draw,
         f"Aktywność  •  {data.get('username') or 'Użytkownik'}",
         title_font,
-        title_right - 54,
+        image.width - 300,
     )
     draw.text(
-        (_centered_x(draw, title, title_font, 54, title_right), 48),
+        (_centered_x(draw, title, title_font, 54, image.width - 54), 48),
         title,
         font=title_font,
         fill=TEXT,
@@ -537,16 +571,27 @@ def render_chart(data: dict) -> io.BytesIO:
     )
 
     #heading_font = _font(28, bold=True)
-    legend_font = _font(25, bold=True)
+    legend_font = _font(24, bold=True)
+    legend_top = 304
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
-        x = 70 + (index % 6) * ((image.width - 124) // 6)
-        y = 351 + (index // 6) * 36
-        draw.rounded_rectangle((x, y + 5, x + 10, y + 33), 4, fill=color, outline="#ffffffcc")
+        column_width = (image.width - 108) / 6
+        row = index // 6
+        row_count = min(6, len(score_labels) - row * 6)
+        row_offset = (6 - row_count) * column_width / 2
+        item_width = 20 + draw.textlength(label, font=legend_font)
+        x = (
+            54
+            + row_offset
+            + (index % 6) * column_width
+            + (column_width - item_width) / 2
+        )
+        y = legend_top + row * 39
+        draw.rounded_rectangle((x, y + 4, x + 10, y + 31), 4, fill=color, outline="#ffffffcc")
         draw.text((x + 20, y), label, font=legend_font, fill=MUTED)
     incomplete = bool(data.get("current_period_incomplete", True))
 
-    plot_left, plot_top, plot_right, plot_bottom = 144, 450, image.width - 76, 806
+    plot_left, plot_top, plot_right, plot_bottom = 144, 397, image.width - 76, 858
     score_rows = [
         {
             label: max(0, int((bucket.get("score_counts") or {}).get(label, 0)))
@@ -615,7 +660,7 @@ def render_chart(data: dict) -> io.BytesIO:
         label_x = max(plot_left, min(plot_right - value_width - 20, x - value_width / 2 - 10))
         label_y = y + 16 if y < plot_top + 46 else y - 43
         if len(points) == 1:
-            label_x = min(plot_right - value_width - 20, x + 43)
+            label_x = plot_right - value_width - 22
             label_y = max(plot_top, y - 16)
         draw.rounded_rectangle(
             (label_x, label_y, label_x + value_width + 20, label_y + 32),
@@ -663,9 +708,10 @@ def render_chart(data: dict) -> io.BytesIO:
         empty = "Brak ocen w wybranym okresie"
         empty_left = (plot_left + plot_right - 518) // 2
         empty_right = empty_left + 518
-        draw.rounded_rectangle((empty_left, 601, empty_right, 663), 14, fill=PANEL_ALT)
+        empty_top = (plot_top + plot_bottom - 62) // 2
+        draw.rounded_rectangle((empty_left, empty_top, empty_right, empty_top + 62), 14, fill=PANEL_ALT)
         draw.text(
-            (_centered_x(draw, empty, empty_font, empty_left, empty_right), 615),
+            (_centered_x(draw, empty, empty_font, empty_left, empty_right), empty_top + 14),
             empty,
             font=empty_font,
             fill=MUTED,
@@ -674,7 +720,7 @@ def render_chart(data: dict) -> io.BytesIO:
     footer_font = _font(17)
     if incomplete:
         draw.text(
-            (54, 878),
+            (54, CHART_HEIGHT - 88),
             "* Bieżący okres jest niepełny — liczony do dziś.",
             font=footer_font,
             fill=MUTED,
@@ -687,7 +733,7 @@ def render_chart(data: dict) -> io.BytesIO:
             _font(15),
             image.width - 108,
         )
-        draw.text((54, 914), note, font=_font(15), fill=MUTED)
+        draw.text((54, CHART_HEIGHT - 54), note, font=_font(15), fill=MUTED)
     return _save(image)
 
 
@@ -878,7 +924,7 @@ def render_compare(data: dict) -> io.BytesIO:
     compare_height = 1120 if data.get("_cover_images") else 990
     image, draw = _base(
         f"Porównanie • {data['user_a']} i {data['user_b']}",
-        "",
+        str(data.get("filter_text") or ""),
         height=compare_height,
     )
 
@@ -1066,7 +1112,7 @@ def render_compare(data: dict) -> io.BytesIO:
 def render_wrapped(data: dict) -> io.BytesIO:
     image, draw = _base(
         f"Podsumowanie {data['year']} • {data['username']}",
-        "",
+        str(data.get("filter_text") or ""),
         height=1400,
     )
     _avatar_badges(image, data)

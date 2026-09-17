@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
+import io
 import unittest
 
 from PIL import Image
 
 from stats_engine import SCORE_BUCKETS
-from stats_graphics import PANEL, RATING_COLORS, TEXT, render_chart
+from stats_graphics import (
+    CHART_FILL_ALPHA,
+    CHART_HEIGHT,
+    CHART_WIDTH,
+    PANEL,
+    RATING_COLORS,
+    TEXT,
+    render_chart,
+)
 
 
 LABELS = [label for label, _, _ in SCORE_BUCKETS]
 
 
 def translucent(color: tuple[int, int, int]) -> tuple[int, int, int]:
-    return tuple(round((channel * 72 + background * 183) / 255)
+    background_alpha = 255 - CHART_FILL_ALPHA
+    return tuple(round((channel * CHART_FILL_ALPHA + background * background_alpha) / 255)
                  for channel, background in zip(color, PANEL))
 
 
@@ -23,7 +33,11 @@ def plot_colors(image: Image.Image, box: tuple[int, int, int, int]) -> set[tuple
     return set(zip(pixels[0::3], pixels[1::3], pixels[2::3]))
 
 
-def chart_image(score_rows: list[dict[str, int]]) -> Image.Image:
+def chart_image(
+    score_rows: list[dict[str, int]],
+    *,
+    avatar_color: tuple[int, int, int] | None = None,
+) -> Image.Image:
     buckets = [
         {
             "start": f"2026-{index + 1:02}-01",
@@ -34,12 +48,18 @@ def chart_image(score_rows: list[dict[str, int]]) -> Image.Image:
         for index, scores in enumerate(score_rows)
     ]
     totals = [bucket["count"] for bucket in buckets]
+    avatar_images = []
+    if avatar_color is not None:
+        avatar_bytes = io.BytesIO()
+        Image.new("RGB", (80, 80), avatar_color).save(avatar_bytes, "PNG")
+        avatar_images.append({"image_bytes": avatar_bytes.getvalue()})
     return Image.open(render_chart({
         "username": "enso", "chart_type": "monthly", "period": len(buckets),
         "buckets": buckets, "ratings": sum(totals),
         "average": sum(totals) / len(buckets), "peak": max(totals),
         "range_start": "2026-01-01", "range_end": "2026-09-15",
         "undated_ratings": 0, "current_period_incomplete": True,
+        "_avatar_images": avatar_images,
     })).convert("RGB")
 
 
@@ -48,38 +68,42 @@ class ChartScoreColorTests(unittest.TestCase):
         # Antialiasing premultiplied RGBA may round a channel by one unit.
         self.assertLessEqual(max(abs(a - b) for a, b in zip(actual, expected)), 1)
 
+    def assert_closest_rating_color(self, actual, expected):
+        distance = lambda color: sum(abs(a - b) for a, b in zip(actual, color))
+        self.assertEqual(min(RATING_COLORS, key=distance), expected)
+
     def test_each_score_band_has_stats_color_and_low_scores_stack_at_bottom(self):
         image = chart_image([{label: 1 for label in LABELS}] * 2)
-        self.assertEqual(image.size, (1280, 1000))
+        self.assertEqual(image.size, (CHART_WIDTH, CHART_HEIGHT))
         # Eleven ratings produce a 0..15 axis. Sample band interiors rather
         # than legend swatches, grid lines or total-point decorations.
         for level, color in enumerate(reversed(RATING_COLORS)):
-            y = round(806 - (level + 0.5) * 356 / 15)
+            y = round(858 - (level + 0.5) * 461 / 15)
             with self.subTest(score=LABELS[-level - 1]):
                 self.assert_color(image.getpixel((400, y)), translucent(color))
         # Count labels sit at the endpoints; no white total line or markers
         # should cover the colored upper boundary through the plot's middle.
-        self.assertNotIn(TEXT, plot_colors(image, (300, 451, 1000, 806)))
+        self.assertNotIn(TEXT, plot_colors(image, (300, 398, 1200, 858)))
 
     def test_single_period_renders_real_stacked_column_with_all_score_colors(self):
         image = chart_image([{label: 1 for label in LABELS}])
         for level, color in enumerate(reversed(RATING_COLORS)):
-            y = round(806 - (level + 0.5) * 356 / 15)
+            y = round(858 - (level + 0.5) * 461 / 15)
             with self.subTest(score=LABELS[-level - 1]):
-                self.assert_color(image.getpixel((674, y)), translucent(color))
-        self.assertEqual(image.getpixel((800, 700)), PANEL)
-        # The outside corners of the column are rounded, including its foot.
-        self.assert_color(image.getpixel((647, 548)), PANEL)
-        self.assert_color(image.getpixel((647, 803)), PANEL)
+                self.assert_color(image.getpixel((784, y)), translucent(color))
+        # A single period fills the plot horizontally rather than becoming a
+        # narrow central column.
+        self.assert_color(image.getpixel((200, 700)), translucent(RATING_COLORS[5]))
+        self.assert_color(image.getpixel((1350, 700)), translucent(RATING_COLORS[5]))
 
     def test_area_height_preserves_absolute_counts_and_does_not_normalize(self):
         image = chart_image([{"80–89": 2}, {"80–89": 6}])
         # The same sole score group grows from 2 to 6; it must occupy less
         # height on the left rather than fill 100% at both calendar points.
         self.assertEqual(image.getpixel((200, 600)), PANEL)
-        self.assert_color(image.getpixel((200, 760)), translucent(RATING_COLORS[2]))
-        self.assert_color(image.getpixel((1100, 600)), translucent(RATING_COLORS[2]))
-        colors = plot_colors(image, (145, 451, 1204, 806))
+        self.assert_color(image.getpixel((200, 780)), translucent(RATING_COLORS[2]))
+        self.assert_color(image.getpixel((1300, 600)), translucent(RATING_COLORS[2]))
+        colors = plot_colors(image, (145, 398, 1424, 858))
         for color in RATING_COLORS[:2] + RATING_COLORS[3:]:
             self.assertNotIn(color, colors)
 
@@ -87,7 +111,7 @@ class ChartScoreColorTests(unittest.TestCase):
         for rows in ([{label: 0 for label in LABELS}], [{}, {}]):
             with self.subTest(periods=len(rows)):
                 image = chart_image(rows)
-                colors = plot_colors(image, (144, 450, 1205, 807))
+                colors = plot_colors(image, (144, 397, 1425, 859))
                 for color in RATING_COLORS:
                     self.assertNotIn(color, colors)
 
@@ -95,8 +119,23 @@ class ChartScoreColorTests(unittest.TestCase):
         image = chart_image([{"80–89": 2}, {"80–89": 6}])
         # Near the low endpoint the curve rises gently; near the high endpoint
         # it levels off. A straight segment gives the opposite pixels here.
-        self.assertEqual(image.getpixel((409, 640)), PANEL)
-        self.assert_color(image.getpixel((939, 500)), translucent(RATING_COLORS[2]))
+        self.assertEqual(image.getpixel((464, 645)), PANEL)
+        self.assert_color(image.getpixel((1104, 460)), translucent(RATING_COLORS[2]))
+
+    def test_visible_top_edge_uses_the_highest_score_present_at_each_period(self):
+        image = chart_image([{"70–79": 5}, {"100": 5}, {"80–89": 5}])
+        for x, color in (
+            (144, RATING_COLORS[3]),
+            (784, RATING_COLORS[0]),
+            (1424, RATING_COLORS[2]),
+        ):
+            with self.subTest(x=x):
+                self.assert_closest_rating_color(image.getpixel((x, 397)), color)
+
+    def test_avatar_remains_in_the_top_right_corner(self):
+        avatar_color = (213, 48, 139)
+        image = chart_image([{"70–79": 5}], avatar_color=avatar_color)
+        self.assertEqual(image.getpixel((1434, 77)), avatar_color)
 
 
 if __name__ == "__main__":

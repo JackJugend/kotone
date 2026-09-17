@@ -38,7 +38,13 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_options_expose_requested_syntax_and_bounded_period(self):
         parameters = {parameter.name: parameter for parameter in self.command.parameters}
-        self.assertEqual(set(parameters), {"type", "period", "username"})
+        self.assertEqual(
+            set(parameters),
+            {
+                "type", "period", "username", "release_year", "genre", "format",
+                "score_min", "score_max", "reviewed", "liked", "has_tracks", "artist",
+            },
+        )
         self.assertEqual(parameters["type"].default, "monthly")
         self.assertEqual(
             {choice.value for choice in parameters["type"].choices},
@@ -46,8 +52,10 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(parameters["period"].default, 12)
         self.assertEqual(parameters["period"].min_value, 1)
-        self.assertEqual(parameters["period"].max_value, 60)
+        self.assertEqual(parameters["period"].max_value, 365)
         self.assertTrue(parameters["username"].autocomplete)
+        self.assertTrue(parameters["genre"].autocomplete)
+        self.assertEqual(len(parameters["format"].choices), 19)
 
     async def test_default_profile_and_explicit_username_send_saved_data_as_png(self):
         for username in (None, "ENSO"):
@@ -77,7 +85,7 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(sent_file.filename, "chart-enso-monthly-10.png")
                 with Image.open(sent_file.fp) as image:
                     self.assertEqual(image.format, "PNG")
-                    self.assertEqual(image.width, 1280)
+                    self.assertEqual(image.size, (1500, 1020))
                 sent_file.close()
                 self.interaction.response.send_message.assert_not_awaited()
 
@@ -97,7 +105,7 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.interaction.followup.send.assert_not_awaited()
 
     async def test_invalid_type_or_period_is_rejected_before_database_read(self):
-        for chart_type, period in (("hourly", 10), ("monthly", 0), ("monthly", 61)):
+        for chart_type, period in (("hourly", 10), ("monthly", 0), ("monthly", 366)):
             with self.subTest(chart_type=chart_type, period=period):
                 database = MagicMock()
                 database.canonical_username.return_value = "enso"
@@ -116,16 +124,16 @@ class ChartGraphicTests(unittest.TestCase):
         now = datetime(2026, 9, 15, 12, tzinfo=UTC)
         for chart_type, period, rows in (
             ("daily", 1, []),
-            ("weekly", 60, [{"score": "80", "sort_timestamp": now.timestamp()}]),
+            ("weekly", 365, [{"score": "80", "sort_timestamp": now.timestamp()}]),
             ("monthly", 10, [{"score": "90", "rating_date": "01.01.2026"}]),
-            ("yearly", 60, [{"score": "70", "rating_date": "nieznana"}]),
+            ("yearly", 365, [{"score": "70", "rating_date": "nieznana"}]),
         ):
             with self.subTest(chart_type=chart_type, period=period):
                 data = rating_activity("użytkownik_" * 8, rows, chart_type, period, now=now)
                 graphic = render_chart(data)
                 with Image.open(io.BytesIO(graphic.getvalue())) as image:
                     self.assertEqual(image.format, "PNG")
-                    self.assertEqual(image.width, 1280)
+                    self.assertEqual(image.size, (1500, 1020))
                     self.assertEqual(image.getpixel((0, 0)), BACKGROUND)
                     self.assertEqual(image.getpixel((500, 30)), PANEL)
 
