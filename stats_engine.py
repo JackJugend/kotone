@@ -190,8 +190,8 @@ def rating_activity(
 
     if chart_type not in ("daily", "weekly", "monthly", "yearly"):
         raise ValueError("Nieznany typ wykresu.")
-    if isinstance(period, bool) or not isinstance(period, int) or not 1 <= period <= 365:
-        raise ValueError("Liczba okresów musi być liczbą całkowitą od 1 do 365.")
+    if isinstance(period, bool) or not isinstance(period, int) or not 1 <= period <= 90:
+        raise ValueError("Liczba okresów musi być liczbą całkowitą od 1 do 90.")
     if now is None:
         now = polish_now()
     elif not isinstance(now, datetime):

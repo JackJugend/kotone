@@ -16,7 +16,7 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="kotone-chart-runtime-
 import discord
 from PIL import Image
 
-from commands.analytics import setup_analytics_commands
+from commands.analytics import _bot_avatar_item, setup_analytics_commands
 from stats_engine import rating_activity
 from stats_graphics import BACKGROUND, PANEL, render_chart
 
@@ -36,6 +36,22 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.client.close()
 
+    def test_bot_avatar_is_prepared_for_the_left_chart_corner(self):
+        interaction = SimpleNamespace(client=SimpleNamespace(user=SimpleNamespace(
+            name="Kotone",
+            display_avatar=SimpleNamespace(
+                url="https://cdn.discordapp.com/avatars/123/kotone.png",
+            ),
+        )))
+        self.assertEqual(
+            _bot_avatar_item(interaction),
+            {
+                "avatar_role": "bot",
+                "username": "Kotone",
+                "cover": "https://cdn.discordapp.com/avatars/123/kotone.png",
+            },
+        )
+
     async def test_options_expose_requested_syntax_and_bounded_period(self):
         parameters = {parameter.name: parameter for parameter in self.command.parameters}
         self.assertEqual(
@@ -52,7 +68,7 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(parameters["period"].default, 12)
         self.assertEqual(parameters["period"].min_value, 1)
-        self.assertEqual(parameters["period"].max_value, 365)
+        self.assertEqual(parameters["period"].max_value, 90)
         self.assertTrue(parameters["username"].autocomplete)
         self.assertTrue(parameters["genre"].autocomplete)
         self.assertEqual(len(parameters["format"].choices), 19)
@@ -79,7 +95,12 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
                 database.get_analytics_rows.assert_called_once_with("enso")
                 database.get_avatar.assert_called_once_with("enso")
                 images.assert_called_once_with(
-                    [{"username": "enso", "cover": database.get_avatar.return_value}], limit=1,
+                    [{
+                        "avatar_role": "user",
+                        "username": "enso",
+                        "cover": database.get_avatar.return_value,
+                    }],
+                    limit=2,
                 )
                 sent_file = self.interaction.followup.send.call_args.kwargs["file"]
                 self.assertEqual(sent_file.filename, "chart-enso-monthly-10.png")
@@ -105,7 +126,7 @@ class ChartCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.interaction.followup.send.assert_not_awaited()
 
     async def test_invalid_type_or_period_is_rejected_before_database_read(self):
-        for chart_type, period in (("hourly", 10), ("monthly", 0), ("monthly", 366)):
+        for chart_type, period in (("hourly", 10), ("monthly", 0), ("monthly", 91)):
             with self.subTest(chart_type=chart_type, period=period):
                 database = MagicMock()
                 database.canonical_username.return_value = "enso"
@@ -124,9 +145,9 @@ class ChartGraphicTests(unittest.TestCase):
         now = datetime(2026, 9, 15, 12, tzinfo=UTC)
         for chart_type, period, rows in (
             ("daily", 1, []),
-            ("weekly", 365, [{"score": "80", "sort_timestamp": now.timestamp()}]),
+            ("weekly", 90, [{"score": "80", "sort_timestamp": now.timestamp()}]),
             ("monthly", 10, [{"score": "90", "rating_date": "01.01.2026"}]),
-            ("yearly", 365, [{"score": "70", "rating_date": "nieznana"}]),
+            ("yearly", 90, [{"score": "70", "rating_date": "nieznana"}]),
         ):
             with self.subTest(chart_type=chart_type, period=period):
                 data = rating_activity("użytkownik_" * 8, rows, chart_type, period, now=now)

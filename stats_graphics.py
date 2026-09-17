@@ -19,6 +19,7 @@ HEIGHT = 900
 CHART_HEIGHT = 1020
 CHART_WIDTH = 1500
 CHART_FILL_ALPHA = 75
+CHART_SMOOTH_POINT_LIMIT = 32
 # Bazowa paleta interfejsu AOTY.  Wszystkie generowane wykresy korzystają z
 # tych stałych, więc dalsze dostrojenie kolorów pozostaje w jednym miejscu.
 BACKGROUND = (54, 57, 63)  # #202225
@@ -170,6 +171,42 @@ def _avatar_badges(image: Image.Image, data: dict) -> None:
         ImageDraw.Draw(outline_mask).ellipse((0, 0, 69, 69), fill=255)
         image.paste(outline, (x - 3, y - 3), outline_mask)
         image.paste(avatar, (x, y), mask)
+
+
+def _chart_corner_avatars(image: Image.Image, data: dict) -> None:
+    """Place bot and user avatars symmetrically with a 2 px white outline."""
+
+    size = 64
+    outline_width = 2
+    outer_size = size + outline_width * 2
+    margin = 45
+
+    def paste(item: dict, x: int) -> None:
+        try:
+            avatar = Image.open(io.BytesIO(item["image_bytes"])).convert("RGB")
+            avatar = ImageOps.fit(avatar, (size, size), method=Image.Resampling.LANCZOS)
+        except Exception:
+            return
+        outer_mask = Image.new("L", (outer_size, outer_size), 0)
+        ImageDraw.Draw(outer_mask).ellipse(
+            (0, 0, outer_size - 1, outer_size - 1), fill=255,
+        )
+        white = Image.new("RGB", (outer_size, outer_size), (255, 255, 255))
+        image.paste(white, (x, margin), outer_mask)
+        avatar_mask = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(avatar_mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+        image.paste(
+            avatar,
+            (x + outline_width, margin + outline_width),
+            avatar_mask,
+        )
+
+    bot_images = list(data.get("_bot_avatar_images") or [])
+    user_images = list(data.get("_avatar_images") or [])
+    if bot_images:
+        paste(bot_images[0], margin)
+    if user_images:
+        paste(user_images[0], image.width - margin - outer_size)
 
 
 def _metric(
@@ -410,11 +447,12 @@ def _chart_curve(points: list[tuple[float, float]]) -> list[tuple[float, float]]
     if len(points) < 2:
         return points
     curve = [points[0]]
+    smooth = len(points) <= CHART_SMOOTH_POINT_LIMIT
     for (x0, y0), (x1, y1) in zip(points, points[1:]):
         steps = max(2, math.ceil((x1 - x0) / 3))
         for step in range(1, steps + 1):
             t = step / steps
-            eased = t * t * (3 - 2 * t)
+            eased = t * t * (3 - 2 * t) if smooth else t
             curve.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * eased))
     return curve
 
@@ -471,6 +509,7 @@ def _chart_areas(image, points, score_rows, score_labels, axis_maximum, box):
             # Otherwise a rare 100 rating would color the whole top edge cyan,
             # even at dates where the highest present range is much lower.
             visible_curve = []
+            smooth = len(points) <= CHART_SMOOTH_POINT_LIMIT
             for segment, ((x0, y0), (x1, y1)) in enumerate(zip(upper, upper[1:])):
                 value0, value1 = values[segment], values[segment + 1]
                 steps = max(2, math.ceil((x1 - x0) / 3))
@@ -478,7 +517,7 @@ def _chart_areas(image, points, score_rows, score_labels, axis_maximum, box):
                     if segment and step == 0:
                         continue
                     t = step / steps
-                    eased = t * t * (3 - 2 * t)
+                    eased = t * t * (3 - 2 * t) if smooth else t
                     thickness = value0 + (value1 - value0) * eased
                     visible_curve.append((
                         x0 + (x1 - x0) * t,
@@ -490,13 +529,21 @@ def _chart_areas(image, points, score_rows, score_labels, axis_maximum, box):
     # the lower range then owns the visible outer edge and supplies its color.
     for visible_curve, color in reversed(band_outlines):
         path = []
+        last_zero = None
         for x, y, thickness in visible_curve:
             if thickness > 1e-6:
+                if not path and last_zero is not None:
+                    path.append(last_zero)
                 path.append((x, y))
+                last_zero = None
             elif path:
+                path.append((x, y))
                 if len(path) > 1:
                     rounded_line(path, (*color, 255), 3, caps=False)
                 path = []
+                last_zero = (x, y)
+            else:
+                last_zero = (x, y)
         if len(path) > 1:
             rounded_line(path, (*color, 255), 3, caps=False)
     if len(points) == 1:
@@ -549,7 +596,7 @@ def render_chart(data: dict) -> io.BytesIO:
         font=title_font,
         fill=TEXT,
     )
-    _avatar_badges(image, data)
+    _chart_corner_avatars(image, data)
     metric_width = (image.width - 108 - 3 * 24) // 4
     metric_step = metric_width + 24
     _metric(

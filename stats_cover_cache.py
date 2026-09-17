@@ -36,6 +36,8 @@ def safe_cover_url(value) -> str | None:
         or host.endswith(".last.fm")
         or host == "lastfm.freetls.fastly.net"
         or host.endswith(".akamaized.net")
+        or host == "cdn.discordapp.com"
+        or host == "media.discordapp.net"
     )
     if parsed.scheme != "https" or not allowed:
         return None

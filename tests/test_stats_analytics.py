@@ -313,6 +313,10 @@ class CoverCacheTests(unittest.TestCase):
             "https://cdn.albumoftheyear.org/cover.jpg",
         )
         self.assertEqual(
+            _safe_cover_url("https://cdn.discordapp.com/avatars/1/bot.png"),
+            "https://cdn.discordapp.com/avatars/1/bot.png",
+        )
+        self.assertEqual(
             _safe_cover_url("//coverartarchive.org/release/cover.jpg"),
             "https://coverartarchive.org/release/cover.jpg",
         )

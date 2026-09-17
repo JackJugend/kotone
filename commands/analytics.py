@@ -102,6 +102,20 @@ def _metric(value) -> str:
     return "—" if value is None else f"{float(value):.1f}"
 
 
+def _bot_avatar_item(interaction: discord.Interaction) -> dict | None:
+    client = getattr(interaction, "client", None)
+    bot_user = getattr(client, "user", None)
+    display_avatar = getattr(bot_user, "display_avatar", None)
+    avatar_url = str(getattr(display_avatar, "url", "") or "").strip()
+    if not avatar_url:
+        return None
+    return {
+        "avatar_role": "bot",
+        "username": str(getattr(bot_user, "name", None) or "Kotone"),
+        "cover": avatar_url,
+    }
+
+
 def _new_embed(
     title: str,
     *,
@@ -376,7 +390,7 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
     )
     @discord.app_commands.describe(
         type="Jednostka czasu: daily, weekly, monthly lub yearly",
-        period="Liczba okresów (1–365), wliczając bieżący; domyślnie 12",
+        period="Liczba okresów (1–90), wliczając bieżący; domyślnie 12",
         username="Użytkownik; domyślnie Twój profil Kotone",
         release_year="Rok wydania albumu",
         genre="Gatunek",
@@ -401,7 +415,7 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
     async def chart_command(
         interaction: discord.Interaction,
         type: str = "monthly",
-        period: discord.app_commands.Range[int, 1, 365] = 12,
+        period: discord.app_commands.Range[int, 1, 90] = 12,
         username: str | None = None,
         release_year: int | None = None,
         genre: str | None = None,
@@ -416,9 +430,9 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
         canonical = await _configured_user_or_error(interaction, username)
         if canonical is None:
             return
-        if type not in {"daily", "weekly", "monthly", "yearly"} or not 1 <= period <= 365:
+        if type not in {"daily", "weekly", "monthly", "yearly"} or not 1 <= period <= 90:
             await interaction.response.send_message(
-                "Wybierz daily, weekly, monthly lub yearly i podaj od 1 do 365 okresów.",
+                "Wybierz daily, weekly, monthly lub yearly i podaj od 1 do 90 okresów.",
                 ephemeral=True,
             )
             return
@@ -455,12 +469,26 @@ def setup_analytics_commands(tree: discord.app_commands.CommandTree) -> None:
             score_min=score_min, score_max=score_max, reviewed=reviewed,
             liked=liked, has_tracks=has_tracks, artist=artist,
         )
-        avatar_items = [{"username": canonical, "cover": avatar}] if avatar else []
-        data["_avatar_images"] = await asyncio.to_thread(
+        avatar_items = []
+        if bot_avatar := _bot_avatar_item(interaction):
+            avatar_items.append(bot_avatar)
+        if avatar:
+            avatar_items.append({
+                "avatar_role": "user",
+                "username": canonical,
+                "cover": avatar,
+            })
+        avatar_images = await asyncio.to_thread(
             load_cover_images,
             avatar_items,
-            limit=1,
+            limit=2,
         )
+        data["_bot_avatar_images"] = [
+            item for item in avatar_images if item.get("avatar_role") == "bot"
+        ]
+        data["_avatar_images"] = [
+            item for item in avatar_images if item.get("avatar_role") == "user"
+        ]
         graphic = await asyncio.to_thread(render_chart, data)
         await interaction.followup.send(
             file=discord.File(
