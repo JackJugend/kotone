@@ -137,6 +137,17 @@ class ChartScoreColorTests(unittest.TestCase):
         image = chart_image([{"70–79": 5}], avatar_color=avatar_color)
         self.assertEqual(image.getpixel((1434, 77)), avatar_color)
 
+    def test_legend_reads_left_to_right_in_one_row_with_space_below(self):
+        image = chart_image([{"70–79": 5}])
+        swatch_y = 320
+        first_x_by_color = []
+        for color in RATING_COLORS:
+            matching = [x for x in range(54, CHART_WIDTH - 54) if image.getpixel((x, swatch_y)) == color]
+            self.assertTrue(matching)
+            first_x_by_color.append(matching[0])
+        self.assertEqual(first_x_by_color, sorted(first_x_by_color))
+        self.assertEqual(plot_colors(image, (54, 365, CHART_WIDTH - 54, 380)), {PANEL})
+
 
 if __name__ == "__main__":
     unittest.main()

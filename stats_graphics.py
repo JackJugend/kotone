@@ -574,19 +574,15 @@ def render_chart(data: dict) -> io.BytesIO:
     legend_font = _font(24, bold=True)
     legend_top = 304
     score_labels = [label for label, _, _ in SCORE_BUCKETS]
+    column_width = (image.width - 108) / len(score_labels)
     for index, (label, color) in enumerate(zip(score_labels, RATING_COLORS)):
-        column_width = (image.width - 108) / 6
-        row = index // 6
-        row_count = min(6, len(score_labels) - row * 6)
-        row_offset = (6 - row_count) * column_width / 2
         item_width = 20 + draw.textlength(label, font=legend_font)
         x = (
             54
-            + row_offset
-            + (index % 6) * column_width
+            + index * column_width
             + (column_width - item_width) / 2
         )
-        y = legend_top + row * 39
+        y = legend_top
         draw.rounded_rectangle((x, y + 4, x + 10, y + 31), 4, fill=color, outline="#ffffffcc")
         draw.text((x + 20, y), label, font=legend_font, fill=MUTED)
     incomplete = bool(data.get("current_period_incomplete", True))
